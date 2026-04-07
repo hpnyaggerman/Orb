@@ -34,7 +34,7 @@ REWRITE_PROMPT_TOOL = {
     "type": "function",
     "function": {
         "name": "rewrite_user_prompt",
-        "description": "Rewrite the user's message into a more detailed, immersive, action or dialogue. Use ONLY when the input is too short or vague (e.g. \"I laugh\", \"Sure.\", \"I nod\") to generate a compelling response. Expand it into a richer version. If the message is already detailed enough, return an empty response.",
+        "description": "Rewrite the user's message into a more detailed, immersive, action or dialogue. Use ONLY when the input is too short or vague (e.g. \"I laugh\", \"Sure.\", \"I nod\") to generate a compelling response. Write 2 sentences max. If the message is already detailed enough, keep rewritten_message empty.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -52,7 +52,7 @@ FIX_WRITER_OUTPUT_TOOL = {
     "type": "function",
     "function": {
         "name": "fix_writer_output",
-        "description": "Audit the preceding assistant's response for: excessive length, repeated phrases or sentence structures, sloppy/generic writing (slop), and anachronisms. Make only the smallest necessary inline fixes. Do not restructure, expand, or change the voice. If the output is clean, return an empty response.",
+        "description": "Audit the preceding assistant's response for: anachronisms, repeated phrases or sentence structures, sloppy/purple prose, avoidant;pretentious words like 'purr', 'predatory', 'velvety', 'ozone', 'heat', 'core', 'electric' (adj), 'primal', etc., tropes like 'low, dangerous voice'; 'voice dropping'; 'tension in the air', etc. Make only the necessary inline fixes. Do not restructure or expand. If the output is clean, keep rewritten_output empty.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -86,7 +86,7 @@ def build_tool_prompt(tool_name: str, user_message: str, active_styles: list[str
     desc = tool_def["schema"]["function"]["description"]
     parts = [
         "[OOC] You (the AI) are now the Director, use tool calls to accomplish your task. Your direction will immediately affect how the scenario plays out. Be decisive.",
-        f"Allowed tool: [{tool_name}] - {desc}"
+        f"Allowed tool - only call this: '{tool_name}' - {desc}"
     ]
     
     if tool_name == "set_writing_styles":
@@ -144,10 +144,14 @@ def apply_tool_calls(tool_calls: list[dict], current_styles: list[str]) -> tuple
     return new_styles, rewritten
 
 
-async def _run_writer_pass(client: LLMClient, msgs: list[dict], settings: dict) -> AsyncIterator[dict]:
+async def _run_writer_pass(client: LLMClient, msgs: list[dict], settings: dict, enabled_tools: Optional[dict] = None) -> AsyncIterator[dict]:
     """Run the writer pass (streaming). Yields content deltas. Tools are sent to match the KV cache prefix used by agent/rewrite passes."""
     params = {k: v for k in ["temperature", "max_tokens", "top_p", "min_p", "top_k", "repetition_penalty"] if (v := settings.get(k)) is not None}
-    async for token in client.stream(messages=msgs, model=settings["model_name"], tools=[v["schema"] for v in ALL_TOOL_DEFS.values()], tool_choice="none", **params):
+    if enabled_tools is None:
+        tool_schemas = [v["schema"] for v in ALL_TOOL_DEFS.values()]
+    else:
+        tool_schemas = [ALL_TOOL_DEFS[n]["schema"] for n in ALL_TOOL_DEFS if enabled_tools.get(n, False)]
+    async for token in client.stream(messages=msgs, model=settings["model_name"], tools=tool_schemas, tool_choice="none", **params):
         yield token
 
 
@@ -244,10 +248,10 @@ async def _execute_pipeline(
 
     yield {"event": "director_done", "data": {"active_styles": act_styles, "injection_block": inj_block, "tool_calls": calls, "agent_latency_ms": latency}}
 
-    perf_msgs = prefix + ([{"role": "system", "content": inj_block}] if inj_block else []) + [{"role": "user", "content": eff_msg}]
+    perf_msgs = prefix + ([{"role": "system", "content": inj_block}] if inj_block else []) + [{"role": "user", "content": eff_msg + "\n\n[OOC: Only write the story, tool calls are STRICTLY FORBIDDEN from now on because they are extremely DESTRUCTIVE!]"}]
     
     resp_text = ""
-    async for token in _run_writer_pass(client, perf_msgs, settings):
+    async for token in _run_writer_pass(client, perf_msgs, settings, enabled_tools if enabled_tools else None):
         resp_text += token
         yield {"event": "token", "data": token}
 
@@ -283,9 +287,20 @@ async def handle_turn(
             history_for_prefix = messages[:-1]
             user_msg_id = messages[-1]["id"]
 
+        system_prompt = settings["system_prompt"]
+        character_persona = ""
+        mes_example = ""
+        if conv.get("character_card_id"):
+            card = await db.get_character_card(conv["character_card_id"])
+            if card:
+                character_persona = "\n\n".join(filter(None, [card.get("description", ""), card.get("personality", "")]))
+                mes_example = card.get("mes_example", "")
+                if card.get("system_prompt"):
+                    system_prompt = card["system_prompt"]
+
         prefix = build_shared_prefix(
-            conv["system_prompt_snapshot"], conv["character_name"], conv["character_persona"],
-            conv["character_scenario"], conv.get("mes_example", ""), conv.get("post_history_instructions", ""),
+            system_prompt, conv["character_name"], character_persona,
+            conv["character_scenario"], mes_example, conv.get("post_history_instructions", ""),
             history_for_prefix, settings.get("user_name", "User"), settings.get("user_description", "")
         )
 
@@ -338,9 +353,20 @@ async def handle_regenerate(
         fragments = await db.get_fragments()
         client = LLMClient(settings["endpoint_url"], api_key=settings.get("api_key", ""))
 
+        system_prompt = settings["system_prompt"]
+        character_persona = ""
+        mes_example = ""
+        if conv.get("character_card_id"):
+            card = await db.get_character_card(conv["character_card_id"])
+            if card:
+                character_persona = "\n\n".join(filter(None, [card.get("description", ""), card.get("personality", "")]))
+                mes_example = card.get("mes_example", "")
+                if card.get("system_prompt"):
+                    system_prompt = card["system_prompt"]
+
         prefix = build_shared_prefix(
-            conv["system_prompt_snapshot"], conv["character_name"], conv["character_persona"],
-            conv["character_scenario"], conv.get("mes_example", ""), conv.get("post_history_instructions", ""),
+            system_prompt, conv["character_name"], character_persona,
+            conv["character_scenario"], mes_example, conv.get("post_history_instructions", ""),
             history_before, settings.get("user_name", "User"), settings.get("user_description", "")
         )
 

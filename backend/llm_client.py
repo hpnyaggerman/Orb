@@ -64,7 +64,7 @@ class LLMClient:
             "model": model,
             "messages": messages,
             "stream": True,
-            "reasoning": {"effort": "low", "enabled": True},
+            "reasoning": {"enabled": False},
             **params,
         }
         if tools:

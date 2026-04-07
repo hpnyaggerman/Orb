@@ -70,7 +70,7 @@ SEED_FRAGMENTS = [
     {
         "id": "frisky",
         "label": "Frisky",
-        "description": "NSFW mode - descriptive enable if the vibes of the situation call for it",
+        "description": "NSFW mode - descriptive, enable if the vibes of the situation call for it",
         "prompt_text": (
             'Use vulgar, graphic, varied vocabulary when applicable. Even words like "cunt", "cock", "anus", etc. are allowed. The narration is more brutal, vivid, and direct. '
             'Describe body parts that are exposed, looked at, or interacted with. '
@@ -164,12 +164,9 @@ async def init_db():
                 title TEXT NOT NULL DEFAULT 'New Conversation',
                 character_card_id TEXT DEFAULT NULL,
                 character_name TEXT NOT NULL DEFAULT '',
-                character_persona TEXT NOT NULL DEFAULT '',
                 character_scenario TEXT NOT NULL DEFAULT '',
                 first_mes TEXT NOT NULL DEFAULT '',
-                mes_example TEXT NOT NULL DEFAULT '',
                 post_history_instructions TEXT NOT NULL DEFAULT '',
-                system_prompt_snapshot TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
                 updated_at TEXT,
                 active_leaf_id INTEGER REFERENCES messages(id) ON DELETE SET NULL
@@ -374,20 +371,20 @@ async def get_conversation(cid: str) -> dict | None:
 
 
 async def create_conversation(
-    cid: str, title: str, char_name: str, char_persona: str, char_scenario: str,
-    sys_prompt: str, first_mes: str = "", mes_example: str = "",
-    post_history_instructions: str = "", character_card_id: str | None = None,
+    cid: str, title: str, char_name: str, char_scenario: str,
+    first_mes: str = "", post_history_instructions: str = "",
+    character_card_id: str | None = None,
 ) -> dict:
     db = await get_db()
     try:
         now = datetime.now(timezone.utc).isoformat()
         await db.execute(
             """INSERT INTO conversations
-               (id, title, character_card_id, character_name, character_persona, character_scenario,
-                first_mes, mes_example, post_history_instructions, system_prompt_snapshot, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (cid, title, character_card_id, char_name, char_persona, char_scenario,
-             first_mes, mes_example, post_history_instructions, sys_prompt, now, now),
+               (id, title, character_card_id, character_name, character_scenario,
+                first_mes, post_history_instructions, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (cid, title, character_card_id, char_name, char_scenario,
+             first_mes, post_history_instructions, now, now),
         )
         await db.execute(
             "INSERT INTO director_state (conversation_id, active_styles) VALUES (?, '[]')",

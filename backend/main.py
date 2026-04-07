@@ -83,10 +83,8 @@ class ConversationCreate(BaseModel):
     title: str = "New Conversation"
     character_card_id: Optional[str] = None
     character_name: str = ""
-    character_persona: str = ""
     character_scenario: str = ""
     first_mes: str = ""
-    mes_example: str = ""
     post_history_instructions: str = ""
 
 
@@ -195,12 +193,9 @@ async def api_create_conversation(data: ConversationCreate):
     cid = str(uuid.uuid4())
 
     char_name = data.character_name
-    char_persona = data.character_persona
     char_scenario = data.character_scenario
     first_mes = data.first_mes
-    mes_example = data.mes_example
     post_hist = data.post_history_instructions
-    sys_prompt = settings["system_prompt"]
     card_id = data.character_card_id
     title = data.title
 
@@ -210,19 +205,9 @@ async def api_create_conversation(data: ConversationCreate):
         if not card:
             raise HTTPException(404, "Character card not found")
         char_name = card["name"]
-        # Build persona from description + personality (ST convention)
-        parts = []
-        if card.get("description"):
-            parts.append(card["description"])
-        if card.get("personality"):
-            parts.append(card["personality"])
-        char_persona = "\n\n".join(parts)
         char_scenario = card.get("scenario", "")
         first_mes = card.get("first_mes", "")
-        mes_example = card.get("mes_example", "")
         post_hist = card.get("post_history_instructions", "")
-        if card.get("system_prompt"):
-            sys_prompt = card["system_prompt"]
         if title == "New Conversation":
             title = char_name
 
@@ -230,11 +215,8 @@ async def api_create_conversation(data: ConversationCreate):
         cid=cid,
         title=title,
         char_name=char_name,
-        char_persona=char_persona,
         char_scenario=char_scenario,
-        sys_prompt=sys_prompt,
         first_mes=first_mes,
-        mes_example=mes_example,
         post_history_instructions=post_hist,
         character_card_id=card_id,
     )
