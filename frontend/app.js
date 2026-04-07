@@ -883,6 +883,9 @@ async function saveEdit(msgId, role) {
   }
 
   // User edit → create sibling branch + regenerate via SSE
+  const msg = S.messages.find(m => m.id === msgId);
+  if (msg) msg.content = content;
+
   setStreaming(true);
   $('send-btn').disabled = true;
   renderMessages();

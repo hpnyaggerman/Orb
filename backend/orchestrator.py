@@ -15,7 +15,7 @@ AGENT_TOOLS = [{
     "type": "function",
     "function": {
         "name": "set_writing_styles",
-        "description": "Set the active writing styles for the next response. Replaces the full set — any style not listed is deactivated. Aim to keep things fresh — consider shifting and combining styles that fit the current mood or scene. If the current styles are already ideal, keep them as is.",
+        "description": "Set the active writing styles for the next response. Replaces the full set — any style not listed is deactivated. Aim to keep things fresh — consider shifting and combining styles that fit the current mood or scene. May churn and be random. If a style has been used too much, just switch.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -52,7 +52,7 @@ REFINE_ASSISTANT_OUTPUT_TOOL = {
     "type": "function",
     "function": {
         "name": "refine_assistant_output",
-        "description": "Audit your previous response for: anachronisms, repeated phrases or sentence structures, sloppy/purple prose, avoidant;pretentious words like 'purr', 'predatory', 'velvety', 'ozone', 'heat', 'core', 'electric' (adj), 'primal', 'mischievous', 'conspiratorial', 'challenge', cliched writing tropes similar to 'low, dangerous voice'; 'voice dripping'; 'voice dropping'; 'tension in the air', 'a mixture of...'. Make only the necessary inline fixes by rephrasing or removing. If the output is clean, keep refined_output empty.",
+        "description": "Audit your previous response for: inconsistencies, anachronisms, repeated phrases or sentence structures, sloppy/purple prose, avoidant;pretentious words like 'purr', 'predatory', 'velvety', 'ozone', 'core', 'electric' (adj), 'primal', 'mischievous', 'conspiratorial', 'challenge', cliched writing tropes that are variations of 'low, dangerous voice'; 'voice dripping'; 'voice dropping'; 'very brave or very stupid'; 'tension in the air'; 'a mix of...'. Make only the necessary inline fixes by rephrasing or removing. If the output is clean, keep refined_output empty.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -85,8 +85,8 @@ def build_tool_prompt(tool_name: str, user_message: str, active_styles: list[str
 
     desc = tool_def["schema"]["function"]["description"]
     parts = [
-        "[OOC] You (the AI) are now the Director, use tool calls to accomplish your task. Your direction will immediately affect how the scenario plays out. Be decisive.",
-        f"Call this tool FIRST, and ONLY this tool: '{tool_name}' - {desc}"
+        "[OOC] You (the AI) are now the agentic Director, use tool calls to accomplish your task. Your output will immediately affect how the scenario plays out. Be decisive.",
+        f"Call this tool ONLY: '{tool_name}' - {desc}"
     ]
     
     if tool_name == "set_writing_styles":
@@ -252,7 +252,7 @@ async def _execute_pipeline(
 
     yield {"event": "director_done", "data": {"active_styles": act_styles, "injection_block": inj_block, "tool_calls": calls, "agent_latency_ms": latency}}
 
-    perf_msgs = prefix + ([{"role": "system", "content": inj_block}] if inj_block else []) + [{"role": "user", "content": eff_msg + "\n\n[OOC: Only write the story, tool calls are STRICTLY FORBIDDEN from now on because they are extremely DESTRUCTIVE!]"}]
+    perf_msgs = prefix + ([{"role": "user", "content": inj_block}] if inj_block else []) + [{"role": "user", "content": eff_msg + "\n\n[OOC: Only write the story, tool calls are STRICTLY FORBIDDEN from now on!]"}]
     
     resp_text = ""
     async for token in _run_writer_pass(client, perf_msgs, settings, enabled_tools if enabled_tools else None):
@@ -260,10 +260,13 @@ async def _execute_pipeline(
         yield {"event": "token", "data": token}
 
     if writer_rewrite_enabled and resp_text:
-        refined_output, _, _ = await _run_writer_rewrite_pass(client, prefix, eff_msg, resp_text, settings)
-        if refined_output:
-            resp_text = refined_output
-            yield {"event": "writer_rewrite", "data": {"refined_text": resp_text}}
+        try:
+            refined_output, _, _ = await _run_writer_rewrite_pass(client, prefix, eff_msg, resp_text, settings)
+            if refined_output:
+                resp_text = refined_output
+                yield {"event": "writer_rewrite", "data": {"refined_text": resp_text}}
+        except Exception as e:
+            logger.error("refine_assistant_output failed, keeping original: %s", e)
 
     yield {"event": "_pipeline_result", "data": {"act_styles": act_styles, "agent_raw": agent_raw, "calls": calls, "latency": latency, "rewr_msg": rewr_msg, "eff_msg": eff_msg, "resp_text": resp_text, "inj_block": inj_block}}
 

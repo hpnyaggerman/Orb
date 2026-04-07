@@ -72,9 +72,9 @@ SEED_FRAGMENTS = [
         "label": "Sensual",
         "description": "NSFW mode - descriptive, enable if the vibes of the situation call for it",
         "prompt_text": (
-            'Use vulgar, graphic, varied vocabulary when applicable. Even words like "cunt", "cock", "anus", etc. are allowed. The narration is more brutal, vivid, and direct. '
-            'Describe body parts that are exposed, looked at - visually, or interacted with - tactilely. '
-            "Take initiative and develop the NSFW scene, but focus on staying in character - characters should still behave realistically and warily."
+            'Use vulgar, uncensored, graphic, varied vocabulary when applicable. Even words like "cunt", "cock", "anus", etc. are allowed. Avoid roundabout allegories like "heat", "core", etc. The narration is more brutal, vivid, and direct. '
+            'Describe body parts that are exposed or looked at - visually, or interacted with - tactilely. "Take initiative and actively push the scene forward, no need to ask. '
+            "Focus on staying in character even though the vibes are sensual - characters should still behave realistically and warily of strangers and have boundaries."
         ),
         "negative_prompt": (
             "Return to non-explicit writing. Keep all descriptions tasteful and non-graphic. "
@@ -85,9 +85,9 @@ SEED_FRAGMENTS = [
     {
         "id": "reactive",
         "label": "Reactive",
-        "description": "Some characters don't take kindly to sexual assault and violence, and will react.",
+        "description": "Some characters don't take kindly to insults, sexual assault, violence, non-consensual acts, and will react.",
         "prompt_text": (
-            "Some characters don't take kindly to sexual assault and violence, and will fight back or escape (or at least try to) if appropriate. React immediately."
+            "Some characters don't take kindly to insults, sexual assault, violence, non-consensual acts. They will fight back or escape (or at least try to) according to their personalities. React immediately."
         ),
         "negative_prompt": "",
         "is_builtin": False,
