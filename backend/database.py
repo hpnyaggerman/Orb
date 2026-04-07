@@ -68,13 +68,13 @@ SEED_FRAGMENTS = [
         "is_builtin": False,
     },
     {
-        "id": "frisky",
-        "label": "Frisky",
+        "id": "sensual",
+        "label": "Sensual",
         "description": "NSFW mode - descriptive, enable if the vibes of the situation call for it",
         "prompt_text": (
             'Use vulgar, graphic, varied vocabulary when applicable. Even words like "cunt", "cock", "anus", etc. are allowed. The narration is more brutal, vivid, and direct. '
-            'Describe body parts that are exposed, looked at, or interacted with. '
-            "Take initiative and develop the NSFW scene, but focus on staying in character. Characters should still behave realistically and warily."
+            'Describe body parts that are exposed, looked at - visually, or interacted with - tactilely. '
+            "Take initiative and develop the NSFW scene, but focus on staying in character - characters should still behave realistically and warily."
         ),
         "negative_prompt": (
             "Return to non-explicit writing. Keep all descriptions tasteful and non-graphic. "
@@ -109,12 +109,12 @@ DEFAULT_SETTINGS = {
     "api_key": "",
     "model_name": "default",
     "temperature": 0.8,
-    "min_p": 0.05,
+    "min_p": 0,
     "top_k": 40,
     "top_p": 0.95,
     "repetition_penalty": 1.0,
-    "max_tokens": 2048,
-    "system_prompt": "You are a creative roleplay partner. You have two roles:\nDirector: Analyze and guess what the user is leaning into, then use tools to influence the story intelligently and succinctly. Be responsive to the scene's evolving tone.\nWriter: The one writing the actual prose. You will write in third person using snappy prose. Keep tenses, POV consistent. Obey directions planned by Director. Keep replies compact, stop when appropriate.",
+    "max_tokens": 4096,
+    "system_prompt": "You are a creative roleplay partner. Be responsive to the scene's evolving tone.\nKeep tenses (past, present) and POV consistent.\nObey OOC commands.",
     "user_name": "User",
     "user_description": "",
     "enable_agent": True,

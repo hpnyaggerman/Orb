@@ -13,7 +13,7 @@ const S = {
   lastDirectorData: null,
   isStreaming: false,
   agentEnabled: true,
-  enabledTools: { set_writing_styles: true, rewrite_user_prompt: false, fix_writer_output: false },
+  enabledTools: { set_writing_styles: true, rewrite_user_prompt: false, refine_assistant_output: false },
   editingMsgId: null,
   abortController: null,
 };
@@ -775,7 +775,7 @@ function handleSSEEvent(event, data, container, msgDiv, onToken, onRewrite) {
         const d = JSON.parse(data);
         const lastUser = [...S.messages].reverse().find(m => m.role === 'user' && !m.id)
                       || [...S.messages].reverse().find(m => m.role === 'user');
-        if (lastUser) lastUser.content = d.rewritten_message;
+        if (lastUser) lastUser.content = d.refined_message;
         renderMessages();
       } catch (_) {}
       break;
@@ -962,7 +962,7 @@ function renderInspector() {
 const TOOL_DEFS = [
   { id: 'set_writing_styles',    name: 'Style Director',    desc: 'Selects active writing style fragments based on scene context' },
   { id: 'rewrite_user_prompt',   name: 'Prompt Rewriter',   desc: 'Expands vague or lazy messages into richer input' },
-  { id: 'fix_writer_output', name: 'Output Auditor',    desc: 'Post-processes the response to fix repetition, slop, and anachronisms' },
+  { id: 'refine_assistant_output', name: 'Output Auditor',    desc: 'Post-processes the response to fix repetition, slop, and anachronisms' },
 ];
 
 function toggleToolsPanel() {

@@ -34,11 +34,11 @@ REWRITE_PROMPT_TOOL = {
     "type": "function",
     "function": {
         "name": "rewrite_user_prompt",
-        "description": "Rewrite the user's message into a more detailed, immersive, action or dialogue. Use ONLY when the input is too short or vague (e.g. \"I laugh\", \"Sure.\", \"I nod\") to generate a compelling response. Write 2 sentences max. If the message is already detailed enough, keep rewritten_message empty.",
+        "description": "Rewrite the user's message into a more detailed, immersive, action or dialogue. Use ONLY when the input is too short or vague (e.g. \"I laugh\", \"Sure.\", \"I nod\") to generate a compelling response. Write 2 sentences max. If the message is already detailed enough, keep refined_message empty.",
         "parameters": {
             "type": "object",
             "properties": {
-                "rewritten_message": {
+                "refined_message": {
                     "type": "string",
                     "description": "An improved, more detailed version of the user's message, written in first person from the user's perspective. Leave empty or omit if no changes are needed.",
                 },
@@ -48,15 +48,15 @@ REWRITE_PROMPT_TOOL = {
     },
 }
 
-FIX_WRITER_OUTPUT_TOOL = {
+REFINE_ASSISTANT_OUTPUT_TOOL = {
     "type": "function",
     "function": {
-        "name": "fix_writer_output",
-        "description": "Audit the preceding assistant's response for: anachronisms, repeated phrases or sentence structures, sloppy/purple prose, avoidant;pretentious words like 'purr', 'predatory', 'velvety', 'ozone', 'heat', 'core', 'electric' (adj), 'primal', 'mischievous', 'conspiratorial', 'challenge', cliched writing tropes similar to 'low, dangerous voice'; 'voice dripping'; 'voice dropping'; 'tension in the air', 'a mixture of...'. Make only the necessary inline fixes by rephrasing or removing. If the output is clean, keep rewritten_output empty.",
+        "name": "refine_assistant_output",
+        "description": "Audit your previous response for: anachronisms, repeated phrases or sentence structures, sloppy/purple prose, avoidant;pretentious words like 'purr', 'predatory', 'velvety', 'ozone', 'heat', 'core', 'electric' (adj), 'primal', 'mischievous', 'conspiratorial', 'challenge', cliched writing tropes similar to 'low, dangerous voice'; 'voice dripping'; 'voice dropping'; 'tension in the air', 'a mixture of...'. Make only the necessary inline fixes by rephrasing or removing. If the output is clean, keep refined_output empty.",
         "parameters": {
             "type": "object",
             "properties": {
-                "rewritten_output": {
+                "refined_output": {
                     "type": "string",
                     "description": "The corrected output with targeted fixes applied. Leave empty or omit if no changes are needed.",
                 },
@@ -69,11 +69,11 @@ FIX_WRITER_OUTPUT_TOOL = {
 ALL_TOOL_DEFS: dict[str, dict] = {
     "set_writing_styles": {"tool_choice": {"type": "function", "function": {"name": "set_writing_styles"}}, "schema": AGENT_TOOLS[0]},
     "rewrite_user_prompt": {"tool_choice": {"type": "function", "function": {"name": "rewrite_user_prompt"}}, "schema": REWRITE_PROMPT_TOOL},
-    "fix_writer_output": {"tool_choice": {"type": "function", "function": {"name": "fix_writer_output"}}, "schema": FIX_WRITER_OUTPUT_TOOL},
+    "refine_assistant_output": {"tool_choice": {"type": "function", "function": {"name": "refine_assistant_output"}}, "schema": REFINE_ASSISTANT_OUTPUT_TOOL},
 }
 
 # Tools that run after the writer, not during the director pass.
-POST_WRITER_TOOLS = {"fix_writer_output"}
+POST_WRITER_TOOLS = {"refine_assistant_output"}
 
 
 
@@ -86,7 +86,7 @@ def build_tool_prompt(tool_name: str, user_message: str, active_styles: list[str
     desc = tool_def["schema"]["function"]["description"]
     parts = [
         "[OOC] You (the AI) are now the Director, use tool calls to accomplish your task. Your direction will immediately affect how the scenario plays out. Be decisive.",
-        f"Allowed tool - only call this: '{tool_name}' - {desc}"
+        f"Call this tool FIRST, and ONLY this tool: '{tool_name}' - {desc}"
     ]
     
     if tool_name == "set_writing_styles":
@@ -140,7 +140,7 @@ def apply_tool_calls(tool_calls: list[dict], current_styles: list[str]) -> tuple
         if tc["name"] == "set_writing_styles":
             new_styles = args.get("style_ids", [])
         elif tc["name"] == "rewrite_user_prompt":
-            rewritten = args.get("rewritten_message") or None
+            rewritten = args.get("refined_message") or None
     return new_styles, rewritten
 
 
@@ -161,7 +161,7 @@ async def _run_agent_pass(
     director: dict, fragments: list[dict], enabled_tools: Optional[dict] = None
 ) -> tuple[list[str], str, list, int, Optional[str]]:
     """Run the agent pass by iterating each enabled tool individually."""
-    active_styles, rewritten_message, all_calls, last_raw = director["active_styles"], None, [], ""
+    active_styles, refined_message, all_calls, last_raw = director["active_styles"], None, [], ""
     tool_names = ["set_writing_styles"] if enabled_tools is None else [n for n, on in enabled_tools.items() if on and n in ALL_TOOL_DEFS and n not in POST_WRITER_TOOLS]
     
     if not tool_names:
@@ -183,39 +183,39 @@ async def _run_agent_pass(
             if parsed_calls := parse_tool_calls(resp):
                 all_calls.extend(parsed_calls)
                 active_styles, new_rewr = apply_tool_calls(parsed_calls, active_styles)
-                if new_rewr: rewritten_message = new_rewr
+                if new_rewr: refined_message = new_rewr
             else:
                 logger.info("Agent tool=%s: model skipped", name)
         except Exception as e:
             logger.error("Agent tool=%s failed: %s", name, e)
             last_raw = f"ERROR: {e}"
 
-    return active_styles, last_raw, all_calls, int((time.monotonic() - t0) * 1000), rewritten_message
+    return active_styles, last_raw, all_calls, int((time.monotonic() - t0) * 1000), refined_message
 
 
 async def _run_writer_rewrite_pass(
     client: LLMClient, prefix: list[dict], eff_msg: str, resp_text: str, settings: dict
 ) -> tuple[Optional[str], str, int]:
-    """Run the post-writer writer audit pass. Returns (rewritten_text_or_none, raw_resp, latency_ms).
+    """Run the post-writer writer audit pass. Returns (refined_text_or_none, raw_resp, latency_ms).
     Message structure: history + user turn + writer draft + OOC audit instruction."""
     t0 = time.monotonic()
     msgs = prefix + [
         {"role": "user", "content": eff_msg},
         {"role": "assistant", "content": resp_text},
-        {"role": "user", "content": build_tool_prompt("fix_writer_output", "", [], [])},
+        {"role": "user", "content": build_tool_prompt("refine_assistant_output", "", [], [])},
     ]
     logger.info("Writer rewrite prompt:\n%s", json.dumps(msgs, indent=2, ensure_ascii=False))
     try:
         resp = await client.complete(
             messages=msgs, model=settings["model_name"], tools=[v["schema"] for v in ALL_TOOL_DEFS.values()],
-            tool_choice=ALL_TOOL_DEFS["fix_writer_output"]["tool_choice"], temperature=0.25, max_tokens=4096
+            tool_choice=ALL_TOOL_DEFS["refine_assistant_output"]["tool_choice"], temperature=0.25, max_tokens=4096
         )
         raw = json.dumps(resp, default=str)
         logger.info("Writer rewrite output:\n%s", raw)
         if parsed_calls := parse_tool_calls(resp):
             for tc in parsed_calls:
-                if tc["name"] == "fix_writer_output":
-                    rewritten = tc.get("arguments", {}).get("rewritten_output") or None
+                if tc["name"] == "refine_assistant_output":
+                    rewritten = tc.get("arguments", {}).get("refined_output") or None
                     return rewritten, raw, int((time.monotonic() - t0) * 1000)
         logger.info("Writer rewrite: model skipped")
         return None, raw, int((time.monotonic() - t0) * 1000)
@@ -235,7 +235,7 @@ async def _execute_pipeline(
         enabled_tools = {}
     act_styles, agent_raw, calls, latency, rewr_msg = director["active_styles"], "", [], 0, None
     eff_msg = user_message
-    writer_rewrite_enabled = enable_agent and enabled_tools.get("fix_writer_output", False)
+    writer_rewrite_enabled = enable_agent and enabled_tools.get("refine_assistant_output", False)
 
     if enable_agent:
         yield {"event": "director_start"}
@@ -244,7 +244,7 @@ async def _execute_pipeline(
         )
         if rewr_msg:
             eff_msg = rewr_msg
-            yield {"event": "prompt_rewritten", "data": {"rewritten_message": rewr_msg}}
+            yield {"event": "prompt_rewritten", "data": {"refined_message": rewr_msg}}
 
     deactivated = [f for f in fragments if f["id"] in (set(director["active_styles"]) - set(act_styles))]
     active = [f for f in fragments if f["id"] in act_styles]
@@ -260,10 +260,10 @@ async def _execute_pipeline(
         yield {"event": "token", "data": token}
 
     if writer_rewrite_enabled and resp_text:
-        rewritten_output, _, _ = await _run_writer_rewrite_pass(client, prefix, eff_msg, resp_text, settings)
-        if rewritten_output:
-            resp_text = rewritten_output
-            yield {"event": "writer_rewrite", "data": {"rewritten_text": resp_text}}
+        refined_output, _, _ = await _run_writer_rewrite_pass(client, prefix, eff_msg, resp_text, settings)
+        if refined_output:
+            resp_text = refined_output
+            yield {"event": "writer_rewrite", "data": {"refined_text": resp_text}}
 
     yield {"event": "_pipeline_result", "data": {"act_styles": act_styles, "agent_raw": agent_raw, "calls": calls, "latency": latency, "rewr_msg": rewr_msg, "eff_msg": eff_msg, "resp_text": resp_text, "inj_block": inj_block}}
 
