@@ -170,7 +170,9 @@ async def init_db():
                 mes_example TEXT NOT NULL DEFAULT '',
                 post_history_instructions TEXT NOT NULL DEFAULT '',
                 system_prompt_snapshot TEXT NOT NULL DEFAULT '',
-                created_at TEXT NOT NULL
+                created_at TEXT NOT NULL,
+                updated_at TEXT,
+                active_leaf_id INTEGER REFERENCES messages(id) ON DELETE SET NULL
             );
 
             CREATE TABLE IF NOT EXISTS character_cards (
@@ -203,6 +205,7 @@ async def init_db():
                 turn_index INTEGER NOT NULL,
                 swipe_index INTEGER NOT NULL DEFAULT 0,
                 is_active BOOLEAN NOT NULL DEFAULT 1,
+                parent_id INTEGER REFERENCES messages(id) ON DELETE CASCADE,
                 created_at TEXT NOT NULL
             );
 
