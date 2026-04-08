@@ -77,7 +77,7 @@ ALL_SCHEMAS = [t["schema"] for t in TOOLS.values()]
 
 
 def _enabled_schemas(enabled_tools: dict | None) -> list[dict]:
-    """Compute the tool schemas list from enabled_tools. Returns [] when disabled."""
+    """Return tool schemas. None means 'all enabled', {} means 'all disabled'."""
     if enabled_tools is None:
         return ALL_SCHEMAS
     return [TOOLS[n]["schema"] for n in TOOLS if enabled_tools.get(n, False)]
@@ -204,7 +204,8 @@ async def _agent_pass(
 
 
 async def _refine_pass(
-    client: LLMClient, prefix: list[dict], effective_msg: str, draft: str, settings: dict
+    client: LLMClient, prefix: list[dict], effective_msg: str, draft: str, settings: dict,
+    enabled_tools: dict | None = None,
 ) -> tuple[str | None, str, int]:
     t0 = time.monotonic()
     msgs = prefix + [
@@ -213,10 +214,10 @@ async def _refine_pass(
         {"role": "user", "content": build_tool_prompt("refine_assistant_output", "", [], [])},
     ]
     logger.info("Refine prompt:\n%s", json.dumps(msgs, indent=2, ensure_ascii=False))
-    refine_schema = [TOOLS["refine_assistant_output"]["schema"]]
+    schemas = _enabled_schemas(enabled_tools)
     try:
         resp = await client.complete(
-            messages=msgs, model=settings["model_name"], tools=refine_schema,
+            messages=msgs, model=settings["model_name"], tools=schemas,
             tool_choice=TOOLS["refine_assistant_output"]["choice"], temperature=0.25, max_tokens=4096
         )
         raw = json.dumps(resp, default=str)
@@ -282,7 +283,7 @@ async def _run_pipeline(
     # --- Refine pass: optional self-audit of the draft ---
     if do_refine and resp_text:
         try:
-            refined_output, _, _ = await _refine_pass(client, prefix, effective_msg, resp_text, settings)
+            refined_output, _, _ = await _refine_pass(client, prefix, effective_msg, resp_text, settings, enabled_tools)
             if refined_output:
                 resp_text = refined_output
                 yield {"event": "writer_rewrite", "data": {"refined_text": resp_text}}

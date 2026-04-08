@@ -763,6 +763,59 @@ class TestRunPipelineKVCacheInvariant:
             "No tools field must be sent to the writer when the agent is disabled"
         )
 
+    async def test_refine_complete_receives_same_tools_as_writer(self, settings, director, fragments, prefix):
+        """
+        KV-cache: the refine pass complete() call must receive the same tools list
+        as the writer stream() call.  Both share the same prefix; if they also share
+        the same tools list the server can reuse the cached KV entries for those
+        tokens rather than recomputing them.
+
+        Currently this test is expected to FAIL because _refine_pass only passes
+        [REFINE_OUTPUT_TOOL] while the writer passes _enabled_schemas(enabled_tools).
+        """
+        settings["enabled_tools"] = {
+            "set_writing_styles": True,
+            "rewrite_user_prompt": False,
+            "refine_assistant_output": True,
+        }
+        settings["enable_agent"] = 1
+
+        refine_response = {
+            "tool_calls": [{
+                "function": {
+                    "name": "refine_assistant_output",
+                    "arguments": '{"refined_output": "Polished."}',
+                }
+            }]
+        }
+
+        complete_fn, complete_calls = capturing_complete(refine_response)
+        stream_fn, stream_calls = capturing_stream(("Token1", "Token2"))
+        client = MagicMock(spec=LLMClient)
+        client.complete = complete_fn
+        client.stream = stream_fn
+
+        await collect(_run_pipeline(client, settings, director, fragments, prefix, "Hi"))
+
+        assert stream_calls, "writer stream() was never called"
+        writer_tools = stream_calls[0]["kwargs"].get("tools")
+
+        # The refine pass is identified by tool_choice targeting refine_assistant_output.
+        refine_calls = [
+            c for c in complete_calls
+            if (tc := c["kwargs"].get("tool_choice")) is not None
+            and isinstance(tc, dict)
+            and tc.get("function", {}).get("name") == "refine_assistant_output"
+        ]
+        assert refine_calls, "refine complete() was never called"
+        refine_tools = refine_calls[0]["kwargs"].get("tools")
+
+        assert refine_tools == writer_tools, (
+            "Refine and writer received different tools lists — KV-cache cannot be shared.\n"
+            f"Writer tools: {[t['function']['name'] for t in (writer_tools or [])]}\n"
+            f"Refine tools: {[t['function']['name'] for t in (refine_tools or [])]}"
+        )
+
 
 # ===========================================================================
 # 4. Public entry-points (DB + LLMClient mocked)
