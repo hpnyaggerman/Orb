@@ -8,15 +8,76 @@ Pipeline: `_agent_pass` → `_writer_pass` → `_refine_pass` (new ReAct loop).
 1. **Programmatic Detection:** Runs three scanners on the writer's draft, producing an Audit Report. Zero LLM calls.
 2. **Agentic Refinement (ReAct Loop):** The LLM agent receives the Audit Report and uses `refine_apply_patch` to surgically fix the draft. Loops until done or max steps reached.
 
+### 1.1. Message Turn Layout
+
+The refine pass reuses the existing conversation prefix (system prompt + history) to maximise KV cache hits, then appends turns that frame the draft as the assistant's own output and inject the audit as a refinement task. Below is the full turn sequence in practice:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│ TURN 1 — system                                                 │
+│ Role: system                                                    │
+│ Content: <existing system prompt / persona / instructions>      │
+│ (Identical to what _agent_pass and _writer_pass already saw.    │
+│  Kept in place so the KV cache prefix is reusable.)             │
+├─────────────────────────────────────────────────────────────────┤
+│ TURN 2‥N — history  (multi-turn, as-is from conversation)       │
+│ Alternating user / assistant pairs from prior exchanges.        │
+│ These are passed through unchanged from the existing context.   │
+├─────────────────────────────────────────────────────────────────┤
+│ TURN N+1 — user                                                 │
+│ Role: user                                                      │
+│ Content: <the effective user message for this generation>       │
+│ (The latest prompt that triggered _writer_pass.)                │
+├─────────────────────────────────────────────────────────────────┤
+│ TURN N+2 — assistant  (pre-filled)                              │
+│ Role: assistant                                                 │
+│ Content: <full buffered draft from _writer_pass>                │
+│ (Injected verbatim so the model treats it as its own output.)   │
+├─────────────────────────────────────────────────────────────────┤
+│ TURN N+3 — system  (refinement injection)                       │
+│ Role: system                                                    │
+│ Content:                                                        │
+│   refine_agent_instructions                                     │
+│   + "\n"                                                        │
+│   + Audit Report (from programmatic scanners)                   │
+│   + tool definitions (refine_apply_patch)                       │
+├─────────────────────────────────────────────────────────────────┤
+│ ── ReAct loop starts here ──────────────────────────────────────│
+├─────────────────────────────────────────────────────────────────┤
+│ TURN N+4 — assistant  (model generation, iteration 1)           │
+│ Role: assistant                                                 │
+│ Content: <chain-of-thought reasoning>                           │
+│ Tool call: refine_apply_patch({ patches: [...] })               │
+├─────────────────────────────────────────────────────────────────┤
+│ TURN N+5 — tool response  (iteration 1)                         │
+│ Role: tool                                                      │
+│ Content: <updated Audit Report after patches applied>           │
+│ (If report is clean → loop breaks, this turn is not appended.)  │
+├─────────────────────────────────────────────────────────────────┤
+│ TURN N+6 — assistant  (model generation, iteration 2)           │
+│ Role: assistant                                                 │
+│ Tool call: refine_apply_patch({ patches: [...] })               │
+├─────────────────────────────────────────────────────────────────┤
+│ TURN N+7 — tool response  (iteration 2)                         │
+│ ...repeats until audit is clean or max iterations reached...    │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**Key points:**
+- **Turns 1 through N+2 are the shared prefix** — identical bytes to the writer pass, so the KV cache from that pass can be reused up to the end of the draft.
+- **Turn N+3 (system)** is the only new context injected before the model generates. It carries the audit report and agent instructions, keeping them clearly separated from the creative draft.
+- **Tool response turns** use `role: tool` (not `user`) to avoid confusing the model about who is speaking. Each tool response contains only the refreshed Audit Report, giving the agent a live scoreboard. => Need to run replace on latest assistant output, then generate audit report after replace, then send the report to the model as `tool`.
+- **The loop appends pairs** (assistant tool-call → tool response) to the thread. All prior turns remain immutable, so the agent always has full context of its previous patches.
+
 ## 2. Data Foundations
 
-A **phrase bank** (configured in `settings.py` or a JSON file) holds groups of semantically equivalent banned/overused phrases. The first entry in each group is the canonical name.
+A **phrase bank** (configured in database and UI) holds groups of semantically equivalent banned/overused phrases. The first entry in each group is the canonical name.
 
 ```python
 PHRASE_BANK = [
-    ["a mix of", "a mixture of", "a blend of"],
-    ["voice dripping", "voice dripping with"],
-    ["tension in the air", "thick tension in the air"],
+    "a mix of",
+    "voice dripping",
+    "tension in the air",
     ...
 ]
 ```
@@ -31,25 +92,25 @@ Three scanners run on the draft at the start of `_refine_pass`, producing a cons
 
 ### 3.2. Sentence Opener Monotony (`opening_monotony.py`)
 - **Method:** Splits draft into sentences. Extracts the first `n_words` (default 3) of each, normalized to lowercase. Flags any opener that appears in ≥ `flag_threshold` fraction of sentences (default 15%) and at least twice.
-- **Output:** `MonotonyResult` — flagged openers with counts, fraction, and example sentences.
+- **Output:** `MonotonyResult` — flagged openers with counts, fraction, and flagged sentences.
 
 ### 3.3. Syntactic Template Repetition (`template_repetition.py`)
 - **Method:** Reduces each sentence to a coarse POS skeleton (e.g., `"PRON VERB DET NOUN PREP NOUN"`) using a lightweight rule-based tagger (no external models). Flags any template appearing ≥ `flag_threshold` times (default 2).
-- **Output:** `TemplateResult` — flagged templates with counts, example sentences, and an overall `repetition_score`.
+- **Output:** `TemplateResult` — flagged templates with counts, flagged sentences, and an overall `repetition_score`.
 
 ### 3.4. Audit Report Format
 
 ```
 *** REFINEMENT AUDIT REPORT ***
 
-1. Banned Phrases:
+1. Banned Phrases — Rewrite each flagged sentence to eliminate the banned phrase entirely. Do not substitute with a synonym from the same phrase group.
    - "voice dripping" (sentence: "...his voice dripping with contempt...")
    - "tension in the air" (sentence: "...thick tension in the air between them...")
 
-2. Repetitive Openers:
-   - "he looked" (3/12 sentences, 25%): "He looked at her.", "He looked away.", "He looked up."
+2. Repetitive Openers — Rewrite flagged sentences so they no longer begin with the same opening words. Vary the sentence structure (e.g., lead with a clause, object, or action instead).
+   - "he looked" (appeared 3 times): "He looked at her.", "He looked away.", "He looked up."
 
-3. Repetitive Templates:
+3. Repetitive Templates — Restructure flagged sentences so they no longer follow the same POS pattern. Change clause order, combine sentences, or vary syntax.
    - "PRON VERB DET NOUN PREP NOUN" (4 sentences): "She crossed the room in silence.", ...
 
 *** END OF REPORT ***
@@ -61,7 +122,7 @@ Three scanners run on the draft at the start of `_refine_pass`, producing a cons
 - **Description:** Applies one or more exact text replacements to the draft. Each `search` must exactly match current draft text.
 - **Parameters:**
   - `patches` (array): ordered list of `{"search": str, "replace": str}`
-- **Returns:** Always return success, if failure occurs during operation then skip that item, the updated Audit Report from re-running all three scanners — giving the agent a live view of remaining issues.
+- **Returns:** Always return success, if failure occurs during operation then skip that item. Return the updated Audit Report from re-running all three scanners — giving the agent a live view of remaining issues.
 
 ## 5. The `_refine_pass` ReAct Loop
 
@@ -78,13 +139,13 @@ Three scanners run on the draft at the start of `_refine_pass`, producing a cons
 > You are the Refinement Agent. Review the draft above and address every issue in the REFINEMENT AUDIT REPORT.
 > 1. Use `refine_apply_patch` to replace problematic text with improved phrasing. `search` must exactly match the current draft text.
 > 2. After each patch, you will receive an updated Audit Report. Continue until all issues are resolved.
-> 3. When done, respond with "AUDIT COMPLETE." and nothing else.
 
 ### 5.3. Loop Execution (max 5–7 iterations)
 1. Agent reasons about the Audit Report and calls `refine_apply_patch`.
-2. Orchestrator applies patches and returns the updated Audit Report (or error).
-3. Tool call + result are appended to the thread.
-4. Loop ends when agent outputs "AUDIT COMPLETE." or max steps is reached.
+2. Orchestrator applies patches and re-runs all three scanners.
+3. If the updated Audit Report is clean (zero flagged items), break — do **not** send it back to the LLM.
+4. Otherwise, append the tool call + updated Audit Report to the thread and continue.
+5. Loop also ends if max steps is reached.
 
 ## 6. Patch Application Logic
 
@@ -102,7 +163,7 @@ Three scanners run on the draft at the start of `_refine_pass`, producing a cons
 Replace old single-shot `_refine_pass` calls with the new orchestrator. Persist the final patched `resp_text` and store the full Audit Report + ReAct trace in `conversation_log` for debugging.
 
 ### 7.3. Graceful Fallback
-If `_refine_pass` errors or hits max iterations without "AUDIT COMPLETE.", fall back to the unpatched `_writer_pass` draft.
+If `_refine_pass` errors or hits max iterations without a clean Audit Report, fall back to the unpatched `_writer_pass` draft.
 
 ---
 
