@@ -1,0 +1,7 @@
+- Explore using logit bias in writer pass to force assistant content to never output tool call token.
+- When refinement pass is going and user clicks Stop generation or an error happens, just apply the current iteration, then keep and save it. Currently the AI's message, and sometimes the user's message just disappear, need to save it.
+- UI should be more indicative when Director is doing something.
+- When doing repetition detection, scan the last 3 assistant messages, not just the current one.
+- Structure repetition detection across many paragraphs, not just sentences.
+- Phrase repetition detection too, not just anti-slop detection.
+- AI's message has a magic button - rewrite with custom direction, click on it and a small input box appears for direction input.

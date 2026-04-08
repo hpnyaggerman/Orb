@@ -35,7 +35,7 @@ REWRITE_PROMPT_TOOL = {
     "type": "function",
     "function": {
         "name": "rewrite_user_prompt",
-        "description": "Rewrite the user's message into a more detailed, immersive, action or dialogue. Use ONLY when the input is too short or vague (e.g. \"I laugh\", \"Sure.\", \"I nod\") to generate a compelling response. Write 2 sentences max. If the message is already detailed enough, keep refined_message empty.",
+        "description": "Rewrite the user's message into a more detailed, immersive, action or dialogue. Use ONLY when the input is too short or vague (e.g. \"I laugh\", \"Sure.\", \"I nod\") to generate a compelling response. Write 2 sentences max, be direct and succinct. If the message is already detailed enough, keep refined_message empty.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -483,7 +483,7 @@ async def _run_pipeline(
 
     # --- Writer pass: stream the story response ---
     writer_msgs = prefix + ([{"role": "user", "content": inj_block}] if inj_block else []) + [
-        {"role": "user", "content": effective_msg + "\n\n[OOC: Only write the continuation of the story, follow directions in <current_scene_direction>, tool calling is STRICTLY FORBIDDEN now!]\n"}
+        {"role": "user", "content": effective_msg + "\n\n[OOC: Only write the continuation of the story, tool/function calling is STRICTLY FORBIDDEN now!]\n"}
     ]
 
     resp_text = ""

@@ -72,7 +72,7 @@ SEED_FRAGMENTS = [
         "label": "Sensual",
         "description": "NSFW mode - descriptive, enable if the vibes of the situation call for it",
         "prompt_text": (
-            'The narration should describe body parts that are exposed or looked at - visually, or interacted with - tactilely. Take initiative and actively push the scene forward, no need to ask. '
+            'The narration may describe body parts that are exposed or looked at - visually, or interacted with - tactilely, but sparingly in order to avoid repetition. Take initiative and actively push the scene forward, no need to ask. '
             'The narration can use NSFW, vulgar, uncensored, graphic, varied vocabulary where applicable. Even strong words like "cunt", "cock", "anus", etc. are allowed. Avoid roundabout allegories like "heat", "core", etc. The narration is more brutal, vivid, and direct. '
             "Focus on staying in character even though the vibes are sensual - characters should still behave realistically and warily of strangers and have boundaries. "
             'Only the narration changes style, characters should still talk normally like how they would.'
@@ -133,7 +133,7 @@ SEED_PHRASE_BANK = [
     ["couldn't help but", "could not help but"],
     ["a dance of", "a dance between"],
     ["eyes narrowing", "eyes narrowed", "mischievous glint", "gaze sharpen"],
-    ["let out a breath", "breath hitches"],
+    ["breath hitches"],
     ["smell of ozone"],
     ["the air between them"],
     ["mind races"],
