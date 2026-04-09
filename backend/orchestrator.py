@@ -529,16 +529,13 @@ async def handle_turn(conversation_id: str, user_message: str, skip_user_persist
         phrase_bank = await db.get_phrase_bank()
         client = LLMClient(settings["endpoint_url"], api_key=settings.get("api_key", ""))
 
-        # Determine history and turn indexing
         history, user_msg_id = messages, None
         user_parent_id = conv.get("active_leaf_id")
         next_turn = (messages[-1]["turn_index"] + 1) if messages else 0
 
-        # When skipping persist, pop the last user message out of history
         if skip_user_persist and messages and messages[-1]["role"] == "user":
             history, user_msg_id = messages[:-1], messages[-1]["id"]
 
-        # Build the system + history prefix (optimised for KV cache reuse)
         system_prompt, char_persona, mes_example = await _load_char_context(conv, settings)
         prefix = build_prefix(
             system_prompt, conv["character_name"], char_persona,
@@ -546,35 +543,56 @@ async def handle_turn(conversation_id: str, user_message: str, skip_user_persist
             history, settings.get("user_name", "User"), settings.get("user_description", "")
         )
 
-        # Run the full agent → writer → refine pipeline
         res = {}
+        asst_id = None
+        persisted = False
+
         try:
             async for event in _run_pipeline(client, settings, director, fragments, prefix, user_message, phrase_bank):
                 if event["event"] == "_result":
                     res = event["data"]
+                    # ── Persist immediately after writer pass ──
+                    if settings.get("enable_agent", 1):
+                        await db.update_director_state(conversation_id, res["active_moods"])
+
+                    if not skip_user_persist:
+                        user_msg_id = await db.add_message(conversation_id, "user", res["effective_msg"], next_turn, parent_id=user_parent_id)
+                        await db.set_active_leaf(conversation_id, user_msg_id)
+                        asst_id = await db.add_message(conversation_id, "assistant", res["resp_text"], next_turn + 1, parent_id=user_msg_id)
+                    else:
+                        if res["refined_msg"] and user_msg_id:
+                            await db.update_message_content(user_msg_id, res["refined_msg"])
+                        asst_id = await db.add_message(conversation_id, "assistant", res["resp_text"], next_turn, parent_id=user_msg_id)
+
+                    await db.set_active_leaf(conversation_id, asst_id)
+                    await db.add_conversation_log(conversation_id, next_turn, res["agent_raw"], res["calls"], res["active_moods"], res["inj_block"], res["latency"])
+                    persisted = True
+
                 elif event["event"] == "_refined_result":
+                    # ── Update assistant message in-place ──
                     res["resp_text"] = event["data"]["resp_text"]
+                    if asst_id:
+                        await db.update_message_content(asst_id, res["resp_text"])
+
                 else:
                     yield event
         finally:
-            # Always persist whatever we have — guards against disconnect during refinement
-            if not res:
-                return
-
-            if settings.get("enable_agent", 1):
-                await db.update_director_state(conversation_id, res["active_moods"])
-
-            if not skip_user_persist:
-                user_msg_id = await db.add_message(conversation_id, "user", res["effective_msg"], next_turn, parent_id=user_parent_id)
-                await db.set_active_leaf(conversation_id, user_msg_id)
-                asst_id = await db.add_message(conversation_id, "assistant", res["resp_text"], next_turn + 1, parent_id=user_msg_id)
-            else:
-                if res["refined_msg"] and user_msg_id:
-                    await db.update_message_content(user_msg_id, res["refined_msg"])
-                asst_id = await db.add_message(conversation_id, "assistant", res["resp_text"], next_turn, parent_id=user_msg_id)
-
-            await db.set_active_leaf(conversation_id, asst_id)
-            await db.add_conversation_log(conversation_id, next_turn, res["agent_raw"], res["calls"], res["active_moods"], res["inj_block"], res["latency"])
+            # Fallback: persist if writer completed but _result was never processed
+            if not persisted and res:
+                try:
+                    if settings.get("enable_agent", 1):
+                        await db.update_director_state(conversation_id, res.get("active_moods", []))
+                    if not skip_user_persist:
+                        uid = await db.add_message(conversation_id, "user", res.get("effective_msg", user_message), next_turn, parent_id=user_parent_id)
+                        await db.set_active_leaf(conversation_id, uid)
+                        aid = await db.add_message(conversation_id, "assistant", res.get("resp_text", ""), next_turn + 1, parent_id=uid)
+                    else:
+                        if res.get("refined_msg") and user_msg_id:
+                            await db.update_message_content(user_msg_id, res["refined_msg"])
+                        aid = await db.add_message(conversation_id, "assistant", res.get("resp_text", ""), next_turn, parent_id=user_msg_id)
+                    await db.set_active_leaf(conversation_id, aid)
+                except Exception:
+                    logger.exception("Fallback persistence failed")
 
         yield {"event": "done"}
     except Exception as e:
@@ -589,28 +607,23 @@ async def handle_regenerate(conversation_id: str, assistant_msg_id: int) -> Asyn
         if not conv:
             yield {"event": "error", "data": "Conversation not found"}; return
 
-        # Validate the target assistant message
         target = await db.get_message_by_id(assistant_msg_id)
         if not target or target["conversation_id"] != conversation_id or target["role"] != "assistant":
             yield {"event": "error", "data": "Invalid target message"}; return
 
-        # Walk back to the parent user message
         user_msg_id = target["parent_id"]
         user_msg = await db.get_message_by_id(user_msg_id) if user_msg_id else None
         if not user_msg:
             yield {"event": "error", "data": "Parent user message not found"}; return
 
-        # Rebuild history up to the user message's parent (excluding that turn)
         history = await db._get_path_to_leaf(conversation_id, user_msg.get("parent_id")) if user_msg.get("parent_id") else []
         director = await db.get_director_state(conversation_id)
-        # Roll back moods to what they were before this turn
         prev_moods = await db.get_moods_before_turn(conversation_id, user_msg["turn_index"])
         director = {**director, "active_moods": prev_moods}
         fragments = await db.get_fragments()
         phrase_bank = await db.get_phrase_bank()
         client = LLMClient(settings["endpoint_url"], api_key=settings.get("api_key", ""))
 
-        # Build prefix from the rolled-back history
         system_prompt, char_persona, mes_example = await _load_char_context(conv, settings)
         prefix = build_prefix(
             system_prompt, conv["character_name"], char_persona,
@@ -618,28 +631,42 @@ async def handle_regenerate(conversation_id: str, assistant_msg_id: int) -> Asyn
             history, settings.get("user_name", "User"), settings.get("user_description", "")
         )
 
-        # Re-run the pipeline with the original user message
         res = {}
+        new_asst_id = None
+        persisted = False
+
         try:
             async for event in _run_pipeline(client, settings, director, fragments, prefix, user_msg["content"], phrase_bank):
                 if event["event"] == "_result":
                     res = event["data"]
+                    # ── Persist immediately after writer pass ──
+                    if settings.get("enable_agent", 1):
+                        await db.update_director_state(conversation_id, res["active_moods"])
+                        if res["refined_msg"]:
+                            await db.update_message_content(user_msg_id, res["refined_msg"])
+                    new_asst_id = await db.add_message(conversation_id, "assistant", res["resp_text"], target["turn_index"], parent_id=user_msg_id)
+                    await db.set_active_leaf(conversation_id, new_asst_id)
+                    persisted = True
+
                 elif event["event"] == "_refined_result":
+                    # ── Update assistant message in-place ──
                     res["resp_text"] = event["data"]["resp_text"]
+                    if new_asst_id:
+                        await db.update_message_content(new_asst_id, res["resp_text"])
+
                 else:
                     yield event
         finally:
-            # Always persist — guards against disconnect during refinement
-            if not res:
-                return
-
-            if settings.get("enable_agent", 1):
-                await db.update_director_state(conversation_id, res["active_moods"])
-                if res["refined_msg"]:
-                    await db.update_message_content(user_msg_id, res["refined_msg"])
-
-            new_asst_id = await db.add_message(conversation_id, "assistant", res["resp_text"], target["turn_index"], parent_id=user_msg_id)
-            await db.set_active_leaf(conversation_id, new_asst_id)
+            if not persisted and res:
+                try:
+                    if settings.get("enable_agent", 1):
+                        await db.update_director_state(conversation_id, res.get("active_moods", []))
+                        if res.get("refined_msg"):
+                            await db.update_message_content(user_msg_id, res["refined_msg"])
+                    aid = await db.add_message(conversation_id, "assistant", res.get("resp_text", ""), target["turn_index"], parent_id=user_msg_id)
+                    await db.set_active_leaf(conversation_id, aid)
+                except Exception:
+                    logger.exception("Fallback persistence failed")
 
         yield {"event": "done"}
     except Exception as e:
