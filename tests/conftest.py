@@ -19,7 +19,7 @@ def base_settings() -> dict:
         "api_key": "",
         "enable_agent": 1,
         "enabled_tools": {
-            "set_moods": True,
+            "set_direction": True,
             "rewrite_user_prompt": False,
             "refine_assistant_output": False,
         },

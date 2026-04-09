@@ -1,16 +1,10 @@
 - Explore using logit bias in writer pass to force assistant content to never output tool call token.
 - Refine pass should also show up in Inspector UI. Let's also rework this, no need to show too much info.
 - Bug: If writer pass returns null or aborted while in progress, still save user's message.
+- Improve: injecting <current_scene_direction> seems to make the model dumber because the flow stops being natural.
+- Giving actual direction as director, not just set moods.
 - When doing repetition detection, scan the last 3 assistant messages, not just the current one.
 - Structure repetition detection across many paragraphs, not just sentences.
 - Phrase repetition detection too, not just anti-slop detection.
-<<<<<<< Updated upstream
 - AI's message has a magic button - rewrite with custom direction, click on it and a small input box appears for direction input.
 - During and after refine pass, the latest AI message box should reflect which phrases were changed by having a pop-up on the replaced sentences when the cursor is hovered on them.
-=======
-- Real director mode: Give a quick direction to take the story in, put it as another field in current_scene_direction.
-- If last 4 AI messages gradually get longer and longer, tell the model to rewrite to keep the last one compact.
-- AI's message has a magic button - rewrite with custom direction, click on it and a small input box appears for direction input => Esc to cancel, Enter to proceed rewrite with new direction.
-- During and after refine pass, the latest AI message box should reflect which sentences were rewritten by having a pop-up on the rewritten sentences when the cursor is hovered on them, this pop-up will show the old unedited sentence.
-
->>>>>>> Stashed changes

@@ -94,11 +94,11 @@ SEED_FRAGMENTS = [
         "is_builtin": False,
     },
     {
-        "id": "realistic",
-        "label": "Realistic",
-        "description": "The characters are behaving irrationally or illogically (porn logic, too friendly towards strangers, non-sensical power-scaling, etc.), time to reign them in.",
+        "id": "grounded",
+        "label": "Grounded",
+        "description": "The characters are behaving irrationally/illogically (porn logic, too friendly towards strangers, non-sensical power-scaling, etc.), time to reign them in and make them act more realistic.",
         "prompt_text": (
-            "The scenario is getting far-fetched and characters are behaving irrationally/illogically. Focus on being realistic now, the characters should act like how real people act, talk like how real people talk. That means less monologue, more wariness of strangers."
+            "The scenario is getting far-fetched and characters are behaving irrationally/illogically. Focus on being realistic and grounded now, the characters should act like how real people act, talk like how real people talk. That means less monologue, more wariness of strangers, balanced power-scaling, etc."
         ),
         "negative_prompt": "",
         "is_builtin": False,
