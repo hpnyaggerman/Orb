@@ -29,16 +29,16 @@ AGENT_TOOLS = [{
                 },
                 "plot_direction": {
                     "type": "string",
-                    "description": "What happens next in the story — events, actions, reveals, turns of fate (e.g. 'his dad knows he's lying and snaps', 'the attack tears off a piece of her clothing', 'he makes a rude gesture the teacher doesn't see'). Keep to one short sentence.",
+                    "description": "What happens next in the story — events, actions, reveals, turns of fate (e.g. 'his dad knows he's lying and snaps', 'the attack tears off a piece of her clothing', 'he makes a rude gesture the teacher doesn't see', 'she's leaning on his shoulder'). Keep to one short sentence.",
                 },
                 "narration_direction": {
                     "type": "string",
-                    "description": "How the scene should be written — focus, emphasis, descriptive lens, internal state (e.g. 'describe his anxious tics in detail', 'narrate her spiraling thoughts on why it went wrong', 'describe her exposed body parts vividly', 'narrate what would happen if she saw it'). Keep to one short sentence.",
+                    "description": "How the scene should be written — focus, emphasis, descriptive lens, internal state (e.g. 'describe his anxious tics in detail', 'narrate her spiraling thoughts on why it went wrong', 'describe her exposed body parts vividly', 'narrate what would happen if she saw it', 'describe how stray strands of hair feel against his cheek'). Keep to one short sentence.",
                 },
                 "detected_repetitions": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Specific tropes, phrases, subjects, or narrative patterns that are recently overused in the narration. Fine if they're not recent.",
+                    "description": "Specific tropes, phrases, subjects, or narrative patterns that are recently overused in the narration. Only report the ones that are recent.",
                 },
             },
             "required": ["moods", "plot_direction"],
