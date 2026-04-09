@@ -63,7 +63,12 @@
         <button class="btn btn-sm" id="inspector-toggle" onclick="toggleInspector()">🔍 Inspector</button>
       </div>
     </div>
-    <div id="chat-messages"><div class="empty-state"><div class="icon">📜</div><div>Select a character to begin</div></div></div>
+        <div id="chat-messages"><div class="empty-state"><div class="icon">📜</div><div>Select a character to begin</div></div></div>
+    <div id="generation-status" class="gen-status hidden">
+      <div class="gen-bar"></div>
+      <span class="gen-dot"></span>
+      <span class="gen-text">Processing…</span>
+    </div>
     <div id="chat-input-area">
       <div id="burger-dropdown">
         <div class="burger-menu-item" onclick="closeBurger();newConvForChar(S.activeCharId)">✚ New conversation</div>

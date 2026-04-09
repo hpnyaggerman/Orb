@@ -17,4 +17,5 @@ export const S = {
   abortController: null,
   streamingContent: null,
   _selectCharLock: false,
+  generationPhase: null,
 };
