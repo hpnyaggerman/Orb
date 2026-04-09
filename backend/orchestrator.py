@@ -16,7 +16,7 @@ AGENT_TOOLS = [{
     "type": "function",
     "function": {
         "name": "set_moods",
-        "description": "Set the active moods for the next response. Replaces the full set — any style not listed is deactivated. Aim to keep things fresh — consider shifting and combining moods that fit the current mood or scene. May churn. If a style has been used too much, just switch.",
+        "description": "Set the active moods for the next response. Replaces the full set — any style not listed is deactivated. Aim to keep things fresh — consider shifting and combining moods that fit the current mood or scene. May churn. If a style has been used too much, just switch. Only focus on configuring the mood, no need to plan the story.",
         "parameters": {
             "type": "object",
             "properties": {

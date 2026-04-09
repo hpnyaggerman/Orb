@@ -1,5 +1,8 @@
 """
-slop_detector.py — Detect overused LLM phrases via word-level trigram fuzzy matching.
+slop_detector.py — Detect overused LLM phrases via exact + trigram containment matching.
+
+Short phrases (≤3 tokens): exact substring match.
+Longer phrases (4+ tokens): trigram containment scoring.
 
 Usage:
     from slop_detector import detect_cliches
@@ -9,14 +12,16 @@ Usage:
         ["tension in the air", "the air is thick"],
     ]
 
-    result = detect_cliches(text, phrase_bank)
+    result = detect_cliches(text, SEED_PHRASE_BANK)
 """
 
 import re
 from dataclasses import dataclass, field
 
-_N = 2
-_DEFAULT_THRESHOLD = 0.25
+_N = 3
+_EXACT_MATCH_MAX_LEN = 3
+_DEFAULT_THRESHOLD = 0.6
+_WINDOW_PADDING = 2
 
 
 @dataclass
@@ -44,25 +49,27 @@ def _tokenize(text: str) -> list[str]:
     return re.findall(r"[a-z0-9]+(?:'[a-z]+)?", text.lower())
 
 
-def _trigrams(tokens: list[str]) -> set[tuple[str, ...]]:
-    if len(tokens) < _N:
+def _ngrams(tokens: list[str], n: int) -> set[tuple[str, ...]]:
+    if len(tokens) < n:
         return set()
-    return {tuple(tokens[i : i + _N]) for i in range(len(tokens) - _N + 1)}
+    return {tuple(tokens[i : i + n]) for i in range(len(tokens) - n + 1)}
 
 
-def _jaccard(a: set, b: set) -> float:
-    if not a or not b:
+def _containment(phrase_grams: set, window_grams: set) -> float:
+    """Fraction of phrase n-grams present in the window."""
+    if not phrase_grams:
         return 0.0
-    return len(a & b) / len(a | b)
+    return len(phrase_grams & window_grams) / len(phrase_grams)
 
 
 def _split_sentences(text: str) -> list[str]:
-    raw = re.split(r'(?<=[.!?"""\'])\s+', text.strip())
+    raw = re.split(r"(?<=[.!?])\s+", text.strip())
     return [s.strip() for s in raw if s.strip()]
 
 
 def _match_sentence(
     sent_tokens: list[str],
+    sent_lower: str,
     phrase_bank: list[list[str]],
     threshold: float,
 ) -> list[ClicheHit]:
@@ -74,15 +81,29 @@ def _match_sentence(
 
         for variant in variant_group:
             var_tokens = _tokenize(variant)
-            var_grams = _trigrams(var_tokens)
+
+            # --- Short phrases: exact substring match ---
+            if len(var_tokens) <= _EXACT_MATCH_MAX_LEN:
+                if variant.lower() in sent_lower and 1.0 > best_score:
+                    best_score = 1.0
+                    best = ClicheHit(
+                        canonical=variant_group[0],
+                        variant=variant,
+                        score=1.0,
+                    )
+                continue
+
+            # --- Longer phrases: trigram containment ---
+            var_grams = _ngrams(var_tokens, _N)
             if not var_grams:
                 continue
 
-            window_len = len(var_tokens) + 3
+            window_len = min(len(var_tokens) + _WINDOW_PADDING, len(sent_tokens))
 
-            for start in range(max(1, len(sent_tokens) - window_len + 1)):
+            for start in range(len(sent_tokens) - window_len + 1):
                 window = sent_tokens[start : start + window_len]
-                score = _jaccard(var_grams, _trigrams(window))
+                win_grams = _ngrams(window, _N)
+                score = _containment(var_grams, win_grams)
 
                 if score >= threshold and score > best_score:
                     best_score = score
@@ -110,7 +131,8 @@ def detect_cliches(
 
     for sentence in sentences:
         tokens = _tokenize(sentence)
-        hits = _match_sentence(tokens, phrase_bank, threshold)
+        sent_lower = sentence.lower()
+        hits = _match_sentence(tokens, sent_lower, phrase_bank, threshold)
         if hits:
             flagged.append(FlaggedSentence(sentence=sentence, cliches=hits))
             all_canonicals.update(h.canonical for h in hits)
