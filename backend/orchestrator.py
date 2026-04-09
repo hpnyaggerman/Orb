@@ -114,7 +114,7 @@ def build_tool_prompt(tool_name: str, user_message: str, active_moods: list[str]
     desc = tool["schema"]["function"]["description"]
     parts = [
         "[OOC] Pause to improve the roleplay. Use tool calls to accomplish your task. Your output will immediately affect how the scenario plays out. Be decisive and avoid overthinking.",
-        f"ONLY call this tool with extreme focus and commitment: '{tool_name}' - {desc}"
+        f"ONLY call this tool with extreme focus: '{tool_name}' - {desc}"
     ]
     if tool_name == "set_moods":
         moods = ", ".join(active_moods) or "none"
