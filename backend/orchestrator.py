@@ -43,7 +43,7 @@ AGENT_TOOLS = [{
                 "keywords": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "List of nouns (keywords) to remind the important concepts and subjects in the roleplay so far. This list shouldn't grow too long (keep under 10 items). Extract from recent messages and plot summary. Examples: 'Excalibur', 'handjob', 'park', 'tungsten', 'kids'.",
+                    "description": "List of nouns (keywords) to remind the important concepts and subjects in the roleplay so far. This list shouldn't grow too long (keep under 6 items). Extract from recent messages and plot summary. Avoid obvious things like main characters names. Examples: 'Excalibur', 'handjob', 'monetary deal', 'squatting position', 'winter night', 'bench'.",
                 },
                 "plot_summary": {
                     "type": "string",
@@ -55,12 +55,12 @@ AGENT_TOOLS = [{
                 },
                 "narration_direction": {
                     "type": "string",
-                    "description": "How the scene should be written — focus, emphasis, descriptive lens, internal state (e.g. 'describe his anxious tics in detail', 'narrate her spiraling thoughts on why it went wrong', 'describe her exposed body parts vividly', 'narrate what would happen if she saw it', 'describe how stray strands of hair feel against his cheek'). Keep to one short sentence.",
+                    "description": "How the scene should be written — focus, emphasis, descriptive lens, internal state (e.g. 'describe his anxious tics in detail', 'narrate her spiraling thoughts on why it went wrong', 'describe her exposed stomach vividly', 'narrate what would happen if she saw it', 'describe her warmth and how stray strands of hair feel against his cheek'). Keep to one short sentence.",
                 },
                 "detected_repetitions": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Specific tropes, phrases, subjects, or narrative patterns that are recently overused in the narration. Only report the ones that are recent.",
+                    "description": "Specific tropes, phrases, subjects, or narrative patterns that are recently overused in the narration. Only report the ones that are recent (e.g. 'repeated description of hair', 'shivering', 'murderous rage', 'mentions of eyes gazing').",
                 },
             },
             "required": ["moods", "plot_direction"],
@@ -326,8 +326,8 @@ async def _agent_pass(
                 if new_plot_summary:
                     plot_summary = new_plot_summary
                 if new_keywords:
-                    # Limit keywords to 10 items
-                    keywords = new_keywords[:10]
+                    # Limit keywords to a few items only
+                    keywords = new_keywords[:6]
             else:
                 logger.info("Agent tool=%s: model skipped", name)
         except Exception as e:
