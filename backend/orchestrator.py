@@ -524,10 +524,13 @@ async def _run_pipeline(
         "agent_latency_ms": latency, "plot_direction": plot_direction, "narration_direction": narration_direction, "detected_repetitions": detected_repetitions,
     }}
 
-    # --- Writer pass: stream the story response ---
-    writer_msgs = prefix + ([{"role": "user", "content": inj_block}] if inj_block else []) + [
-        {"role": "user", "content": effective_msg + "\n\n[OOC: Only write the continuation of the story, tool/function calling is STRICTLY FORBIDDEN now!]\n"}
-    ]
+   # --- Writer pass: stream the story response ---
+    writer_tail = ""
+    if inj_block:
+        writer_tail += inj_block + "\n\n"
+    writer_tail += effective_msg + "\n\n[OOC: Only write the continuation of the story, tool/function calling is STRICTLY FORBIDDEN now!]\n"
+
+    writer_msgs = prefix + [{"role": "user", "content": writer_tail}]
 
     resp_text = ""
     async for token in _writer_pass(client, writer_msgs, settings, enabled_tools):

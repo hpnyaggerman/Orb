@@ -8,7 +8,7 @@
 
 - Improve: Edit button should snap the chat scroll to the message being edited.
 - Improve: injecting <current_scene_direction> seems to make the model dumber because the flow stops being natural.
-- Improve: Explore using logit bias in writer pass to force assistant content to never output tool call token.
+- Improve: Explore using logit bias in writer pass to force assistant content to never output tool call token. Have a button to "test" for tool_call token that we can use to de-bias later.
 
 - Feature: AI's message has a magic button - rewrite with custom direction, click on it and a small input box appears for direction input.
 - Feature: During and after refine pass, the latest AI message box should reflect which phrases were changed. This is done by high-lighting the changed sentences and having a pop-up that shows the old sentences the when the cursor is hovered on them.
