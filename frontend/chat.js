@@ -271,6 +271,20 @@ export async function saveEdit(msgId, role) {
   if (S.isStreaming) { toast('Wait for generation to finish', true); return; }
   S.editingMsgId = null;
 
+  // If "Save & Regen" was clicked but the user message wasn't changed,
+  // treat it as a plain regen instead of creating a duplicate branch.
+  if (role === 'user') {
+    const msg = S.messages.find(m => m.id === msgId);
+    if (msg && msg.content === content) {
+      const idx = S.messages.findIndex(m => m.id === msgId);
+      const nextAssistant = S.messages.slice(idx + 1).find(m => m.role === 'assistant' && m.id);
+      if (nextAssistant) {
+        return regenerate(nextAssistant.id);
+      }
+      // No assistant message after this user message; fall through to normal edit+regen
+    }
+  }
+
   if (role === 'assistant') {
     try {
       await api.post(convUrl(S.activeConvId, 'messages', msgId, 'edit'), { content, regenerate: false });
