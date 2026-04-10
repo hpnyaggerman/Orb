@@ -1,4 +1,5 @@
 import { $ } from './utils.js';
+import { S } from './state.js';
 import { initTheme, loadSettings, saveSetting, showUserModal, saveUserProfile, applyTheme,
          toggleToolsPanel, setAgentEnabled, toggleToolEnabled } from './settings.js';
 import { loadFragments, showFragmentModal, saveFragment, deleteFragment,
@@ -58,7 +59,9 @@ Object.assign(window, {
   // inspector
   toggleInspector,
   // ui
-  toggleSection, toggleBurger,
+  toggleSection, toggleBurger, closeBurger,
+  // state
+  S,
 });
 
 // ── Init ─────────────────────────────────────
