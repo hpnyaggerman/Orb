@@ -212,7 +212,7 @@ export function renderMessages() {
               Save${m.role === 'user' ? ' & Regen' : ''}
             </button>
           </div>
-        </div>` : `<div class="msg-body">${formatProse(m.content)}</div>`;
+        </div>` : `<div class="msg-body">${formatProse(resolvePlaceholders(m.content))}</div>`;
       return `<div class="message ${m.role}" data-msg-id="${m.id}">
         <div class="msg-role">${m.role === 'user' ? 'You' : esc(getCharName())} ${branchHtml}</div>
         ${body}${toolbar}
