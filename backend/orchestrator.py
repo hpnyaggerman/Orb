@@ -2,6 +2,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 import time
 from typing import AsyncIterator, Optional
 
@@ -10,6 +11,19 @@ from .llm_client import LLMClient, parse_tool_calls
 from .audit import run_audit, format_report
 
 logger = logging.getLogger(__name__)
+
+
+def replace_placeholders(text: str, user_name: str, char_name: str) -> str:
+    """Replace {{user}} and {{char}} placeholders with actual names."""
+    if not text or not isinstance(text, str):
+        return text or ''
+    result = text
+    if user_name:
+        result = re.sub(r'\{\{user\}\}', user_name, result, flags=re.IGNORECASE)
+    if char_name:
+        result = re.sub(r'\{\{char\}\}', char_name, result, flags=re.IGNORECASE)
+    return result
+
 
 # --- Agent tool definitions (OpenAI function-calling format) ---
 
@@ -169,14 +183,28 @@ def build_prefix(
     mes_example: str = "", post_history_instructions: str = "", messages: list[dict] = None,
     user_name: str = "User", user_description: str = "",
 ) -> list[dict]:
+    # Replace placeholders in character card fields
+    resolved_persona = replace_placeholders(char_persona, user_name, char_name)
+    resolved_scenario = replace_placeholders(char_scenario, user_name, char_name)
+    resolved_mes_example = replace_placeholders(mes_example, user_name, char_name)
+    resolved_post_history = replace_placeholders(post_history_instructions, user_name, char_name)
+    resolved_user_description = replace_placeholders(user_description, user_name, char_name)
+    
     parts = [system_prompt]
     if char_name: parts.append(f"\n\n## Character: {char_name}")
-    if char_persona: parts.append(f"\n{char_persona}")
-    if char_scenario: parts.append(f"\n\n## Scenario\n{char_scenario}")
-    if mes_example: parts.append(f"\n\n## Example Dialogue\n{mes_example}")
-    if post_history_instructions: parts.append(f"\n\n## Additional Instructions\n{post_history_instructions}")
-    if user_description: parts.append(f"\n\n## User: {user_name or 'User'}\n{user_description}")
-    return [{"role": "system", "content": "".join(parts)}] + [{"role": m["role"], "content": m["content"]} for m in (messages or [])]
+    if resolved_persona: parts.append(f"\n{resolved_persona}")
+    if resolved_scenario: parts.append(f"\n\n## Scenario\n{resolved_scenario}")
+    if resolved_mes_example: parts.append(f"\n\n## Example Dialogue\n{resolved_mes_example}")
+    if resolved_post_history: parts.append(f"\n\n## Additional Instructions\n{resolved_post_history}")
+    if resolved_user_description: parts.append(f"\n\n## User: {user_name or 'User'}\n{resolved_user_description}")
+    
+    # Process messages: replace placeholders in each message content
+    processed_messages = []
+    for m in (messages or []):
+        resolved_content = replace_placeholders(m["content"], user_name, char_name)
+        processed_messages.append({"role": m["role"], "content": resolved_content})
+    
+    return [{"role": "system", "content": "".join(parts)}] + processed_messages
 
 
 def apply_tool_calls(tool_calls: list[dict], current_moods: list[str]) -> tuple[list[str], str | None, str | None, str | None, list[str] | None]:

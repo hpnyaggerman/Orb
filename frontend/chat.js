@@ -1,5 +1,5 @@
 import { S } from './state.js';
-import { $, esc, formatProse, toast, scrollToBottom, scrollToMessage, avatarUrl, convUrl, formatRelativeDate } from './utils.js';
+import { $, esc, formatProse, toast, scrollToBottom, scrollToMessage, avatarUrl, convUrl, formatRelativeDate, resolvePlaceholders } from './utils.js';
 import { api } from './api.js';
 import { showModal, closeModal } from './modal.js';
 import { renderCharacters, loadCharacters } from './library.js';
@@ -507,8 +507,11 @@ function agentPayload() {
 // ── Send Message ─────────────────────────────
 export async function sendMessage() {
   const inp     = $('chat-input');
-  const content = inp.value.trim();
+  let content = inp.value.trim();
   if (!content || !S.activeConvId || S.isStreaming) return;
+
+  // Resolve {{user}} and {{char}} placeholders before sending
+  content = resolvePlaceholders(content);
 
   setStreaming(true);
   setGenerationPhase('pending');
