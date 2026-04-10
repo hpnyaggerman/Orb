@@ -576,6 +576,11 @@ async def handle_turn(conversation_id: str, user_message: str, skip_user_persist
         if skip_user_persist and messages and messages[-1]["role"] == "user":
             history, user_msg_id = messages[:-1], messages[-1]["id"]
 
+        # Save user message BEFORE pipeline so it's preserved even if generation fails/aborts
+        if not skip_user_persist:
+            user_msg_id = await db.add_message(conversation_id, "user", user_message, next_turn, parent_id=user_parent_id)
+            await db.set_active_leaf(conversation_id, user_msg_id)
+
         system_prompt, char_persona, mes_example = await _load_char_context(conv, settings)
         prefix = build_prefix(
             system_prompt, conv["character_name"], char_persona,
@@ -591,18 +596,16 @@ async def handle_turn(conversation_id: str, user_message: str, skip_user_persist
             async for event in _run_pipeline(client, settings, director, fragments, prefix, user_message, phrase_bank):
                 if event["event"] == "_result":
                     res = event["data"]
-                    # ── Persist immediately after writer pass ──
+                    # ── Persist assistant message after writer pass ──
                     if settings.get("enable_agent", 1):
                         await db.update_director_state(conversation_id, res["active_moods"])
 
-                    if not skip_user_persist:
-                        user_msg_id = await db.add_message(conversation_id, "user", res["effective_msg"], next_turn, parent_id=user_parent_id)
-                        await db.set_active_leaf(conversation_id, user_msg_id)
-                        asst_id = await db.add_message(conversation_id, "assistant", res["resp_text"], next_turn + 1, parent_id=user_msg_id)
-                    else:
-                        if res["refined_msg"] and user_msg_id:
-                            await db.update_message_content(user_msg_id, res["refined_msg"])
-                        asst_id = await db.add_message(conversation_id, "assistant", res["resp_text"], next_turn, parent_id=user_msg_id)
+                    # Update user message if agent refined it (user msg already saved before pipeline)
+                    if res["refined_msg"] and user_msg_id:
+                        await db.update_message_content(user_msg_id, res["effective_msg"])
+
+                    asst_turn = next_turn + (0 if skip_user_persist else 1)
+                    asst_id = await db.add_message(conversation_id, "assistant", res["resp_text"], asst_turn, parent_id=user_msg_id)
 
                     await db.set_active_leaf(conversation_id, asst_id)
                     await db.add_conversation_log(conversation_id, next_turn, res["agent_raw"], res["calls"], res["active_moods"], res["inj_block"], res["latency"])
@@ -617,20 +620,18 @@ async def handle_turn(conversation_id: str, user_message: str, skip_user_persist
                 else:
                     yield event
         finally:
-            # Fallback: persist if writer completed but _result was never processed
-            if not persisted and res:
+            # Fallback: persist assistant message if pipeline aborted before _result
+            # (user message is already saved before the pipeline starts)
+            if not persisted:
                 try:
-                    if settings.get("enable_agent", 1):
-                        await db.update_director_state(conversation_id, res.get("active_moods", []))
-                    if not skip_user_persist:
-                        uid = await db.add_message(conversation_id, "user", res.get("effective_msg", user_message), next_turn, parent_id=user_parent_id)
-                        await db.set_active_leaf(conversation_id, uid)
-                        aid = await db.add_message(conversation_id, "assistant", res.get("resp_text", ""), next_turn + 1, parent_id=uid)
-                    else:
-                        if res.get("refined_msg") and user_msg_id:
-                            await db.update_message_content(user_msg_id, res["refined_msg"])
-                        aid = await db.add_message(conversation_id, "assistant", res.get("resp_text", ""), next_turn, parent_id=user_msg_id)
-                    await db.set_active_leaf(conversation_id, aid)
+                    if res.get("active_moods") and settings.get("enable_agent", 1):
+                        await db.update_director_state(conversation_id, res["active_moods"])
+                    if res.get("refined_msg") and user_msg_id:
+                        await db.update_message_content(user_msg_id, res["effective_msg"])
+                    resp_text = res.get("resp_text", "") if res else ""
+                    asst_turn = next_turn + (0 if skip_user_persist else 1)
+                    asst_id = await db.add_message(conversation_id, "assistant", resp_text, asst_turn, parent_id=user_msg_id)
+                    await db.set_active_leaf(conversation_id, asst_id)
                 except Exception:
                     logger.exception("Fallback persistence failed")
 
@@ -697,14 +698,15 @@ async def handle_regenerate(conversation_id: str, assistant_msg_id: int) -> Asyn
                 else:
                     yield event
         finally:
-            if not persisted and res:
+            if not persisted:
                 try:
-                    if settings.get("enable_agent", 1):
-                        await db.update_director_state(conversation_id, res.get("active_moods", []))
-                        if res.get("refined_msg"):
-                            await db.update_message_content(user_msg_id, res["refined_msg"])
-                    aid = await db.add_message(conversation_id, "assistant", res.get("resp_text", ""), target["turn_index"], parent_id=user_msg_id)
-                    await db.set_active_leaf(conversation_id, aid)
+                    if res.get("active_moods") and settings.get("enable_agent", 1):
+                        await db.update_director_state(conversation_id, res["active_moods"])
+                    if res.get("refined_msg") and user_msg_id:
+                        await db.update_message_content(user_msg_id, res["refined_msg"])
+                    resp_text = res.get("resp_text", "") if res else ""
+                    new_asst_id = await db.add_message(conversation_id, "assistant", resp_text, target["turn_index"], parent_id=user_msg_id)
+                    await db.set_active_leaf(conversation_id, new_asst_id)
                 except Exception:
                     logger.exception("Fallback persistence failed")
 

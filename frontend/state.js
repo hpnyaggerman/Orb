@@ -16,6 +16,7 @@ export const S = {
   editingMsgId: null,
   abortController: null,
   streamingContent: null,
+  pendingUserMsg: null,
   _selectCharLock: false,
   generationPhase: null,
 };

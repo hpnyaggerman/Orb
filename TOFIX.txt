@@ -1,9 +1,9 @@
-- Bug: If writer pass returns null or aborted while in progress, we should still save user's message.
+- Bug: If writer pass returns null or aborted while in progress, we should still save user's message. Does back end have a manual save API for frontend do call? Is this a better design for maintainability?
 - Bug: New conversation and Conversations history burger items doesn't do anything when you click on them.
-- Bug: {{user}} and {{char}} are still not replaced. They should be rendered in messages, replaced when user inputs them in chat box, database should save post-replacement names. In summary, {{user}} and {{char}} must always show up in character cards only.
+- Bug: {{user}} and {{char}} are still not replaced. They should be rendered in first message (greeting), example messages, replaced when user inputs them in chat box. In summary, {{user}} and {{char}} must always show up in character cards only. Consider if orchestrator.py should also be updated.
 - Bug: When the user clicks on "Save and Regen" and the current message is the only child with no siblings in the convo branch structure and it also has no children, don't duplicate it as its own sibling.
 
-- [Post-process] Models tend to write longer and longer. During post-processing, if too long then tell it to rewrite compactly.
+- [Post-process] Models tend to write longer and longer. During post-processing, if too long then tell it to rewrite compactly. The number of paragraphs is manually configured. Give the agent model another tool on top of search and replace.
 - [Post-process] Refine pass should also show up in Inspector UI. Let's also rework this, no need to show too much info.
 - [Post-process] When doing repetition detection, scan the last 3 assistant messages, not just the current one.
 - [Post-process] Structure repetition detection across many paragraphs, not just sentences.

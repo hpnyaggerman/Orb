@@ -343,10 +343,12 @@ function createStreamingDiv() {
 
 async function afterStream() {
   const preservedContent = S.streamingContent;
+  const pendingUserMsg = S.pendingUserMsg || null;
   S.abortController   = null;
   S.streamingBodyEl   = null;
   S.streamCutoffIndex = null;
   S.streamingContent  = null;
+  S.pendingUserMsg    = null;
   clearRefineTimer();
   setGenerationPhase(null);
   setStreaming(false);
@@ -354,8 +356,20 @@ async function afterStream() {
 
   if (!S.activeConvId) { renderMessages(); renderInspector(); return; }
 
-  S.messages      = await api.get(convUrl(S.activeConvId, 'messages'));
-  S.directorState = await api.get(convUrl(S.activeConvId, 'director'));
+  try {
+    S.messages      = await api.get(convUrl(S.activeConvId, 'messages'));
+    S.directorState = await api.get(convUrl(S.activeConvId, 'director'));
+  } catch (e) {
+    // If server fetch fails, keep local messages as fallback
+  }
+
+  // Preserve user message if server didn't save it (e.g. abort before persist)
+  if (pendingUserMsg) {
+    const hasUserMsg = S.messages.some(m => m.role === 'user' && m.content === pendingUserMsg.content);
+    if (!hasUserMsg) {
+      S.messages.push(pendingUserMsg);
+    }
+  }
 
   if (preservedContent?.trim()) {
     const lastMsg = S.messages[S.messages.length - 1];
@@ -471,7 +485,9 @@ export async function sendMessage() {
   inp.value = ''; inp.style.height = 'auto';
   $('send-btn').disabled = true;
 
-  S.messages.push({ role: 'user', content, id: null, branch_count: 1, branch_index: 0, prev_branch_id: null, next_branch_id: null });
+  const userMsg = { role: 'user', content, id: null, branch_count: 1, branch_index: 0, prev_branch_id: null, next_branch_id: null };
+  S.messages.push(userMsg);
+  S.pendingUserMsg = userMsg;
   renderMessages(); scrollToBottom();
 
   const ct     = $('chat-messages');
