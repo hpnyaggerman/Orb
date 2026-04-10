@@ -1,15 +1,12 @@
-- Bug: {{user}} and {{char}} are still not replaced. They should be rendered in first message (greeting), example messages, replaced when user inputs them in chat box. In summary, {{user}} and {{char}} must always show up in character cards only. Consider if orchestrator.py should also be updated. Ideally the backend should NEVER see {{user}} or {{char}}.
+- {{user}} and {{char}} rendering: Replace {{user}} with the user's name and {{char}} with the active character's name. These placeholders should be resolved in the first message (greeting), example messages, and whenever the user types them in the chat box. Ultimately, the raw {{user}} and {{char}} placeholders should only ever exist within the character card definitions. Consider how `orchestrator.py` should also be updated because currently it extracts data from the character card. Ideally, the backend should NEVER receive {{user}} or {{char}} from the frontend.
 
-- [Post-process] Models tend to write longer and longer. During post-processing, if too long then tell it to rewrite compactly. The number of paragraphs and max number of words is manually configured. Give the agent model a minimize tool on top of search and replace in refine pass.
-- [Post-process] Refine pass should also show up in Inspector UI. Let's also rework this, no need to show too much info.
-- [Post-process] When doing repetition detection, scan the last 3 assistant messages, not just the current one.
-- [Post-process] Structure repetition detection across many paragraphs, not just sentences.
-- [Post-process] Phrase repetition detection too, not just anti-slop detection.
+- [Post-process] Models tend to produce increasingly long responses. During post-processing, if a response is too long, instruct the model to rewrite it more concisely. The paragraph count and maximum word count should be manually configurable. Provide the agent model with a "minimize" tool alongside "search and replace" during the refine pass.
+- [Post-process] Display the refine pass in the Inspector UI. Rework this view to avoid displaying excessive information.
+- [Post-process] For repetition detection, scan the last 3 assistant messages instead of just the current one.
+- [Post-process] Detect structural repetition across multiple paragraphs, not just individual sentences.
+- [Post-process] Implement phrase repetition detection as well, not just anti-slop detection.
 
-- Improve: Edit button should snap the chat scroll to the message being edited.
-- Improve: injecting <current_scene_direction> seems to make the model dumber because the flow stops being natural.
-
-- Feature: Explore using logit bias in writer pass to force assistant content to never output tool call token. Have a button to "test" for tool_call token that we can use to de-bias later.
-- Feature: AI's message has a magic button - rewrite with custom direction, click on it and a small input box appears for direction input.
-- Feature: During and after refine pass, the latest AI message box should reflect which phrases were changed. This is done by high-lighting the changed sentences and having a pop-up that shows the old sentences the when the cursor is hovered on them.
-- Feature: Hash prefix to guarantee kv cache reuse.
+- Feature: Explore using logit bias during the writer pass to prevent the assistant from outputting the tool call token. Add a "test" button to identify the `tool_call` token. Save this token keyed by the model+endpoint combination, so it can be banned in subsequent writer passes for that same combination.
+- Feature: Add a magic button to the AI's message for "rewrite with custom direction." Clicking it opens a small input box where the user can specify the rewrite direction.
+- Feature: During and after the refine pass, the latest AI message box should indicate which phrases were changed. Highlight the changed sentences and display a tooltip showing the original text when the cursor hovers over them.
+- Feature: Add a hash prefix to guarantee KV cache reuse.
