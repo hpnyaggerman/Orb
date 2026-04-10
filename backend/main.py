@@ -25,6 +25,7 @@ from .database import (
     add_message, set_active_leaf, get_message_by_id, switch_to_branch,
     delete_message_with_descendants,
 )
+import asyncio
 from .orchestrator import handle_turn, handle_regenerate
 from . import tavern_cards
 
@@ -340,12 +341,44 @@ async def api_get_avatar(card_id: str):
     return Response(content=image_bytes, media_type=mime_type or "image/png")
 
 
+class _CleanupStreamingResponse(StreamingResponse):
+    """StreamingResponse that guarantees the body async generator is closed
+    even when the client disconnects mid-stream.
+
+    Starlette's default StreamingResponse does NOT close the body iterator
+    when send() fails due to client disconnect. This subclass ensures proper
+    cleanup so that orchestrator finally blocks (which save incomplete messages
+    on abort) always execute.
+    """
+
+    async def __call__(self, scope, receive, send):
+        try:
+            await super().__call__(scope, receive, send)
+        finally:
+            # Always close the body generator, even if send() raised
+            # (e.g. client disconnected). This ensures the orchestrator's
+            # finally block runs and saves any incomplete message.
+            if hasattr(self.body_iterator, "aclose"):
+                try:
+                    await asyncio.shield(self.body_iterator.aclose())
+                except asyncio.CancelledError:
+                    # Shield was cancelled; try once more
+                    try:
+                        await self.body_iterator.aclose()
+                    except Exception:
+                        pass
+
+
 async def _sse_stream(gen, request: Request):
     """Wrap an event-dict async generator as SSE, stopping cleanly on client disconnect.
 
     When the client disconnects, aclose() propagates GeneratorExit through the
     entire async-generator chain (orchestrator → llm_client → httpx), which
     closes the upstream LLM connection rather than leaving it running.
+
+    The aclose() is shielded from cancellation so that the orchestrator's
+    finally block (which saves incomplete messages on abort) can always complete
+    its database writes even if the asyncio task is being cancelled.
     """
     try:
         async for event in gen:
@@ -359,7 +392,17 @@ async def _sse_stream(gen, request: Request):
                 evt_data = evt_data.replace('\n', '\\n')
             yield f"event: {evt_type}\ndata: {evt_data}\n\n"
     finally:
-        await gen.aclose()
+        # Shield aclose() from CancelledError so the orchestrator's finally
+        # block (fallback persistence of incomplete messages) always runs.
+        try:
+            await asyncio.shield(gen.aclose())
+        except asyncio.CancelledError:
+            # If shield itself is cancelled (extremely rare), still wait
+            # for the close to finish synchronously
+            try:
+                await gen.aclose()
+            except Exception:
+                pass
 
 
 @app.get("/api/conversations/{cid}/messages")
@@ -392,7 +435,7 @@ async def api_edit_message(cid: str, msg_id: int, data: EditMessage, request: Re
     should_stream_regen = (original["role"] == "user" and data.regenerate)
 
     if should_stream_regen:
-        return StreamingResponse(
+        return _CleanupStreamingResponse(
             _sse_stream(handle_turn(cid, data.content, skip_user_persist=True), request),
             media_type="text/event-stream",
         )
@@ -430,7 +473,7 @@ async def api_regenerate_msg(cid: str, msg_id: int, request: Request, data: Opti
     if not conv:
         raise HTTPException(404, "Conversation not found")
 
-    return StreamingResponse(
+    return _CleanupStreamingResponse(
         _sse_stream(handle_regenerate(cid, msg_id), request),
         media_type="text/event-stream",
     )
@@ -460,7 +503,7 @@ async def api_send_message(cid: str, data: SendMessage, request: Request):
     if not conv:
         raise HTTPException(404, "Conversation not found")
 
-    return StreamingResponse(
+    return _CleanupStreamingResponse(
         _sse_stream(handle_turn(cid, data.content), request),
         media_type="text/event-stream",
     )

@@ -1,4 +1,5 @@
 from __future__ import annotations
+import asyncio
 import json
 import logging
 import time
@@ -591,10 +592,14 @@ async def handle_turn(conversation_id: str, user_message: str, skip_user_persist
         res = {}
         asst_id = None
         persisted = False
+        accumulated_text = ""
 
         try:
             async for event in _run_pipeline(client, settings, director, fragments, prefix, user_message, phrase_bank):
-                if event["event"] == "_result":
+                if event["event"] == "token":
+                    accumulated_text += event["data"]
+                    yield event
+                elif event["event"] == "_result":
                     res = event["data"]
                     # ── Persist assistant message after writer pass ──
                     if settings.get("enable_agent", 1):
@@ -622,18 +627,33 @@ async def handle_turn(conversation_id: str, user_message: str, skip_user_persist
         finally:
             # Fallback: persist assistant message if pipeline aborted before _result
             # (user message is already saved before the pipeline starts)
+            # Shield DB writes from CancelledError so they complete even when
+            # the async generator is being closed due to client disconnect.
             if not persisted:
+                async def _fallback_persist():
+                    try:
+                        if res.get("active_moods") and settings.get("enable_agent", 1):
+                            await db.update_director_state(conversation_id, res["active_moods"])
+                        if res.get("refined_msg") and user_msg_id:
+                            await db.update_message_content(user_msg_id, res["effective_msg"])
+                        resp_text = res.get("resp_text", "") or accumulated_text
+                        if resp_text.strip():
+                            asst_turn = next_turn + (0 if skip_user_persist else 1)
+                            asst_id = await db.add_message(conversation_id, "assistant", resp_text, asst_turn, parent_id=user_msg_id)
+                            await db.set_active_leaf(conversation_id, asst_id)
+                            logger.info("Fallback persistence saved incomplete assistant message (%d chars)", len(resp_text))
+                    except Exception:
+                        logger.exception("Fallback persistence failed")
+
                 try:
-                    if res.get("active_moods") and settings.get("enable_agent", 1):
-                        await db.update_director_state(conversation_id, res["active_moods"])
-                    if res.get("refined_msg") and user_msg_id:
-                        await db.update_message_content(user_msg_id, res["effective_msg"])
-                    resp_text = res.get("resp_text", "") if res else ""
-                    asst_turn = next_turn + (0 if skip_user_persist else 1)
-                    asst_id = await db.add_message(conversation_id, "assistant", resp_text, asst_turn, parent_id=user_msg_id)
-                    await db.set_active_leaf(conversation_id, asst_id)
-                except Exception:
-                    logger.exception("Fallback persistence failed")
+                    await asyncio.shield(_fallback_persist())
+                except asyncio.CancelledError:
+                    # If shield itself was cancelled, retry once unshielded
+                    # (the aclose() in _sse_stream shields us, but just in case)
+                    try:
+                        await _fallback_persist()
+                    except Exception:
+                        logger.exception("Fallback persistence retry failed")
 
         yield {"event": "done"}
     except Exception as e:
@@ -675,10 +695,14 @@ async def handle_regenerate(conversation_id: str, assistant_msg_id: int) -> Asyn
         res = {}
         new_asst_id = None
         persisted = False
+        accumulated_text = ""
 
         try:
             async for event in _run_pipeline(client, settings, director, fragments, prefix, user_msg["content"], phrase_bank):
-                if event["event"] == "_result":
+                if event["event"] == "token":
+                    accumulated_text += event["data"]
+                    yield event
+                elif event["event"] == "_result":
                     res = event["data"]
                     # ── Persist immediately after writer pass ──
                     if settings.get("enable_agent", 1):
@@ -699,16 +723,27 @@ async def handle_regenerate(conversation_id: str, assistant_msg_id: int) -> Asyn
                     yield event
         finally:
             if not persisted:
+                async def _fallback_persist_regen():
+                    try:
+                        if res.get("active_moods") and settings.get("enable_agent", 1):
+                            await db.update_director_state(conversation_id, res["active_moods"])
+                        if res.get("refined_msg") and user_msg_id:
+                            await db.update_message_content(user_msg_id, res["refined_msg"])
+                        resp_text = res.get("resp_text", "") or accumulated_text
+                        if resp_text.strip():
+                            new_asst_id = await db.add_message(conversation_id, "assistant", resp_text, target["turn_index"], parent_id=user_msg_id)
+                            await db.set_active_leaf(conversation_id, new_asst_id)
+                            logger.info("Fallback persistence saved incomplete assistant message (%d chars)", len(resp_text))
+                    except Exception:
+                        logger.exception("Fallback persistence failed")
+
                 try:
-                    if res.get("active_moods") and settings.get("enable_agent", 1):
-                        await db.update_director_state(conversation_id, res["active_moods"])
-                    if res.get("refined_msg") and user_msg_id:
-                        await db.update_message_content(user_msg_id, res["refined_msg"])
-                    resp_text = res.get("resp_text", "") if res else ""
-                    new_asst_id = await db.add_message(conversation_id, "assistant", resp_text, target["turn_index"], parent_id=user_msg_id)
-                    await db.set_active_leaf(conversation_id, new_asst_id)
-                except Exception:
-                    logger.exception("Fallback persistence failed")
+                    await asyncio.shield(_fallback_persist_regen())
+                except asyncio.CancelledError:
+                    try:
+                        await _fallback_persist_regen()
+                    except Exception:
+                        logger.exception("Fallback persistence retry failed")
 
         yield {"event": "done"}
     except Exception as e:

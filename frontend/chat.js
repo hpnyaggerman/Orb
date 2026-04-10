@@ -314,7 +314,11 @@ export async function saveEdit(msgId, role) {
       renderMessages();
     }
   } catch (e) {
-    if (e.name !== 'AbortError') toast('Error: ' + e.message, true);
+    if (e.name === 'AbortError') {
+      S.wasAborted = true;
+    } else {
+      toast('Error: ' + e.message, true);
+    }
   }
   await afterStream();
 }
@@ -344,17 +348,25 @@ function createStreamingDiv() {
 async function afterStream() {
   const preservedContent = S.streamingContent;
   const pendingUserMsg = S.pendingUserMsg || null;
+  const wasAborted = S.wasAborted;
   S.abortController   = null;
   S.streamingBodyEl   = null;
   S.streamCutoffIndex = null;
   S.streamingContent  = null;
   S.pendingUserMsg    = null;
+  S.wasAborted        = false;
   clearRefineTimer();
   setGenerationPhase(null);
   setStreaming(false);
   $('send-btn').disabled = false;
 
   if (!S.activeConvId) { renderMessages(); renderInspector(); return; }
+
+  // When aborted, give the backend a moment to finish its fallback persistence
+  // (the finally block in handle_turn/handle_regenerate saves the incomplete message)
+  if (wasAborted) {
+    await new Promise(r => setTimeout(r, 500));
+  }
 
   try {
     S.messages      = await api.get(convUrl(S.activeConvId, 'messages'));
@@ -371,6 +383,10 @@ async function afterStream() {
     }
   }
 
+  // Add local fallback assistant message if the server doesn't have one yet.
+  // For aborted streams, the backend should have persisted the incomplete message,
+  // but there can be a timing gap. If the server already has an assistant message
+  // (with a proper ID), we skip the fallback so edit/delete buttons work.
   if (preservedContent?.trim()) {
     const lastMsg = S.messages[S.messages.length - 1];
     if (!lastMsg || lastMsg.role !== 'assistant') {
@@ -503,7 +519,11 @@ export async function sendMessage() {
     });
     await processSSEStream(resp, ct, msgDiv, S.abortController.signal);
   } catch (e) {
-    if (e.name !== 'AbortError') toast('Connection error: ' + e.message, true);
+    if (e.name === 'AbortError') {
+      S.wasAborted = true;
+    } else {
+      toast('Connection error: ' + e.message, true);
+    }
   }
   await afterStream();
 }
@@ -533,7 +553,11 @@ export async function regenerate(msgId) {
     });
     await processSSEStream(resp, ct, msgDiv, S.abortController.signal);
   } catch (e) {
-    if (e.name !== 'AbortError') toast('Error: ' + e.message, true);
+    if (e.name === 'AbortError') {
+      S.wasAborted = true;
+    } else {
+      toast('Error: ' + e.message, true);
+    }
   }
   await afterStream();
 }
