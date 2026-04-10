@@ -261,6 +261,7 @@ async def _load_char_context(conv: dict, settings: dict) -> tuple[str, str, str]
 async def _writer_pass(client: LLMClient, msgs: list[dict], settings: dict, enabled_tools: dict | None = None) -> AsyncIterator[dict]:
     params = {k: v for k in ["temperature", "max_tokens", "top_p", "min_p", "top_k", "repetition_penalty"] if (v := settings.get(k)) is not None}
     schemas = _enabled_schemas(enabled_tools)
+    logger.info("Writer pass: tools included=%s", json.dumps([s["function"]["name"] for s in schemas]) if schemas else "[]")
     extra = {"tools": schemas, "tool_choice": "none"} if schemas else {}
     async for token in client.stream(messages=msgs, model=settings["model_name"], **extra, **params):
         yield token
@@ -278,6 +279,7 @@ async def _agent_pass(
         return active_moods, "", [], 0, None, None, None, None
 
     tool_schemas = _enabled_schemas(enabled_tools)
+    logger.info("Director pass: tools included=%s", json.dumps([s["function"]["name"] for s in tool_schemas]) if tool_schemas else "[]")
 
     t0 = time.monotonic()
     for name in tool_names:
@@ -448,8 +450,9 @@ async def _refine_pass(
                      iteration + 1, _MAX_REFINE_ITERATIONS, report.total_issues,
                      len(current_draft), len(msgs))
         try:
-            logger.info("Refine iteration %d: calling LLM (model=%s, max_tokens=4096, temp=0.25)",
-                         iteration + 1, settings["model_name"])
+            logger.info("Refine iteration %d: calling LLM (model=%s, max_tokens=4096, temp=0.25), tools included=%s",
+                         iteration + 1, settings["model_name"],
+                         json.dumps([t["function"]["name"] for t in refine_tools]))
             try:
                 resp = await client.complete(
                     messages=msgs,
