@@ -64,6 +64,9 @@ class SettingsUpdate(BaseModel):
     user_description: Optional[str] = None
     enabled_tools: Optional[dict] = None
     enable_agent: Optional[bool] = None
+    length_guard_enabled: Optional[bool] = None
+    length_guard_max_words: Optional[int] = None
+    length_guard_max_paragraphs: Optional[int] = None
 
 
 class FragmentCreate(BaseModel):
