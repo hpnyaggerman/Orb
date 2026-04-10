@@ -13,8 +13,6 @@ logger = logging.getLogger(__name__)
 
 # --- Agent tool definitions (OpenAI function-calling format) ---
 
-# --- Agent tool definitions (OpenAI function-calling format) ---
-
 AGENT_TOOLS = [{
     "type": "function",
     "function": {
@@ -523,7 +521,7 @@ async def _run_pipeline(
     writer_tail = ""
     if inj_block:
         writer_tail += inj_block + "\n\n"
-    writer_tail += effective_msg + "\n\n[OOC: Only write the continuation of the story, tool/function calling is STRICTLY FORBIDDEN now!]\n"
+    writer_tail += "[OOC: Only write the continuation of the story, tool/function calling is STRICTLY FORBIDDEN now!]\n" + effective_msg + "\n\n"
 
     writer_msgs = prefix + [{"role": "user", "content": writer_tail}]
 
