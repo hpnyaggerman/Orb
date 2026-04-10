@@ -1,14 +1,17 @@
-- Explore using logit bias in writer pass to force assistant content to never output tool call token.
-- Refine pass should also show up in Inspector UI. Let's also rework this, no need to show too much info.
 - Bug: If writer pass returns null or aborted while in progress, we should still save user's message.
 - Bug: New conversation and Conversations history burger items doesn't do anything when you click on them.
 - Bug: {{user}} and {{char}} are still not replaced. They should be rendered in messages, replaced when user inputs them in chat box, database should save post-replacement names. In summary, {{user}} and {{char}} must always show up in character cards only.
-- Models tend to write longer and longer. During post-processing, if too long then tell it to rewrite compactly.
-- Edit button should snap the chat scroll to the message being edited.
-- When the user clicks on "Save and Regen" and the current message is the only child with no siblings in the convo branch structure and it also has no children, don't duplicate it as its own sibling.
+- Bug: When the user clicks on "Save and Regen" and the current message is the only child with no siblings in the convo branch structure and it also has no children, don't duplicate it as its own sibling.
+
+- [Post-process] Models tend to write longer and longer. During post-processing, if too long then tell it to rewrite compactly.
+- [Post-process] Refine pass should also show up in Inspector UI. Let's also rework this, no need to show too much info.
+- [Post-process] When doing repetition detection, scan the last 3 assistant messages, not just the current one.
+- [Post-process] Structure repetition detection across many paragraphs, not just sentences.
+- [Post-process] Phrase repetition detection too, not just anti-slop detection.
+
+- Improve: Edit button should snap the chat scroll to the message being edited.
 - Improve: injecting <current_scene_direction> seems to make the model dumber because the flow stops being natural.
-- When doing repetition detection, scan the last 3 assistant messages, not just the current one.
-- Structure repetition detection across many paragraphs, not just sentences.
-- Phrase repetition detection too, not just anti-slop detection.
-- AI's message has a magic button - rewrite with custom direction, click on it and a small input box appears for direction input.
-- During and after refine pass, the latest AI message box should reflect which phrases were changed by having a pop-up on the replaced sentences when the cursor is hovered on them.
+- Improve: Explore using logit bias in writer pass to force assistant content to never output tool call token.
+
+- Feature: AI's message has a magic button - rewrite with custom direction, click on it and a small input box appears for direction input.
+- Feature: During and after refine pass, the latest AI message box should reflect which phrases were changed. This is done by high-lighting the changed sentences and having a pop-up that shows the old sentences the when the cursor is hovered on them.
