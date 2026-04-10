@@ -23,6 +23,15 @@ class AuditReport:
         self.monotony_result = monotony_result
         self.template_result = template_result
 
+    @classmethod
+    def clean(cls) -> "AuditReport":
+        """Return a clean report with zero issues (used when audit is disabled)."""
+        return cls(
+            cliche_result=DetectionResult([], [], 0, 0),
+            monotony_result=MonotonyResult([], {}, 0, 0.0),
+            template_result=TemplateResult([], {}, 0, 0, 0.0),
+        )
+
     @property
     def is_clean(self) -> bool:
         return (

@@ -8,7 +8,7 @@ from typing import AsyncIterator, Optional
 
 from . import database as db
 from .llm_client import LLMClient, parse_tool_calls
-from .audit import run_audit, format_report
+from .audit import run_audit, format_report, AuditReport
 
 logger = logging.getLogger(__name__)
 
@@ -379,32 +379,42 @@ def _apply_patches(draft: str, patches: list[dict]) -> tuple[str, list[str]]:
 async def _refine_pass(
     client: LLMClient, prefix: list[dict], effective_msg: str, draft: str,
     settings: dict, phrase_bank: list[list[str]],
-    enabled_tools: dict | None = None,
+    audit_enabled: bool = True,
     length_guard: dict | None = None,
 ) -> tuple[str | None, str, int]:
-    """ReAct-style refinement loop with programmatic audit detection and optional length guard.
+    """ReAct-style refinement loop with optional audit and/or length guard.
+
+    Each sub-pass (Output Auditor, Length Guard, …) is independently gated
+    by its own flag so they can be enabled/disabled in any combination.
 
     Returns (refined_draft_or_None, debug_log, latency_ms).
     """
     t0 = time.monotonic()
     debug_parts: list[str] = []
 
-    # Step 1: Run programmatic scanners
-    logger.info("Refine: running audit on draft (%d chars), phrase_bank has %d groups", len(draft), len(phrase_bank))
-    report = run_audit(draft, phrase_bank)
-    report_text = format_report(report)
-    logger.info(
-        "Refine: initial audit — %d issues (cliches=%d, openers=%d, templates=%d)",
-        report.total_issues, report.cliche_result.flagged_count,
-        len(report.monotony_result.flagged_openers), len(report.template_result.flagged_templates),
-    )
-    logger.info("Refine: initial audit report:\n%s", report_text)
-    debug_parts.append(f"Initial audit ({report.total_issues} issues):\n{report_text}")
+    # ── Output Auditor sub-pass ──────────────────────────────────────────
+    if audit_enabled:
+        logger.info("Refine: running audit on draft (%d chars), phrase_bank has %d groups", len(draft), len(phrase_bank))
+        report = run_audit(draft, phrase_bank)
+        report_text = format_report(report)
+        logger.info(
+            "Refine: initial audit — %d issues (cliches=%d, openers=%d, templates=%d)",
+            report.total_issues, report.cliche_result.flagged_count,
+            len(report.monotony_result.flagged_openers), len(report.template_result.flagged_templates),
+        )
+        logger.info("Refine: initial audit report:\n%s", report_text)
+        debug_parts.append(f"Initial audit ({report.total_issues} issues):\n{report_text}")
+    else:
+        report = AuditReport.clean()
+        report_text = ""
+        logger.info("Refine: audit disabled, skipping scanners")
 
-    # Check length guard
+    # ── Length Guard sub-pass ────────────────────────────────────────────
     length_guard_triggered = False
     length_guard_instruction = ""
-    refine_tools = [REFINE_APPLY_PATCH_TOOL]
+    refine_tools: list[dict] = []
+    if audit_enabled:
+        refine_tools.append(REFINE_APPLY_PATCH_TOOL)
     if length_guard and length_guard.get("enabled"):
         word_count = len(draft.split())
         max_words = length_guard.get("max_words", 400)
@@ -414,8 +424,7 @@ async def _refine_pass(
             length_guard_instruction = LENGTH_GUARD_INSTRUCTIONS.format(
                 word_count=word_count, max_paragraphs=max_paragraphs
             )
-            # Offer both tools if audit also has issues; only minimize if audit is clean
-            refine_tools = [MINIMIZE_TOOL] if report.is_clean else [REFINE_APPLY_PATCH_TOOL, MINIMIZE_TOOL]
+            refine_tools.append(MINIMIZE_TOOL)
             logger.info("Refine: length guard triggered (word_count=%d > max_words=%d, max_paragraphs=%d)",
                         word_count, max_words, max_paragraphs)
             debug_parts.append(f"Length guard triggered: {word_count} words (max {max_words}), target {max_paragraphs} paragraphs")
@@ -424,11 +433,15 @@ async def _refine_pass(
         logger.info("Refine: audit clean and no length guard, skipping LLM loop")
         return None, "\n---\n".join(debug_parts), int((time.monotonic() - t0) * 1000)
 
+    if not refine_tools:
+        logger.info("Refine: no refine tools applicable, skipping LLM loop")
+        return None, "\n---\n".join(debug_parts), int((time.monotonic() - t0) * 1000)
+
     # Step 2: Build message context (reuses KV cache prefix)
     # Use "user" role for the refine instruction — system role after assistant turns is
     # rejected by OpenAI-compatible APIs (e.g. OpenRouter returns 400).
     refine_instruction_parts = []
-    if not report.is_clean:
+    if audit_enabled and not report.is_clean:
         refine_instruction_parts.append(REFINE_AGENT_INSTRUCTIONS)
         refine_instruction_parts.append(report_text)
     if length_guard_triggered:
@@ -461,7 +474,8 @@ async def _refine_pass(
                     tool_choice=(
                         {"type": "function", "function": {"name": "minimize"}}
                         if (length_guard_triggered and report.is_clean)
-                        else ("auto" if length_guard_triggered else TOOLS["refine_apply_patch"]["choice"])
+                        else ("auto" if length_guard_triggered
+                              else (TOOLS["refine_apply_patch"]["choice"] if audit_enabled else "auto"))
                     ),
                     temperature=0.25,
                     max_tokens=8192,
@@ -503,19 +517,23 @@ async def _refine_pass(
                 else:
                     logger.info("Refine iteration %d: minimize call had empty rewritten_text, stopping", iteration + 1)
                     break
-                # Re-run audit after minimize
-                report = run_audit(current_draft, phrase_bank)
-                report_text = format_report(report)
-                debug_parts.append(f"Post-minimize audit ({report.total_issues} issues):\n{report_text}")
+                # Re-run audit after minimize (only if audit is enabled)
+                if audit_enabled:
+                    report = run_audit(current_draft, phrase_bank)
+                    report_text = format_report(report)
+                    debug_parts.append(f"Post-minimize audit ({report.total_issues} issues):\n{report_text}")
+                else:
+                    report = AuditReport.clean()
+                    report_text = ""
                 if report.is_clean:
                     break
                 # Continue to patch remaining issues in next iteration
-                refine_tools = [REFINE_APPLY_PATCH_TOOL]
+                refine_tools = [REFINE_APPLY_PATCH_TOOL] if audit_enabled else []
                 prev_issues = report.total_issues
                 # Update both the assistant draft and the refine instruction so the
                 # patch model sees the minimized text, not the original.
                 msgs[-2] = {"role": "assistant", "content": current_draft}
-                msgs[-1] = {"role": "user", "content": REFINE_AGENT_INSTRUCTIONS + "\n\n" + report_text}
+                msgs[-1] = {"role": "user", "content": (REFINE_AGENT_INSTRUCTIONS + "\n\n" + report_text) if audit_enabled else length_guard_instruction}
                 continue
 
             # Find refine_apply_patch call
@@ -562,6 +580,7 @@ async def _refine_pass(
                 logger.info("Refine: audit clean after iteration %d, length guard still pending — queuing minimize",
                             iteration + 1)
                 refine_tools = [MINIMIZE_TOOL]
+                # No need for patch tool anymore since audit is clean
 
             # Stall detection: if issues didn't decrease, the model can't fix what's left
             if report.total_issues >= prev_issues:
@@ -616,7 +635,7 @@ async def _run_pipeline(
         director["active_moods"], "", [], 0, None, None, None, None
     )
     effective_msg = user_message
-    do_refine = agent_on and enabled_tools.get("refine_apply_patch", False) and phrase_bank is not None
+    audit_enabled = agent_on and bool(enabled_tools.get("refine_apply_patch", False)) and phrase_bank is not None
 
     # Length guard settings
     length_guard_enabled = bool(settings.get("length_guard_enabled", False))
@@ -625,10 +644,9 @@ async def _run_pipeline(
         "max_words": int(settings.get("length_guard_max_words", 400)),
         "max_paragraphs": int(settings.get("length_guard_max_paragraphs", 5)),
     } if length_guard_enabled else None
-    # Length guard triggers the refine pass independently of the Output Auditor toggle
-    # and regardless of whether a phrase bank is loaded.
-    if length_guard_enabled and agent_on:
-        do_refine = True
+
+    # Refine pass runs if *any* refine sub-pass is active
+    do_refine = audit_enabled or (length_guard_enabled and agent_on)
 
     # --- Agent pass: style selection + prompt rewrite ---
     # Only run if agent is on AND at least one pre-writer tool is enabled
@@ -687,7 +705,7 @@ async def _run_pipeline(
     if do_refine and resp_text:
         logger.info("Refine pass starting (draft=%d chars, phrase_bank=%d groups)", len(resp_text), len(phrase_bank) if phrase_bank else 0)
         try:
-            refined_draft, _debug_log, _elapsed = await _refine_pass(client, prefix, effective_msg, resp_text, settings, phrase_bank or [], enabled_tools, length_guard)
+            refined_draft, _debug_log, _elapsed = await _refine_pass(client, prefix, effective_msg, resp_text, settings, phrase_bank or [], audit_enabled, length_guard)
             if refined_draft and refined_draft != resp_text:
                 resp_text = refined_draft
                 yield {"event": "writer_rewrite", "data": {"refined_text": resp_text}}
