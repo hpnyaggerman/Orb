@@ -139,7 +139,7 @@ SEED_PHRASE_BANK = [
     ["a dance of", "a dance between", "dancing with"],
     ["eyes narrowing", "eyes narrowed", "mischievous glint", "gaze sharpen", "eyes widen", "glint with mischief"],
     ["eyes never leaving his", "eyes never leaving hers", "eyes never leave his", "eyes never leave hers"],
-    ["breath hitch"],
+    ["breath hitches", "breath hitching", "breath catching"],
     ["ozone"],
     ["predatory"],
     ["vulnerability", "vulnerable"],

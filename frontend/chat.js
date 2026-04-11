@@ -29,6 +29,59 @@ function setGenerationPhase(phase) {
   el.querySelector('.gen-dot').className = 'gen-dot' + (S.generationPhase === 'refining' ? ' spin' : '');
 }
 
+function smoothUpdateBody(el, newHtml) {
+  if (!el || el.innerHTML === newHtml) return;
+  const prev = el.offsetHeight;
+  el.innerHTML = newHtml;
+  const next = el.scrollHeight;
+  if (Math.abs(next - prev) > 4) {
+    el.style.height = prev + 'px';
+    el.style.overflow = 'hidden';
+    el.offsetHeight; // force reflow
+    el.style.transition = 'height 0.3s ease';
+    el.style.height = next + 'px';
+    const done = () => { el.style.height = ''; el.style.overflow = ''; el.style.transition = ''; };
+    el.addEventListener('transitionend', done, { once: true });
+    setTimeout(done, 350); // fallback
+  }
+}
+
+function finalizeStreamingDiv(lastMsg) {
+  const body = S.streamingBodyEl;
+  if (!body) return false;
+  const div = body.closest('.message');
+  if (!div || !lastMsg || lastMsg.role !== 'assistant' || !lastMsg.id) return false;
+
+  div.setAttribute('data-msg-id', lastMsg.id);
+  body.removeAttribute('id');
+
+  smoothUpdateBody(body, formatProse(resolvePlaceholders(lastMsg.content)));
+
+  if (!div.querySelector('.msg-toolbar')) {
+    const tb = document.createElement('div');
+    tb.className = 'msg-toolbar';
+    tb.innerHTML = `<button onclick="startEdit(${lastMsg.id})" title="Edit">✏️ Edit</button>
+      <button onclick="regenerate(${lastMsg.id})" title="Regenerate">🔄 Regen</button>
+      <button onclick="deleteMessage(${lastMsg.id})" title="Delete message and all children" style="color:var(--red)">✕ Del</button>`;
+    div.appendChild(tb);
+  }
+
+  const bc = lastMsg.branch_count || 1;
+  if (bc > 1) {
+    const bi = lastMsg.branch_index || 0;
+    const roleEl = div.querySelector('.msg-role');
+    if (roleEl && !roleEl.querySelector('.swipe-nav')) {
+      roleEl.insertAdjacentHTML('beforeend', `<span class="swipe-nav">
+        <button onclick="event.stopPropagation();switchBranch(${lastMsg.prev_branch_id})" ${!lastMsg.prev_branch_id ? 'disabled' : ''}>◀</button>
+        <span class="swipe-counter">${bi + 1}/${bc}</span>
+        <button onclick="event.stopPropagation();switchBranch(${lastMsg.next_branch_id})" ${!lastMsg.next_branch_id ? 'disabled' : ''}>▶</button>
+      </span>`);
+    }
+  }
+
+  return true;
+}
+
 function scheduleRefineTimer() {
   clearTimeout(_refineTimer);
   _refineTimer = setTimeout(() => {
@@ -369,20 +422,21 @@ async function afterStream() {
   const pendingUserMsg = S.pendingUserMsg || null;
   const wasAborted = S.wasAborted;
   S.abortController   = null;
-  S.streamingBodyEl   = null;
   S.streamCutoffIndex = null;
   S.streamingContent  = null;
   S.pendingUserMsg    = null;
   S.wasAborted        = false;
   clearRefineTimer();
-  setGenerationPhase(null);
-  setStreaming(false);
-  $('send-btn').disabled = false;
 
-  if (!S.activeConvId) { renderMessages(); renderInspector(); return; }
+  if (!S.activeConvId) {
+    S.streamingBodyEl = null;
+    setGenerationPhase(null);
+    setStreaming(false);
+    $('send-btn').disabled = false;
+    renderMessages(); renderInspector();
+    return;
+  }
 
-  // When aborted, give the backend a moment to finish its fallback persistence
-  // (the finally block in handle_turn/handle_regenerate saves the incomplete message)
   if (wasAborted) {
     await new Promise(r => setTimeout(r, 500));
   }
@@ -390,22 +444,13 @@ async function afterStream() {
   try {
     S.messages      = await api.get(convUrl(S.activeConvId, 'messages'));
     S.directorState = await api.get(convUrl(S.activeConvId, 'director'));
-  } catch (e) {
-    // If server fetch fails, keep local messages as fallback
-  }
+  } catch (e) {}
 
-  // Preserve user message if server didn't save it (e.g. abort before persist)
   if (pendingUserMsg) {
     const hasUserMsg = S.messages.some(m => m.role === 'user' && m.content === pendingUserMsg.content);
-    if (!hasUserMsg) {
-      S.messages.push(pendingUserMsg);
-    }
+    if (!hasUserMsg) S.messages.push(pendingUserMsg);
   }
 
-  // Add local fallback assistant message if the server doesn't have one yet.
-  // For aborted streams, the backend should have persisted the incomplete message,
-  // but there can be a timing gap. If the server already has an assistant message
-  // (with a proper ID), we skip the fallback so edit/delete buttons work.
   if (preservedContent?.trim()) {
     const lastMsg = S.messages[S.messages.length - 1];
     if (!lastMsg || lastMsg.role !== 'assistant') {
@@ -416,6 +461,20 @@ async function afterStream() {
       });
     }
   }
+
+  setGenerationPhase(null);
+  setStreaming(false);
+  $('send-btn').disabled = false;
+
+  // Finalize the streaming div in-place — no DOM destruction, no flash
+  const lastMsg = S.messages[S.messages.length - 1];
+  if (finalizeStreamingDiv(lastMsg)) {
+    S.streamingBodyEl = null;
+    renderInspector();
+    scrollToBottom();
+    return;
+  }
+  S.streamingBodyEl = null;
   renderMessages(); renderInspector(); scrollToBottom();
 }
 
@@ -447,13 +506,13 @@ async function processSSEStream(resp, container, msgDiv, signal) {
             }
             fullResponse += data.replace(/\\n/g, '\n');
             S.streamingContent = rewrittenResponse || fullResponse;
-            if (S.streamingBodyEl) S.streamingBodyEl.innerHTML = formatProse(fullResponse);
+            if (S.streamingBodyEl) S.streamingBodyEl.innerHTML = formatProse(rewrittenResponse || fullResponse);
             scrollToBottom();
           },
           (text) => {
             rewrittenResponse = text;
             S.streamingContent = text;
-            if (S.streamingBodyEl) S.streamingBodyEl.innerHTML = formatProse(text);
+            if (S.streamingBodyEl) smoothUpdateBody(S.streamingBodyEl, formatProse(text));
             scrollToBottom();
           }
         );
@@ -497,7 +556,7 @@ function handleSSEEvent(event, data, container, msgDiv, onToken, onRewrite) {
     case 'writer_rewrite':
       clearRefineTimer();
       setGenerationPhase('refining');
-      try { onRewrite(JSON.parse(data).rewritten_text); } catch (_) {}
+      try { onRewrite(JSON.parse(data).refined_text); } catch (_) {}
       break;
     case 'error':
       toast('Error: ' + data, true);

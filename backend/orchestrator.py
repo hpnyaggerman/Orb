@@ -220,6 +220,7 @@ REFINE_AGENT_INSTRUCTIONS = (
     "- For banned phrases: rewrite the sentence to remove the banned phrase entirely. Note: The audit report may show the canonical phrase name (e.g., 'ozone'), but you need to remove the actual variant that appears in the sentence (e.g., 'electric').\n"
     "- For repetitive openers: change how the sentence begins.\n"
     "- For repetitive templates: restructure the sentence (reorder clauses, combine, vary syntax)."
+    "- If request makes no sense then just skip because sometimes the report has issues due do its probabilistic nature."
 )
 
 LENGTH_GUARD_INSTRUCTIONS = (
