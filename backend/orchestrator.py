@@ -122,15 +122,15 @@ AGENT_TOOLS = [{
                 "keywords": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "List of nouns (keywords) to remind the important concepts and subjects in the roleplay so far. This list shouldn't grow too long (keep under 6 items). Extract from recent messages and plot summary. Ignore obvious things like names of the characters. Examples: 'ancient Egypt', 'headlock', 'monetary deal', 'language/accent', 'desert night', 'six-sided dice'.",
+                    "description": "List of nouns (keywords) to remind the important concepts and subjects in the roleplay so far. This list shouldn't grow too long (keep under 6 items). Extract from recent messages and plot summary. Ignore obvious things like names of the characters. Examples: 'ancient Egypt', 'headlock', 'monetary deal', 'language/accent', 'desert night', 'six-sided dice', 'discarded belt'.",
                 },
                 "plot_summary": {
                     "type": "string",
-                    "description": "A brief and specific summary of what has happened so far in the story. Call things for what they are, avoid being generic, avoid adjectives. 3 sentences max (e.g. Professor Rob coincidentally met his colleague Jane at the park. He asked about some 'tungsten rod'. She changed the subject and they're now talking about his kids.).",
+                    "description": "A brief and specific summary of what has happened so far in the story. Call things for what they are, avoid being generic, avoid adjectives. 3 sentences max (e.g. Rob was working on his lake house when his wife called for him. She wanted help with moving some furniture. The weather was hot so he took off his shirt and is now shirtless.).",
                 },
                 "plot_direction": {
                     "type": "string",
-                    "description": "What happens next in the story — events, actions, reveals, turns of fate (e.g. 'his dad knows he's lying and snaps', 'the attack tears off a piece of her clothing', 'he makes a rude gesture the teacher doesn't see', 'she pretends not to know what tunsgten is'). Keep to one short sentence.",
+                    "description": "What happens next in the story — events, actions, reveals, turns of fate (e.g. 'his dad knows he's lying and snaps', 'the attack tears off a piece of her clothing', 'he makes a rude gesture the teacher doesn't see', 'she pretends not to know what Vodka is'). Keep to one short sentence.",
                 },
                 "writing_direction": {
                     "type": "string",
