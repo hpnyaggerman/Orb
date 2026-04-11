@@ -196,3 +196,137 @@ export function renderToolsPanel() {
 
   $('tools-list').innerHTML = toolCards + lengthGuardCard;
 }
+
+// ── Phrase Bank ─────────────────────────────
+
+export async function showPhraseBankModal() {
+  const groups = await api.get('/phrase-bank');
+  
+  const groupRows = groups.map(g => `
+    <div class="phrase-group-item" onclick="editPhraseGroup(${g.id})" data-id="${g.id}">
+      <div class="phrase-group-variants">
+        ${g.variants.map(v => `<span class="phrase-variant">${esc(v)}</span>`).join(', ')}
+      </div>
+      <div class="phrase-group-count">${g.variants.length} variant${g.variants.length !== 1 ? 's' : ''}</div>
+    </div>
+  `).join('');
+  
+  showModal(`
+    <div class="modal-title-row">
+      <div>
+        <h2>Phrase Bank</h2>
+        <p class="modal-subtitle">Manage banned/overused phrase groups. Each group contains variants that are considered equivalent. Click a group to edit it.</p>
+      </div>
+      <div class="modal-title-actions">
+        <button class="btn" onclick="closeModal()">Close</button>
+        <button class="btn btn-accent" onclick="showAddPhraseGroupModal()">+ Add Group</button>
+      </div>
+    </div>
+    
+    <div id="phrase-bank-list" class="phrase-bank-list">
+      ${groupRows.length ? groupRows : '<div class="phrase-bank-empty">No phrase groups yet</div>'}
+    </div>
+  `);
+}
+
+export function showAddPhraseGroupModal(editId = null, initialVariants = []) {
+  const isEdit = editId !== null;
+  const variantsHtml = initialVariants.map(v => `
+    <div class="variant-row">
+      <input type="text" class="variant-input" value="${esc(v)}" placeholder="e.g., a mix of">
+      <button class="btn btn-xs btn-danger" onclick="removeVariantRow(this)">×</button>
+    </div>
+  `).join('');
+  
+  const emptyRow = `<div class="variant-row">
+    <input type="text" class="variant-input" placeholder="e.g., a mix of">
+    <button class="btn btn-xs btn-danger" onclick="removeVariantRow(this)">×</button>
+  </div>`;
+  
+  const deleteButton = isEdit ? `
+    <button class="btn btn-danger" onclick="deletePhraseGroup(${editId})" style="margin-right: auto;">Delete</button>
+  ` : '';
+  
+  showModal(`
+    <h2>${isEdit ? 'Edit' : 'Add'} Phrase Group</h2>
+    <p class="modal-subtitle">Enter variant phrases that are considered equivalent. The first variant is treated as the canonical name.</p>
+    
+    <div id="variant-list" style="margin-bottom: 15px;">
+      ${variantsHtml || emptyRow}
+    </div>
+    
+    <button class="btn btn-sm" onclick="addVariantRow()" style="margin-bottom: 20px;">+ Add Another Variant</button>
+    
+    <div class="modal-actions">
+      ${deleteButton}
+      <button class="btn" onclick="showPhraseBankModal()">Cancel</button>
+      <button class="btn btn-accent" onclick="savePhraseGroup(${editId || 'null'})">${isEdit ? 'Update' : 'Save'}</button>
+    </div>
+  `);
+}
+
+// Helper functions exposed to window
+window.addVariantRow = function() {
+  const container = $('#variant-list');
+  const row = document.createElement('div');
+  row.className = 'variant-row';
+  row.innerHTML = `
+    <input type="text" class="variant-input" placeholder="e.g., a mix of">
+    <button class="btn btn-xs btn-danger" onclick="removeVariantRow(this)">×</button>
+  `;
+  container.appendChild(row);
+};
+
+window.removeVariantRow = function(btn) {
+  const rows = document.querySelectorAll('.variant-row');
+  if (rows.length > 1) {
+    btn.closest('.variant-row').remove();
+  } else {
+    // If it's the last row, just clear it
+    btn.closest('.variant-row').querySelector('.variant-input').value = '';
+  }
+};
+
+window.editPhraseGroup = async function(groupId) {
+  const groups = await api.get('/phrase-bank');
+  const group = groups.find(g => g.id === groupId);
+  if (group) {
+    showAddPhraseGroupModal(groupId, group.variants);
+  }
+};
+
+window.deletePhraseGroup = async function(groupId) {
+  if (!confirm('Delete this phrase group?')) return;
+  try {
+    await api.del(`/phrase-bank/${groupId}`);
+    toast('Phrase group deleted');
+    showPhraseBankModal(); // Refresh the modal
+  } catch (e) {
+    toast('Failed to delete: ' + e.message, true);
+  }
+};
+
+window.savePhraseGroup = async function(editId) {
+  const variantInputs = document.querySelectorAll('.variant-input');
+  const variants = Array.from(variantInputs)
+    .map(input => input.value.trim())
+    .filter(v => v.length > 0);
+  
+  if (variants.length === 0) {
+    toast('At least one variant is required', true);
+    return;
+  }
+  
+  try {
+    if (editId && editId !== 'null') {
+      await api.put(`/phrase-bank/${editId}`, { variants });
+      toast('Phrase group updated');
+    } else {
+      await api.post('/phrase-bank', { variants });
+      toast('Phrase group added');
+    }
+    showPhraseBankModal(); // Refresh the main modal
+  } catch (e) {
+    toast('Failed to save: ' + e.message, true);
+  }
+};

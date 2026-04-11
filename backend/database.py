@@ -73,9 +73,9 @@ SEED_FRAGMENTS = [
         "description": "NSFW mode - descriptive, enable if the vibes of the situation call for it",
         "prompt_text": (
             'The narration may describe body parts that are exposed or looked at - visually, or interacted with - tactilely, but sparingly in order to avoid repetition. Take initiative and actively push the scene forward, no need to ask. '
-            'The narration can use NSFW, vulgar, uncensored, graphic vocabulary where applicable. Even strong words like "cunt", "cock", "anus", etc. are allowed; IMPORTANT: be more creative, varied, and even clinical with these words by using variants and synonyms. Avoid roundabout allegories like "heat", "core", etc. The narration is more brutal, vivid, and direct. '
-            "Focus on staying in character even though the vibes are sensual - characters should still behave realistically and warily of strangers and have their own boundaries. "
-            'Only the narration changes style, characters should still talk normally like how they would.'
+            'The narration can use NSFW, vulgar, uncensored, explicit vocabulary where applicable. Avoid roundabout allegories like "heat", "core", etc. The prose is now more brutal, vivid, and direct. '
+            'Consider positions and clothing states of the characters - what are they wearing, and where are they in relation to each other?. ',
+            "Focus on staying in character even though the vibes are sensual - characters should still behave realistically and warily of strangers and have their own boundaries."
         ),
         "negative_prompt": (
             "Return to non-explicit writing. Keep all descriptions tasteful and non-graphic. "
@@ -128,6 +128,7 @@ SEED_PHRASE_BANK = [
     ["a mix of", "a mixture of"],
     ["voice dripping with", "dripped with", "voice dripped with"],
     ["the tension in the air", "thick tension in the air", "the air is heavy", "the air is charged", "the air is thick"],
+    ["filling the air", "fills the air"],
     ["dangerous voice", "dangerous tone"],
     ["voice dropping", "voice low", "voice dangerous", "voice a dangerous", "voice a low"],
     ["low hiss", "dangerous hiss", "barely a whisper", "barely above a whisper", "voice crack"],
@@ -136,14 +137,15 @@ SEED_PHRASE_BANK = [
     ["sending shivers", "sending a shiver"],
     ["couldn't help but", "could not help but"],
     ["a dance of", "a dance between"],
-    ["eyes narrowing", "eyes narrowed", "mischievous glint", "gaze sharpen", "eyes widen"],
+    ["eyes narrowing", "eyes narrowed", "mischievous glint", "gaze sharpen", "eyes widen", "glint with mischief"],
     ["eyes never leaving his", "eyes never leaving hers", "eyes never leave his", "eyes never leave hers"],
     ["breath hitch"],
     ["ozone"],
     ["predatory"],
+    ["vulnerability", "vulnerable"],
     ["electric", "electrifying"],
     ["the air between them", "thick and suffocating", "thick, suffocating"],
-    ["mind race"],
+    ["mind races", "mind racing"],
     ["stark contrast", "pure, unadulterated"],
 ]
 

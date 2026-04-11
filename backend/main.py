@@ -25,6 +25,8 @@ from .database import (
     update_character_card, delete_character_card, get_character_avatar,
     add_message, set_active_leaf, get_message_by_id, switch_to_branch,
     delete_message_with_descendants, get_db,
+    get_phrase_bank, get_phrase_bank_rows, add_phrase_group,
+    update_phrase_group, delete_phrase_group,
 )
 import asyncio
 from .orchestrator import handle_turn, handle_regenerate
@@ -146,6 +148,14 @@ class RegenerateMsg(BaseModel):
     enable_agent: bool = True
 
 
+class PhraseGroupCreate(BaseModel):
+    variants: list[str]
+
+
+class PhraseGroupUpdate(BaseModel):
+    variants: list[str]
+
+
 # ── Settings ──
 
 @app.get("/api/settings")
@@ -185,6 +195,51 @@ async def api_update_fragment(fid: str, data: FragmentUpdate):
 async def api_delete_fragment(fid: str):
     if not await delete_fragment(fid):
         raise HTTPException(404, "Fragment not found or is built-in")
+    return {"ok": True}
+
+
+# ── Phrase Bank ──
+
+@app.get("/api/phrase-bank")
+async def api_get_phrase_bank():
+    """Return phrase bank rows with ids for UI management."""
+    return await get_phrase_bank_rows()
+
+
+@app.post("/api/phrase-bank")
+async def api_create_phrase_group(data: PhraseGroupCreate):
+    """Create a new phrase variant group."""
+    if not data.variants or len(data.variants) == 0:
+        raise HTTPException(400, "At least one variant is required")
+    # Validate all variants are strings
+    for v in data.variants:
+        if not isinstance(v, str) or not v.strip():
+            raise HTTPException(400, "All variants must be non-empty strings")
+    group_id = await add_phrase_group(data.variants)
+    return {"id": group_id, "variants": data.variants}
+
+
+@app.put("/api/phrase-bank/{group_id}")
+async def api_update_phrase_group(group_id: int, data: PhraseGroupUpdate):
+    """Update an existing phrase variant group."""
+    if not data.variants or len(data.variants) == 0:
+        raise HTTPException(400, "At least one variant is required")
+    # Validate all variants are strings
+    for v in data.variants:
+        if not isinstance(v, str) or not v.strip():
+            raise HTTPException(400, "All variants must be non-empty strings")
+    success = await update_phrase_group(group_id, data.variants)
+    if not success:
+        raise HTTPException(404, "Phrase group not found")
+    return {"ok": True, "id": group_id, "variants": data.variants}
+
+
+@app.delete("/api/phrase-bank/{group_id}")
+async def api_delete_phrase_group(group_id: int):
+    """Delete a phrase variant group."""
+    success = await delete_phrase_group(group_id)
+    if not success:
+        raise HTTPException(404, "Phrase group not found")
     return {"ok": True}
 
 
