@@ -1,6 +1,7 @@
 *{margin:0;padding:0;box-sizing:border-box;}
 body{font-family:var(--font-ui);background:var(--bg-deep);color:var(--text-primary);height:100vh;overflow:hidden;}
 #app{display:flex;height:100vh;}
+.hidden{display:none !important;}
 #sidebar{width:var(--sidebar-width);min-width:var(--sidebar-width);background:var(--bg-primary);border-right:1px solid var(--border);display:flex;flex-direction:column;overflow:hidden;}
 #main{flex:1;display:flex;flex-direction:column;min-width:0;}
 #inspector{width:0;min-width:0;background:var(--bg-primary);border-left:1px solid var(--border);overflow:hidden;transition:width .25s,min-width .25s;}
