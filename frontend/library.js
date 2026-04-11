@@ -6,17 +6,42 @@ import { resetChatUI, loadConversations } from './chat.js';
 
 // ── Fragments ────────────────────────────────
 export async function loadFragments() {
-  S.fragments = await api.get('/fragments');
-  renderFragments();
+  try {
+    S.fragments = await api.get('/fragments');
+    renderFragments();
+  } catch (error) {
+    console.error('Failed to load fragments:', error);
+    throw error;
+  }
 }
 
 export function renderFragments() {
-  $('frag-list').innerHTML = S.fragments.map(f =>
-    `<div class="fragment-item" style="cursor:pointer" title="${esc(f.description)}" onclick="showFragmentModal('${f.id}')">
-       <span class="frag-label">${esc(f.label)}</span>
-       <span class="frag-id">${esc(f.id)}</span>
-     </div>`
-  ).join('');
+  if (!S.fragments || S.fragments.length === 0) {
+    $('frag-list').innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:4px 0;">No fragments</div>';
+    return;
+  }
+  
+  const html = S.fragments.map(f => {
+    // Handle both boolean and numeric (0/1) enabled values from backend
+    const enabled = f.enabled === true || f.enabled === 1;
+    const toggleId = `frag-toggle-${f.id}`;
+    return `
+    <div class="fragment-item" style="cursor:pointer" title="${esc(f.description)}" onclick="showFragmentModal('${f.id}')">
+      <div style="flex:1; min-width:0;">
+        <span class="frag-label">${esc(f.label)}</span>
+        <span class="frag-id">${esc(f.id)}</span>
+      </div>
+      <div class="frag-toggle-wrapper" onclick="event.stopPropagation()">
+        <label class="frag-toggle" for="${toggleId}">
+          <input type="checkbox" id="${toggleId}" ${enabled ? 'checked' : ''}
+                 onchange="toggleFragmentEnabled('${f.id}', this.checked)">
+          <span class="frag-toggle-slider"></span>
+        </label>
+      </div>
+    </div>`;
+  }).join('');
+  
+  $('frag-list').innerHTML = html;
 }
 
 export function showFragmentModal(fragId = null) {
@@ -73,6 +98,19 @@ export async function deleteFragment(id) {
     await loadFragments();
     toast('Fragment deleted');
   } catch (e) { toast(e.message, true); }
+}
+
+export async function toggleFragmentEnabled(id, newEnabled) {
+  try {
+    await api.put('/fragments/' + id, { enabled: newEnabled });
+    // Update local state optimistically
+    const frag = S.fragments.find(f => f.id === id);
+    if (frag) frag.enabled = newEnabled;
+    renderFragments();
+    toast(newEnabled ? 'Fragment enabled' : 'Fragment disabled');
+  } catch (e) {
+    toast(e.message, true);
+  }
 }
 
 // ── Characters ───────────────────────────────

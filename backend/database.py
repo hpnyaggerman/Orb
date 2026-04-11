@@ -9,7 +9,7 @@ DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "app.
 SEED_FRAGMENTS = [
     {
         "id": "talkative",
-        "label": "Talkative / Dialogue-Heavy",
+        "label": "Talkative",
         "description": "Lean into dialogue and natural speech",
         "prompt_text": (
             "Lean into dialogue. Characters express themselves through speech. "
@@ -23,8 +23,8 @@ SEED_FRAGMENTS = [
         "is_builtin": True,
     },
     {
-        "id": "internal-monologue",
-        "label": "Internal Monologue",
+        "id": "inner-thoughts",
+        "label": "Inner Thoughts",
         "description": "Foreground the character's inner thoughts. To be used SPARINGLY!",
         "prompt_text": (
             "Foreground the character's inner thoughts. Show the gap between what they think "
@@ -184,7 +184,8 @@ async def init_db():
                 description TEXT NOT NULL,
                 prompt_text TEXT NOT NULL,
                 negative_prompt TEXT NOT NULL DEFAULT '',
-                is_builtin BOOLEAN NOT NULL DEFAULT 0
+                is_builtin BOOLEAN NOT NULL DEFAULT 0,
+                enabled BOOLEAN NOT NULL DEFAULT 1
             );
 
             CREATE TABLE IF NOT EXISTS conversations (
@@ -273,6 +274,11 @@ async def init_db():
         director_cols = {row[1] for row in await db.execute_fetchall("PRAGMA table_info(director_state)")}
         if "keywords" not in director_cols:
             await db.execute("ALTER TABLE director_state ADD COLUMN keywords TEXT NOT NULL DEFAULT '[]'")
+        
+        # Migration for fragments enabled column
+        fragment_cols = {row[1] for row in await db.execute_fetchall("PRAGMA table_info(fragments)")}
+        if "enabled" not in fragment_cols:
+            await db.execute("ALTER TABLE fragments ADD COLUMN enabled BOOLEAN NOT NULL DEFAULT 1")
 
         # Seed settings if empty
         row = await db.execute_fetchall("SELECT COUNT(*) as c FROM settings")
@@ -360,9 +366,10 @@ async def get_fragment(fid: str) -> dict | None:
 async def create_fragment(data: dict) -> dict:
     db = await get_db()
     try:
+        enabled = data.get("enabled", 1)
         await db.execute(
-            "INSERT INTO fragments (id, label, description, prompt_text, negative_prompt, is_builtin) VALUES (?, ?, ?, ?, ?, 0)",
-            (data["id"], data["label"], data["description"], data["prompt_text"], data.get("negative_prompt", "")),
+            "INSERT INTO fragments (id, label, description, prompt_text, negative_prompt, is_builtin, enabled) VALUES (?, ?, ?, ?, ?, 0, ?)",
+            (data["id"], data["label"], data["description"], data["prompt_text"], data.get("negative_prompt", ""), enabled),
         )
         await db.commit()
         return await get_fragment(data["id"])
@@ -373,7 +380,7 @@ async def create_fragment(data: dict) -> dict:
 async def update_fragment(fid: str, data: dict) -> dict | None:
     db = await get_db()
     try:
-        allowed = ["label", "description", "prompt_text", "negative_prompt"]
+        allowed = ["label", "description", "prompt_text", "negative_prompt", "enabled"]
         sets = []
         vals = []
         for k in allowed:

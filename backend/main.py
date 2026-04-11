@@ -75,6 +75,7 @@ class FragmentCreate(BaseModel):
     description: str
     prompt_text: str
     negative_prompt: str = ""
+    enabled: bool = True
 
 
 class FragmentUpdate(BaseModel):
@@ -82,6 +83,7 @@ class FragmentUpdate(BaseModel):
     description: Optional[str] = None
     prompt_text: Optional[str] = None
     negative_prompt: Optional[str] = None
+    enabled: Optional[bool] = None
 
 
 class ConversationCreate(BaseModel):

@@ -6,7 +6,6 @@
 
 - Improvement: Each agent tool will have its own field whether or not to enable reasoning when called, this is hard-coded.
 
-- Feature: Alternating Enable/Disable toggle for Mood Fragments next to their names on the list. These buttons effectively ban/unban the fragment(s) for the next turn.
 - Feature: Support multiple greetings for character cards in the form of branch navigation. Two options: Have null top-level root that does nothing; or have many roots as the greeting messages. User should be able to swipe through them like how they would with regens.
 - Feature: Implement min_words for length_guard in refine pass.
 - Feature: Explore using logit bias during the writer pass to prevent the assistant from outputting the tool call token. Add a "test" button to identify the `tool_call` token. Save this token keyed by the model+endpoint combination, so it can be banned in subsequent writer passes for that same combination.

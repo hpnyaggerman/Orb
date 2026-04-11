@@ -3,7 +3,7 @@ import { S } from './state.js';
 import { initTheme, loadSettings, saveSetting, showUserModal, saveUserProfile, applyTheme,
          toggleToolsPanel, setAgentEnabled, toggleToolEnabled,
          toggleLengthGuard, saveLengthGuardConfig } from './settings.js';
-import { loadFragments, showFragmentModal, saveFragment, deleteFragment,
+import { loadFragments, showFragmentModal, saveFragment, deleteFragment, toggleFragmentEnabled,
          loadCharacters, renderCharacters, triggerImport, handleImportFile,
          deleteCharacter, showCharCreateModal, createCharacter,
          showCharEditModal, saveCharEdit } from './library.js';
@@ -49,7 +49,7 @@ Object.assign(window, {
   toggleToolsPanel, setAgentEnabled, toggleToolEnabled,
   toggleLengthGuard, saveLengthGuardConfig,
   // fragments
-  showFragmentModal, saveFragment, deleteFragment,
+  showFragmentModal, saveFragment, deleteFragment, toggleFragmentEnabled,
   // characters
   selectChar, triggerImport, handleImportFile, deleteCharacter,
   showCharCreateModal, createCharacter, showCharEditModal, saveCharEdit,
@@ -68,7 +68,35 @@ Object.assign(window, {
 
 // ── Init ─────────────────────────────────────
 initTheme();
-await loadSettings();
-await loadFragments();
-await loadCharacters();
-await loadConversations();
+
+// Load data independently to prevent failures from blocking other loads
+async function initAll() {
+  try {
+    await loadSettings();
+  } catch (e) {
+    console.error('Failed to load settings:', e);
+  }
+  
+  try {
+    await loadFragments();
+  } catch (e) {
+    console.error('Failed to load fragments:', e);
+    // Show empty state but don't crash
+    $('frag-list').innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:4px 0;">Failed to load fragments</div>';
+  }
+  
+  try {
+    await loadCharacters();
+  } catch (e) {
+    console.error('Failed to load characters:', e);
+  }
+  
+  try {
+    await loadConversations();
+  } catch (e) {
+    console.error('Failed to load conversations:', e);
+  }
+}
+
+// Start initialization
+initAll();

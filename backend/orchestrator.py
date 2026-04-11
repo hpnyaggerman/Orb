@@ -752,6 +752,12 @@ async def handle_turn(conversation_id: str, user_message: str, skip_user_persist
         messages = await db.get_messages(conversation_id)
         director = await db.get_director_state(conversation_id)
         fragments = await db.get_fragments()
+        # Filter out disabled fragments
+        fragments = [f for f in fragments if f.get("enabled", True)]
+        # Also remove disabled fragments from active moods
+        if director and director.get("active_moods"):
+            enabled_ids = {f["id"] for f in fragments}
+            director["active_moods"] = [mood for mood in director["active_moods"] if mood in enabled_ids]
         phrase_bank = await db.get_phrase_bank()
         client = LLMClient(settings["endpoint_url"], api_key=settings.get("api_key", ""))
 
@@ -865,6 +871,12 @@ async def handle_regenerate(conversation_id: str, assistant_msg_id: int) -> Asyn
         history = await db._get_path_to_leaf(conversation_id, user_msg.get("parent_id")) if user_msg.get("parent_id") else []
         director = await db.get_director_state(conversation_id)
         fragments = await db.get_fragments()
+        # Filter out disabled fragments
+        fragments = [f for f in fragments if f.get("enabled", True)]
+        # Also remove disabled fragments from active moods
+        if director and director.get("active_moods"):
+            enabled_ids = {f["id"] for f in fragments}
+            director["active_moods"] = [mood for mood in director["active_moods"] if mood in enabled_ids]
         phrase_bank = await db.get_phrase_bank()
         client = LLMClient(settings["endpoint_url"], api_key=settings.get("api_key", ""))
 
