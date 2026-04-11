@@ -9,8 +9,87 @@ from typing import AsyncIterator, Optional
 from . import database as db
 from .llm_client import LLMClient, parse_tool_calls
 from .audit import run_audit, format_report, AuditReport
+from .slop_detector import FlaggedSentence, DetectionResult
+from .opening_monotony import FlaggedOpener, MonotonyResult
+from .template_repetition import FlaggedTemplate, TemplateResult
 
 logger = logging.getLogger(__name__)
+
+
+def _filter_audit_report_to_text(report: AuditReport, target_text: str) -> AuditReport:
+    """Filter an audit report to only include sentences that appear in target_text.
+    
+    This is used when audit is run on concatenated text (including previous messages)
+    but we only want to flag issues in the latest message (target_text).
+    """
+    target_sentences = set()
+    # Simple approach: split target_text into sentences and add to set
+    # Use the same sentence splitting logic as the detectors
+    import re
+    target_sentences_list = re.split(r'(?<=[.!?"""\'])\s+', target_text.strip())
+    target_sentences = {s.strip() for s in target_sentences_list if s.strip()}
+    
+    # Filter cliche results
+    filtered_flagged_sentences = []
+    for fs in report.cliche_result.flagged_sentences:
+        if fs.sentence in target_sentences:
+            filtered_flagged_sentences.append(fs)
+    
+    filtered_cliche_result = DetectionResult(
+        flagged_sentences=filtered_flagged_sentences,
+        unique_cliches=report.cliche_result.unique_cliches,
+        total_sentences=report.cliche_result.total_sentences,
+        flagged_count=len(filtered_flagged_sentences),
+    )
+    
+    # Filter monotony results
+    filtered_flagged_openers = []
+    for fo in report.monotony_result.flagged_openers:
+        filtered_sentences = [s for s in fo.sentences if s in target_sentences]
+        if filtered_sentences:
+            # Create a new FlaggedOpener with filtered sentences
+            # Adjust count and fraction based on filtered sentences
+            filtered_fo = FlaggedOpener(
+                opener=fo.opener,
+                count=len(filtered_sentences),
+                fraction=len(filtered_sentences) / report.monotony_result.total_sentences if report.monotony_result.total_sentences > 0 else 0.0,
+                sentences=filtered_sentences,
+            )
+            filtered_flagged_openers.append(filtered_fo)
+    
+    filtered_monotony_result = MonotonyResult(
+        flagged_openers=filtered_flagged_openers,
+        all_openers=report.monotony_result.all_openers,
+        total_sentences=report.monotony_result.total_sentences,
+        monotony_score=report.monotony_result.monotony_score,
+    )
+    
+    # Filter template results
+    filtered_flagged_templates = []
+    for ft in report.template_result.flagged_templates:
+        filtered_sentences = [s for s in ft.sentences if s in target_sentences]
+        if filtered_sentences:
+            filtered_ft = FlaggedTemplate(
+                template=ft.template,
+                count=len(filtered_sentences),
+                fraction=len(filtered_sentences) / report.template_result.total_sentences if report.template_result.total_sentences > 0 else 0.0,
+                sentences=filtered_sentences,
+            )
+            filtered_flagged_templates.append(filtered_ft)
+    
+    filtered_template_result = TemplateResult(
+        flagged_templates=filtered_flagged_templates,
+        all_templates=report.template_result.all_templates,
+        total_sentences=report.template_result.total_sentences,
+        unique_templates=report.template_result.unique_templates,
+        repetition_score=report.template_result.repetition_score,
+    )
+    
+    return AuditReport(
+        cliche_result=filtered_cliche_result,
+        monotony_result=filtered_monotony_result,
+        template_result=filtered_template_result,
+    )
 
 
 def replace_placeholders(text: str, user_name: str, char_name: str) -> str:
@@ -55,7 +134,7 @@ AGENT_TOOLS = [{
                 },
                 "writing_direction": {
                     "type": "string",
-                    "description": "How the scene should be written — focus, emphasis, descriptive lens, internal state (e.g. 'focus on his anxious tics in detail', 'narrate her spiraling thoughts on why it went wrong', 'describe her exposed stomach vividly', 'narrate the effects of the rain against the fading tombstone and weave this into the mood', 'emphasize her speech quirks'). Keep to one short sentence.",
+                    "description": "How the scene should be written — focus, emphasis, descriptive lens, internal state (e.g. 'focus on his anxious tics in detail', 'narrate her spiraling thoughts on why it went wrong', 'describe her exposed stomach vividly', 'describe what he sees in the picture', 'emphasize her speech quirks'). Keep to one short sentence. Show don't tell.",
                 },
                 "detected_repetitions": {
                     "type": "array",
@@ -427,16 +506,50 @@ async def _refine_pass(
 
     # ── Output Auditor sub-pass ──────────────────────────────────────────
     if audit_enabled:
-        logger.info("Refine: running audit on draft (%d chars), phrase_bank has %d groups", len(draft), len(phrase_bank))
-        report = run_audit(draft, phrase_bank)
-        report_text = format_report(report)
+        # Extract last 3 assistant messages from prefix for context
+        # Note: Length guard only scans the latest message (draft), but repetition
+        # detection should consider patterns across the last 3 assistant messages.
+        assistant_messages = []
+        for msg in reversed(prefix):
+            if msg.get("role") == "assistant":
+                assistant_messages.append(msg.get("content", ""))
+                if len(assistant_messages) >= 2:  # We want up to 2 previous messages (plus current draft makes 3)
+                    break
+        
+        # Include current draft as the latest message
+        text_for_audit = draft
+        if assistant_messages:
+            # Concatenate previous assistant messages (oldest to newest) with current draft
+            # This allows detection of repetitions across multiple responses
+            context_text = "\n\n".join(reversed(assistant_messages))
+            text_for_audit = context_text + "\n\n" + draft
+        
+        logger.info("Refine: running audit on draft (%d chars) with %d previous assistant messages for context, phrase_bank has %d groups",
+                   len(draft), len(assistant_messages), len(phrase_bank))
+        if assistant_messages:
+            logger.info("Refine: previous assistant messages (oldest to newest):")
+            for i, msg in enumerate(reversed(assistant_messages)):
+                logger.info("  [%d/%d] %d chars: %.100s%s",
+                           i+1, len(assistant_messages), len(msg),
+                           msg, "..." if len(msg) > 100 else "")
+        logger.info("Refine: text being audited (context + draft) = %d chars total", len(text_for_audit))
+        logger.debug("Refine: full text for audit:\n%s", text_for_audit)
+        report = run_audit(text_for_audit, phrase_bank)
+        
+        # Filter report to only include issues in the current draft (not previous messages)
+        filtered_report = _filter_audit_report_to_text(report, draft)
+        
+        report_text = format_report(filtered_report)
         logger.info(
-            "Refine: initial audit — %d issues (cliches=%d, openers=%d, templates=%d)",
-            report.total_issues, report.cliche_result.flagged_count,
-            len(report.monotony_result.flagged_openers), len(report.template_result.flagged_templates),
+            "Refine: initial audit — %d issues (cliches=%d, openers=%d, templates=%d) after filtering to current draft",
+            filtered_report.total_issues, filtered_report.cliche_result.flagged_count,
+            len(filtered_report.monotony_result.flagged_openers), len(filtered_report.template_result.flagged_templates),
         )
         logger.info("Refine: initial audit report:\n%s", report_text)
-        debug_parts.append(f"Initial audit ({report.total_issues} issues):\n{report_text}")
+        debug_parts.append(f"Initial audit ({filtered_report.total_issues} issues):\n{report_text}")
+        
+        # Use filtered report for the rest of the refinement pass
+        report = filtered_report
     else:
         report = AuditReport.clean()
         report_text = ""
@@ -566,7 +679,16 @@ async def _refine_pass(
                     break
                 # Re-run audit after minimize (only if audit is enabled)
                 if audit_enabled:
-                    report = run_audit(current_draft, phrase_bank)
+                    # Use same context as initial audit (previous assistant messages)
+                    text_for_audit = current_draft
+                    if assistant_messages:
+                        context_text = "\n\n".join(reversed(assistant_messages))
+                        text_for_audit = context_text + "\n\n" + current_draft
+                    logger.info("Refine iteration %d: post-minimize audit with %d previous assistant messages, text length=%d",
+                               iteration + 1, len(assistant_messages) if assistant_messages else 0, len(text_for_audit))
+                    report = run_audit(text_for_audit, phrase_bank)
+                    # Filter to only include issues in current draft
+                    report = _filter_audit_report_to_text(report, current_draft)
                     report_text = format_report(report)
                     debug_parts.append(f"Post-minimize audit ({report.total_issues} issues):\n{report_text}")
                 else:
@@ -607,8 +729,16 @@ async def _refine_pass(
             for e in errors:
                 logger.warning("Refine iteration %d patch error: %s", iteration + 1, e)
 
-            # Re-run audit on patched draft
-            report = run_audit(current_draft, phrase_bank)
+            # Re-run audit on patched draft (with context from previous assistant messages)
+            text_for_audit = current_draft
+            if assistant_messages:
+                context_text = "\n\n".join(reversed(assistant_messages))
+                text_for_audit = context_text + "\n\n" + current_draft
+            logger.info("Refine iteration %d: post-patch audit with %d previous assistant messages, text length=%d",
+                       iteration + 1, len(assistant_messages) if assistant_messages else 0, len(text_for_audit))
+            report = run_audit(text_for_audit, phrase_bank)
+            # Filter to only include issues in current draft
+            report = _filter_audit_report_to_text(report, current_draft)
             report_text = format_report(report)
             logger.info(
                 "Refine iteration %d: post-audit — %d issues (cliches=%d, openers=%d, templates=%d)",
