@@ -5,7 +5,7 @@
 
 - Bug: After refine pass is done, the UI refreshes briefly, the scroll bar scrolls up a little before settling down at the latest message again. This is a choppy user experience.
 
-- Feature: CRUD modal to edit phrase bank, this should be in Agent panel.
+- Feature: Reasoning toggle for writer pass - for when endpoint supports alternating reasoning.
 - Feature: Implement min_words for length_guard in refine pass.
 - Feature: Explore using logit bias during the writer pass to prevent the assistant from outputting the tool call token. Add a "test" button to identify the `tool_call` token. Save this token keyed by the model+endpoint combination, so it can be banned in subsequent writer passes for that same combination.
 

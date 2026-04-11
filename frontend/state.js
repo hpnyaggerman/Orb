@@ -23,4 +23,5 @@ export const S = {
   wasAborted: false,
   _selectCharLock: false,
   generationPhase: null,
+  hideStreamingBox: false,
 };

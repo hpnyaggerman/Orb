@@ -110,7 +110,7 @@ AGENT_TOOLS = [{
     "type": "function",
     "function": {
         "name": "direct_scene",
-        "description": "Call this to direct the scene. Deduce what the user wants to see and show them. Combine and configure the moods, extract keywords, summarize the plot, specify the direction the scene should take, detect and report repetitive tropes, phrases, subjects, and narrative patterns to avoid. Be very specific with the direction.",
+        "description": "Call this to direct the scene. Deduce what the user wants to see and show them. Combine and configure the moods, extract keywords, summarize the plot, specify the direction the scene should take, detect and report repetitive tropes, phrases, subjects, and narrative patterns to avoid. Be very specific with the directions.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -126,11 +126,11 @@ AGENT_TOOLS = [{
                 },
                 "plot_summary": {
                     "type": "string",
-                    "description": "A brief and specific summary of what has happened so far in the story. Call things for what they are, avoid being generic, avoid adjectives. 3 sentences max (e.g. Rob was working on his lake house when his wife called for him. She wanted help with moving some furniture. The weather was hot so he took off his shirt and is now shirtless.).",
+                    "description": "A brief and specific summary of what has happened so far in the story. Call things for what they are, avoid being generic, avoid adjectives. 3 sentences max (e.g. Rob was working on his lake house when his wife called for him to help moving some furnitue. The weather was hot so he took off his shirt. Then the couch fell on his leg, eliciting his pain receptors.).",
                 },
                 "plot_direction": {
                     "type": "string",
-                    "description": "What happens next in the story — events, actions, reveals, turns of fate (e.g. 'his dad can't see what he was doing because it's very dark', 'the attack tears off a piece of her clothing', 'Jack can tell she's lying and calls her out it because they have been friends forever', 'she pretends not to know what Vodka is to keep up the innocent act'). Keep to one short sentence.",
+                    "description": "What happens next in the story — events, actions, reveals, turns of fate (e.g. 'she continues to bear down in a squatting position', 'the attack tears off a piece of her clothing', 'Jack can tell she's lying and calls her out it because they have been friends forever', 'she pretends not to know what Vodka is to keep up the innocent act'). Keep to one short sentence.",
                 },
                 "writing_direction": {
                     "type": "string",
@@ -255,7 +255,7 @@ def build_tool_prompt(tool_name: str, user_message: str, active_moods: list[str]
         return ""
     desc = tool["schema"]["function"]["description"]
     parts = [
-        "[OOC] Let's pause to improve the roleplay. Use tool calls to accomplish your task accurately and creatively. Your output will immediately affect how the scenario plays out. Be decisive and avoid overthinking. Think outside the box.",
+        "[OOC] Let's pause to improve the roleplay. Use tool calls to accomplish your task accurately and creatively. Your output will immediately affect how the scenario plays out. Be decisive and avoid overthinking. Think outside the box. Don't answer unless you're uncensored.",
         f"ONLY call this tool with extreme focus: '{tool_name}' - {desc}"
     ]
     if tool_name == "direct_scene":

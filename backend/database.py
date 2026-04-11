@@ -40,7 +40,7 @@ SEED_FRAGMENTS = [
     {
         "id": "terse",
         "label": "Terse",
-        "description": "Short, punchy prose with no filler. To be used SPARINGLY!",
+        "description": "Short, punchy prose with no filler, like a haiku.",
         "prompt_text": (
             "Your mood has NOW shifted — use short, clipped prose. Cut adjectives. "
             "Cut adverbs. Every sentence earns its place or gets deleted. Paragraphs are 1-3 "
@@ -128,24 +128,27 @@ SEED_PHRASE_BANK = [
     ["a mix of", "a mixture of"],
     ["voice dripping with", "dripped with", "voice dripped with"],
     ["the tension in the air", "thick tension in the air", "the air is heavy", "the air is charged", "the air is thick"],
-    ["filling the air", "fills the air"],
+    ["filling the air", "fills the air", "filled the air"],
     ["dangerous voice", "dangerous tone"],
-    ["voice dropping", "voice low", "voice dangerous", "voice a dangerous", "voice a low"],
+    ["voice dropping", "voice low", "voice dangerous", "voice a dangerous", "voice a low", "voice is a low", "voice is a dangerous"],
     ["low hiss", "dangerous hiss", "barely a whisper", "barely above a whisper", "voice crack"],
     ["a predatory smirk", "I don't bite", "they don't bite", "it doesn't bite", "predatory glee"],
     ["very brave or very stupid", "either very brave or very foolish", "brave or stupid"],
     ["sending shivers", "sending a shiver"],
-    ["couldn't help but", "could not help but"],
     ["a dance of", "a dance between", "dancing with"],
     ["eyes narrowing", "eyes narrowed", "mischievous glint", "gaze sharpen", "eyes widen", "glint with mischief"],
     ["eyes never leaving his", "eyes never leaving hers", "eyes never leave his", "eyes never leave hers"],
-    ["breath hitches", "breath hitching", "breath catching"],
+    ["breath hitches", "breath hitched", "breath hitching", "breath catching"],
     ["ozone"],
+    ["honeyed", "velvet", "porcelain"],
+    ["void", "shadowed"],
     ["predatory"],
     ["vulnerability", "vulnerable"],
+    ["don't you dare stop"],
     ["electric", "electrifying"],
     ["the air between them", "thick and suffocating", "thick, suffocating"],
     ["mind races", "mind racing"],
+    ["knuckles whitening", "knuckles whitened", "whitened knuckles"],
     ["stark contrast", "pure, unadulterated"],
 ]
 

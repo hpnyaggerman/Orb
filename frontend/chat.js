@@ -277,7 +277,9 @@ export function renderMessages() {
     }).join('');
   }
   if (badgeEl)     ct.appendChild(badgeEl);
-  if (streamingEl) ct.appendChild(streamingEl);
+  // Don't show streaming box when editing a message (looks ugly)
+  // Also hide for a short time after cancelling edit during streaming
+  if (streamingEl && !S.editingMsgId && !S.hideStreamingBox) ct.appendChild(streamingEl);
 }
 
 export function startEdit(msgId) {
@@ -295,6 +297,14 @@ export function startEdit(msgId) {
 }
 
 export function cancelEdit() {
+  // If streaming is active, hide the streaming box for a short time after cancelling edit
+  if (S.isStreaming) {
+    S.hideStreamingBox = true;
+    // Clear the flag after 2 seconds or when streaming ends (whichever comes first)
+    setTimeout(() => {
+      S.hideStreamingBox = false;
+    }, 2000);
+  }
   S.editingMsgId = null;
   renderMessages();
 }
@@ -426,6 +436,7 @@ async function afterStream() {
   S.streamingContent  = null;
   S.pendingUserMsg    = null;
   S.wasAborted        = false;
+  S.hideStreamingBox  = false; // Ensure streaming box is visible after streaming ends
   clearRefineTimer();
 
   if (!S.activeConvId) {
@@ -468,14 +479,14 @@ async function afterStream() {
 
   // Finalize the streaming div in-place — no DOM destruction, no flash
   const lastMsg = S.messages[S.messages.length - 1];
-  if (finalizeStreamingDiv(lastMsg)) {
-    S.streamingBodyEl = null;
-    renderInspector();
-    scrollToBottom();
-    return;
-  }
+  const finalized = finalizeStreamingDiv(lastMsg);
   S.streamingBodyEl = null;
-  renderMessages(); renderInspector(); scrollToBottom();
+  
+  // Always render messages to ensure user messages have proper IDs and buttons
+  // This is necessary because finalizeStreamingDiv only updates the assistant message
+  renderMessages();
+  renderInspector();
+  scrollToBottom();
 }
 
 async function processSSEStream(resp, container, msgDiv, signal) {
