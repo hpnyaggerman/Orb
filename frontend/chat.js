@@ -630,10 +630,10 @@ export async function regenerate(msgId) {
   const idx = S.messages.findIndex(m => m.id === msgId);
   S.streamCutoffIndex = idx >= 0 ? idx : S.messages.length;
 
-  const ct = $('chat-messages');
-  const el = ct.querySelector(`[data-msg-id="${msgId}"]`);
-  if (el) el.remove();
+  // Update UI to show only messages up to the regenerated message
+  renderMessages();
 
+  const ct = $('chat-messages');
   const msgDiv = createStreamingDiv();
   S.abortController = new AbortController();
   try {
