@@ -827,8 +827,8 @@ async def _run_pipeline(
     if not agent_on:
         enabled_tools = {}
 
-    active_moods, agent_raw, calls, latency, refined_msg, plot_direction, writing_direction, detected_repetitions, plot_summary = (
-        director["active_moods"], "", [], 0, None, None, None, None, None
+    active_moods, agent_raw, calls, latency, refined_msg, plot_direction, writing_direction, detected_repetitions, plot_summary, keywords = (
+        director["active_moods"], "", [], 0, None, None, None, None, None, director.get("keywords", [])
     )
     effective_msg = user_message
     audit_enabled = agent_on and bool(enabled_tools.get("refine_apply_patch", False)) and phrase_bank is not None
