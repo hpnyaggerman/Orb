@@ -496,6 +496,7 @@ async def _refine_pass(
     settings: dict, phrase_bank: list[list[str]],
     audit_enabled: bool = True,
     length_guard: dict | None = None,
+    enabled_tools: dict | None = None,
 ) -> tuple[str | None, str, int]:
     """ReAct-style refinement loop with optional audit and/or length guard.
 
@@ -561,8 +562,12 @@ async def _refine_pass(
     # ── Length Guard sub-pass ────────────────────────────────────────────
     length_guard_triggered = False
     length_guard_instruction = ""
-    refine_tools: list[dict] = []
-    if audit_enabled:
+    
+    # Start with all enabled tool schemas for KV cache consistency
+    refine_tools: list[dict] = _enabled_schemas(enabled_tools)
+    
+    # Add refine-specific tools if needed (avoid duplicates)
+    if audit_enabled and REFINE_APPLY_PATCH_TOOL not in refine_tools:
         refine_tools.append(REFINE_APPLY_PATCH_TOOL)
     if length_guard and length_guard.get("enabled"):
         word_count = len(draft.split())
@@ -573,7 +578,8 @@ async def _refine_pass(
             length_guard_instruction = LENGTH_GUARD_INSTRUCTIONS.format(
                 word_count=word_count, max_paragraphs=max_paragraphs
             )
-            refine_tools.append(MINIMIZE_TOOL)
+            if MINIMIZE_TOOL not in refine_tools:
+                refine_tools.append(MINIMIZE_TOOL)
             logger.info("Refine: length guard triggered (word_count=%d > max_words=%d, max_paragraphs=%d)",
                         word_count, max_words, max_paragraphs)
             debug_parts.append(f"Length guard triggered: {word_count} words (max {max_words}), target {max_paragraphs} paragraphs")
@@ -900,7 +906,7 @@ async def _run_pipeline(
     if do_refine and resp_text:
         logger.info("Refine pass starting (draft=%d chars, phrase_bank=%d groups)", len(resp_text), len(phrase_bank) if phrase_bank else 0)
         try:
-            refined_draft, _debug_log, _elapsed = await _refine_pass(client, prefix, effective_msg, resp_text, settings, phrase_bank or [], audit_enabled, length_guard)
+            refined_draft, _debug_log, _elapsed = await _refine_pass(client, prefix, effective_msg, resp_text, settings, phrase_bank or [], audit_enabled, length_guard, enabled_tools)
             if refined_draft and refined_draft != resp_text:
                 resp_text = refined_draft
                 yield {"event": "writer_rewrite", "data": {"refined_text": resp_text}}
