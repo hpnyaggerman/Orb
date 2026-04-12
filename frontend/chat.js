@@ -323,9 +323,16 @@ export async function deleteMessage(msgId) {
 export async function switchBranch(msgId) {
   if (!msgId || S.isStreaming) return;
   try {
+    // Save current scroll position before rendering
+    const ct = $('chat-messages');
+    const scrollTop = ct ? ct.scrollTop : 0;
+    
     S.messages = await api.post(convUrl(S.activeConvId, 'messages', msgId, 'switch-branch'), {});
     S.lastDirectorData = null;
-    renderMessages(); renderInspector(); scrollToBottom();
+    renderMessages(); renderInspector();
+    
+    // Restore scroll position instead of scrolling to bottom
+    if (ct) ct.scrollTop = scrollTop;
   } catch (e) { toast(e.message, true); }
 }
 
