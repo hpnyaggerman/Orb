@@ -24,7 +24,7 @@ from .database import (
     list_character_cards, get_character_card, create_character_card,
     update_character_card, delete_character_card, get_character_avatar,
     add_message, set_active_leaf, get_message_by_id, switch_to_branch,
-    delete_message_with_descendants, get_db,
+    delete_message_with_descendants, update_message_content, get_db,
     get_phrase_bank, get_phrase_bank_rows, add_phrase_group,
     update_phrase_group, delete_phrase_group,
 )
@@ -508,6 +508,11 @@ async def api_edit_message(cid: str, msg_id: int, data: EditMessage, request: Re
     original = await get_message_by_id(msg_id)
     if not original or original["conversation_id"] != cid:
         raise HTTPException(404, "Message not found")
+
+    # For assistant edits with no regeneration, just update the content in-place
+    if original["role"] == "assistant" and not data.regenerate:
+        await update_message_content(msg_id, data.content)
+        return {"ok": True}
 
     # Create sibling (same parent_id as original)
     new_msg_id = await add_message(

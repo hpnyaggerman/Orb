@@ -143,6 +143,7 @@ SEED_PHRASE_BANK = [
     ["ozone"],
     ["honeyed", "velvet", "porcelain", "intoxicating"],
     ["void", "shadowed"],
+    ["incredulous"],
     ["predatory"],
     ["vulnerability", "vulnerable"],
     ["don't you dare stop"],

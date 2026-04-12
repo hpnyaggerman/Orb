@@ -69,7 +69,7 @@ REFINE_REWRITE_TOOL = {
     "type": "function",
     "function": {
         "name": "refine_rewrite",
-        "description": "Replace the entire draft with a refined rewrite. Use when length guard is triggered or when audit issues require a complete rewrite. Preserve all key story beats, the author's voice, and any special formatting or code.",
+        "description": "Replace the entire draft with a refined rewrite. Use when length guard is triggered or when audit issues require a complete rewrite. Preserve all key story beats, the author's voice, and any special formatting or code. First priority is to get rid of repetitiveness and mundane narration.",
         "parameters": {
             "type": "object",
             "properties": {
