@@ -185,8 +185,8 @@ async def init_db():
                 enabled_tools TEXT NOT NULL DEFAULT '{}',
                 enable_agent INTEGER NOT NULL DEFAULT 1,
                 length_guard_enabled INTEGER NOT NULL DEFAULT 0,
-                length_guard_max_words INTEGER NOT NULL DEFAULT 400,
-                length_guard_max_paragraphs INTEGER NOT NULL DEFAULT 5
+                length_guard_max_words INTEGER NOT NULL DEFAULT 240,
+                length_guard_max_paragraphs INTEGER NOT NULL DEFAULT 4
             );
 
             CREATE TABLE IF NOT EXISTS fragments (
