@@ -169,7 +169,7 @@ MINIMIZE_TOOL = {
     "type": "function",
     "function": {
         "name": "minimize",
-        "description": "Replace the entire draft with a shorter, more concise rewrite that respects the maximum paragraph count. Preserve the author's voice, vocabulary, all key story beats, and any special formatting or code.",
+        "description": "Replace the entire draft with a shorter, more concise rewrite that respects the maximum paragraph count. Preserve all key story beats, and any special formatting or code.",
         "parameters": {
             "type": "object",
             "properties": {
@@ -439,16 +439,16 @@ def _normalize_quotes(text: str) -> str:
 def _apply_patches(draft: str, patches: list[dict]) -> tuple[str, list[str]]:
     """Apply search/replace patches to draft. Returns (updated_draft, error_messages)."""
     errors: list[str] = []
-    logger.info("Applying %d patches to draft (%d chars)", len(patches), len(draft))
+    logger.debug("Applying %d patches to draft (%d chars)", len(patches), len(draft))
     for i, p in enumerate(patches):
         search = p.get("search", "")
         replace = p.get("replace", "")
         if not search:
-            logger.info("Patch %d: empty search string, skipping", i)
+            logger.debug("Patch %d: empty search string, skipping", i)
             continue
         if search == replace:
             err = f"Error: Patch {i} is a no-op (search === replace). You must provide different replacement text."
-            logger.info("Patch %d: no-op (search === replace), error: %s", i, err)
+            logger.debug("Patch %d: no-op (search === replace), error: %s", i, err)
             errors.append(err)
             continue
 
@@ -466,28 +466,27 @@ def _apply_patches(draft: str, patches: list[dict]) -> tuple[str, list[str]]:
                 # Verify length alignment (normalization shouldn't change length for single-char replacements)
                 if len(original_substr) == len(norm_search):
                     draft = draft[:pos] + replace + draft[pos + len(original_substr):]
-                    logger.info("Patch %d OK (quote-normalized): %r → %r", i, search[:80], replace[:80])
+                    logger.debug("Patch %d OK (quote-normalized): %r → %r", i, search[:60], replace[:60])
                     continue
                 else:
-                    logger.warning("Patch %d: quote-norm matched but lengths diverged (%d vs %d), falling through",
-                                   i, len(original_substr), len(norm_search))
+                    logger.debug("Patch %d: quote-norm matched but lengths diverged (%d vs %d)", i, len(original_substr), len(norm_search))
             elif norm_count > 1:
                 err = f"Error: Multiple matches ({norm_count}) for '{search[:80]}' (after quote normalization). Use more context."
-                logger.warning("Patch %d AMBIGUOUS after quote-norm (%d matches): search=%r", i, norm_count, search[:120])
+                logger.debug("Patch %d AMBIGUOUS after quote-norm (%d matches)", i, norm_count)
                 errors.append(err)
                 continue
 
             err = f"Error: '{search[:80]}' not found in draft."
-            logger.warning("Patch %d MISS (0 matches, even after quote-norm): search=%r", i, search[:120])
+            logger.debug("Patch %d MISS (0 matches, even after quote-norm)", i)
             errors.append(err)
         elif count > 1:
             err = f"Error: Multiple matches ({count}) for '{search[:80]}'. Use more context."
-            logger.warning("Patch %d AMBIGUOUS (%d matches): search=%r", i, count, search[:120])
+            logger.debug("Patch %d AMBIGUOUS (%d matches)", i, count)
             errors.append(err)
         else:
             draft = draft.replace(search, replace, 1)
-            logger.info("Patch %d OK: %r → %r", i, search[:80], replace[:80])
-    logger.info("Patch application done: %d errors out of %d patches", len(errors), len(patches))
+            logger.debug("Patch %d OK: %r → %r", i, search[:60], replace[:60])
+    logger.debug("Patch application done: %d errors out of %d patches", len(errors), len(patches))
     return draft, errors
 
 
@@ -528,15 +527,8 @@ async def _refine_pass(
             context_text = "\n\n".join(reversed(assistant_messages))
             text_for_audit = context_text + "\n\n" + draft
         
-        logger.info("Refine: running audit on draft (%d chars) with %d previous assistant messages for context, phrase_bank has %d groups",
+        logger.info("Refine: audit on draft (%d chars), %d previous messages, %d phrase groups",
                    len(draft), len(assistant_messages), len(phrase_bank))
-        if assistant_messages:
-            logger.info("Refine: previous assistant messages (oldest to newest):")
-            for i, msg in enumerate(reversed(assistant_messages)):
-                logger.info("  [%d/%d] %d chars: %.100s%s",
-                           i+1, len(assistant_messages), len(msg),
-                           msg, "..." if len(msg) > 100 else "")
-        logger.info("Refine: text being audited (context + draft) = %d chars total", len(text_for_audit))
         logger.debug("Refine: full text for audit:\n%s", text_for_audit)
         report = run_audit(text_for_audit, phrase_bank)
         
@@ -545,11 +537,10 @@ async def _refine_pass(
         
         report_text = format_report(filtered_report)
         logger.info(
-            "Refine: initial audit — %d issues (cliches=%d, openers=%d, templates=%d) after filtering to current draft",
+            "Refine: initial audit — %d issues (cliches=%d, openers=%d, templates=%d)",
             filtered_report.total_issues, filtered_report.cliche_result.flagged_count,
             len(filtered_report.monotony_result.flagged_openers), len(filtered_report.template_result.flagged_templates),
         )
-        logger.info("Refine: initial audit report:\n%s", report_text)
         debug_parts.append(f"Initial audit ({filtered_report.total_issues} issues):\n{report_text}")
         
         # Use filtered report for the rest of the refinement pass
@@ -601,26 +592,25 @@ async def _refine_pass(
         refine_instruction_parts.append(report_text)
     if length_guard_triggered:
         refine_instruction_parts.append(length_guard_instruction)
+    final_prompt = "\n\n".join(refine_instruction_parts)
     msgs = prefix + [
         {"role": "user", "content": effective_msg},
         {"role": "assistant", "content": draft},
-        {"role": "user", "content": "\n\n".join(refine_instruction_parts)},
+        {"role": "user", "content": final_prompt},
     ]
-    logger.info("Refine: built message context with %d turns (%d prefix + 3 refine)",
-                 len(msgs), len(prefix))
+    logger.info("Refine: built message context with %d turns (%d prefix + 3 refine)", len(msgs), len(prefix))
+    logger.info("Refine: final prompt to LLM (%d chars):\n%s", len(final_prompt), final_prompt)
 
     current_draft = draft
     prev_issues = report.total_issues
 
     # Step 3: ReAct loop
     for iteration in range(_MAX_REFINE_ITERATIONS):
-        logger.info("Refine iteration %d/%d, %d issues remaining, draft=%d chars, thread=%d turns",
-                     iteration + 1, _MAX_REFINE_ITERATIONS, report.total_issues,
-                     len(current_draft), len(msgs))
+        logger.info("Refine iteration %d/%d, %d issues remaining", iteration + 1, _MAX_REFINE_ITERATIONS, report.total_issues)
         try:
-            logger.info("Refine iteration %d: calling LLM (model=%s, max_tokens=4096, temp=0.25), tools included=%s",
+            logger.debug("Refine iteration %d: calling LLM (model=%s), tools=%s",
                          iteration + 1, settings["model_name"],
-                         json.dumps([t["function"]["name"] for t in refine_tools]))
+                         [t["function"]["name"] for t in refine_tools])
             try:
                 # Determine if we should disable reasoning based on tool configuration
                 reasoning_config = None
@@ -653,10 +643,8 @@ async def _refine_pass(
                 logger.error("Refine iteration %d: client.complete() raised %s: %s",
                              iteration + 1, type(llm_err).__name__, llm_err, exc_info=True)
                 raise
-            logger.info("Refine iteration %d: LLM returned (keys=%s)",
-                        iteration + 1, list(resp.keys()) if isinstance(resp, dict) else type(resp).__name__)
+            logger.debug("Refine iteration %d: LLM returned", iteration + 1)
             raw = json.dumps(resp, default=str)
-            logger.info("Refine iteration %d: raw LLM response:\n%s", iteration + 1, raw[:2000])
             debug_parts.append(f"Iteration {iteration + 1} response:\n{raw}")
 
             # Log finish reason if present
@@ -665,7 +653,7 @@ async def _refine_pass(
                 logger.info("Refine iteration %d: finish_reason=%s", iteration + 1, finish_reason)
 
             parsed = parse_tool_calls(resp)
-            logger.info("Refine iteration %d: parse_tool_calls returned %d call(s): %s",
+            logger.debug("Refine iteration %d: parse_tool_calls returned %d call(s): %s",
                          iteration + 1, len(parsed),
                          [tc["name"] for tc in parsed] if parsed else "[]")
             if not parsed:
@@ -722,10 +710,10 @@ async def _refine_pass(
                 break
 
             patches = patch_call.get("arguments", {}).get("patches", [])
-            logger.info("Refine iteration %d: model proposed %d patch(es)", iteration + 1, len(patches))
+            logger.debug("Refine iteration %d: model proposed %d patch(es)", iteration + 1, len(patches))
             for pi, p in enumerate(patches):
-                logger.info("  patch[%d]: search=%r  →  replace=%r",
-                             pi, (p.get("search", ""))[:100], (p.get("replace", ""))[:100])
+                logger.debug("  patch[%d]: search=%r → replace=%r",
+                             pi, (p.get("search", ""))[:60], (p.get("replace", ""))[:60])
             if not patches:
                 logger.info("Refine iteration %d: empty patches list, stopping", iteration + 1)
                 break
@@ -733,8 +721,7 @@ async def _refine_pass(
             # Apply patches
             pre_len = len(current_draft)
             current_draft, errors = _apply_patches(current_draft, patches)
-            logger.info("Refine iteration %d: patches applied, draft %d→%d chars, %d error(s)",
-                        iteration + 1, pre_len, len(current_draft), len(errors))
+            logger.info("Refine iteration %d: applied %d patches, draft %d→%d chars", iteration + 1, len(patches), pre_len, len(current_draft))
             for e in errors:
                 logger.warning("Refine iteration %d patch error: %s", iteration + 1, e)
 
@@ -743,8 +730,7 @@ async def _refine_pass(
             if assistant_messages:
                 context_text = "\n\n".join(reversed(assistant_messages))
                 text_for_audit = context_text + "\n\n" + current_draft
-            logger.info("Refine iteration %d: post-patch audit with %d previous assistant messages, text length=%d",
-                       iteration + 1, len(assistant_messages) if assistant_messages else 0, len(text_for_audit))
+            logger.debug("Refine iteration %d: post-patch audit with %d previous messages", iteration + 1, len(assistant_messages) if assistant_messages else 0)
             report = run_audit(text_for_audit, phrase_bank)
             # Filter to only include issues in current draft
             report = _filter_audit_report_to_text(report, current_draft)
@@ -754,7 +740,6 @@ async def _refine_pass(
                 iteration + 1, report.total_issues, report.cliche_result.flagged_count,
                 len(report.monotony_result.flagged_openers), len(report.template_result.flagged_templates),
             )
-            logger.info("Refine iteration %d: post-audit report:\n%s", iteration + 1, report_text)
             debug_parts.append(f"Post-iteration {iteration + 1} audit ({report.total_issues} issues):\n{report_text}")
 
             if report.is_clean:
@@ -783,7 +768,7 @@ async def _refine_pass(
             tool_name = "refine_apply_patch"  # This is the only tool that reaches this point in refine pass
             reasoning_enabled = TOOLS.get(tool_name, {}).get("reasoning_enabled", True)
             
-            logger.info("Refine iteration %d: reasoning fields - content=%d chars, reasoning_content=%d chars, reasoning_enabled=%s",
+            logger.debug("Refine iteration %d: reasoning fields - content=%d chars, reasoning_content=%d chars, reasoning_enabled=%s",
                         iteration + 1, len(reasoning), len(reasoning_content), reasoning_enabled)
             
             # Summarize what the model did so it has context on the next iteration
@@ -804,8 +789,7 @@ async def _refine_pass(
             # Feed back the updated audit report as a user turn
             tool_response_content = "\n".join(errors) + "\n\n" + report_text if errors else report_text
             msgs.append({"role": "user", "content": f"[Tool result — updated audit after your patches]\n{tool_response_content}"})
-            logger.info("Refine iteration %d: appended assistant recap + user tool-result to thread (now %d turns)",
-                        iteration + 1, len(msgs))
+            logger.debug("Refine iteration %d: appended assistant recap + user tool-result (now %d turns)", iteration + 1, len(msgs))
 
         except Exception as e:
             logger.error("Refine iteration %d failed: %s", iteration + 1, e, exc_info=True)
