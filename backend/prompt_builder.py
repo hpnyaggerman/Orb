@@ -71,8 +71,8 @@ def build_tool_prompt(tool_name: str, user_message: str, active_moods: list[str]
         return ""
     desc = tool["schema"]["function"]["description"]
     parts = [
-        "[OOC] Let's pause to improve the roleplay. Use tool calls to accomplish your task accurately and creatively. Your output will immediately affect how the scenario plays out. Be decisive and avoid overthinking. Think outside the box.",
-        f"ONLY call this tool with extreme focus: '{tool_name}' - {desc}"
+        "<director_mode>Let's pause to improve the roleplay. Use tool calls to accomplish your task accurately and creatively. Your output will immediately affect how the scenario plays out. Be decisive and avoid overthinking. Think outside the box.",
+        f"ONLY call this tool with extreme focus: '{tool_name}' - {desc}</director_mode>"
     ]
     if tool_name == "direct_scene":
         moods = ", ".join(active_moods) or "none"

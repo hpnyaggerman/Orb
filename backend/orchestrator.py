@@ -57,7 +57,22 @@ async def _load_char_context(conv: dict, settings: dict) -> tuple[str, str, str]
 
 # ── Writer pass
 
-async def _writer_pass(client: LLMClient, msgs: list[dict], settings: dict, enabled_tools: dict | None = None, tool_start_token_id: int | None = None) -> AsyncIterator[dict]:
+# Token strings that signal the start of a tool-call block.  If logit_bias
+# suppression fails (wrong ID, unsupported by backend, etc.) and one of these
+# leaks into the writer's output stream, we truncate immediately so the user
+# never sees the raw markup.
+_WRITER_LEAK_MARKERS = {
+    "<|tool_call>",
+    "<|python_tag|>",
+    "[TOOL_CALL]",
+    "<tool_call>",
+    "<function_calls>",
+    "<|tool_calls|>",
+    "<|function_calls|>",
+}
+
+
+async def _writer_pass(client: LLMClient, msgs: list[dict], settings: dict, enabled_tools: dict | None = None, tool_start_token_id: int | None = None) -> AsyncIterator[str]:
     params = {k: v for k in ["temperature", "max_tokens", "top_p", "min_p", "top_k", "repetition_penalty"] if (v := settings.get(k)) is not None}
     schemas = enabled_schemas(enabled_tools)
     logger.info("Writer pass: tools included=%s", json.dumps([s["function"]["name"] for s in schemas]) if schemas else "[]")
@@ -65,7 +80,19 @@ async def _writer_pass(client: LLMClient, msgs: list[dict], settings: dict, enab
     if tool_start_token_id is not None:
         extra["logit_bias"] = {tool_start_token_id: -100}
         logger.info("Writer pass: logit_bias {%d: -100} applied", tool_start_token_id)
+
+    # Rolling tail buffer: most control tokens arrive as a single delta, but we
+    # keep the last 50 chars to catch any that straddle a token boundary.
+    tail = ""
     async for token in client.stream(messages=msgs, model=settings["model_name"], **extra, **params):
+        tail = (tail + token)[-50:]
+        for marker in _WRITER_LEAK_MARKERS:
+            if marker in tail:
+                logger.warning(
+                    "Writer pass: tool-call marker '%s' leaked through suppression — truncating output",
+                    marker,
+                )
+                return
         yield token
 
 
@@ -218,8 +245,8 @@ async def _run_pipeline(
     writer_tail = ""
     if inj_block:
         writer_tail += inj_block + "\n\n"
-    # writer_tail += "[OOC: Tool/Function calling is STRICTLY FORBIDDEN now!]\n\n" + effective_msg + "\n\n"
-    writer_tail += effective_msg + "\n\n"
+    writer_tail += "<banned>Tool/Function calling</banned>\n\n" + effective_msg + "\n\n"
+    # writer_tail += effective_msg + "\n\n"
 
     writer_msgs = prefix + [{"role": "user", "content": writer_tail}]
 

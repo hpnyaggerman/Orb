@@ -167,27 +167,35 @@ class LLMClient:
     async def discover_tool_start_token(self, model: str) -> int | None:
         """Probe the API to discover the integer token ID that starts a tool call.
 
-        Strategy:
-        1. Force a tool call with a dummy tool, generating enough tokens to get
-           past any thinking preamble and into the actual tool call.
-        2. Scan all generated logprob tokens for a known tool-call start pattern
-           OR for a special token immediately followed by "call" / "{".
-        3. Resolve to an integer ID from the logprobs "id" field or via /tokenize.
+        Two-stage strategy:
+        1. Non-streaming probe (reasoning disabled) — scan all logprob tokens via
+           exact match against KNOWN_TOOL_STARTS and a structural heuristic.
+           If logprobs are empty but a tool call still happened, brute-force
+           the known list via /tokenize.
+        2. Streaming probe fallback — some backends surface raw control tokens as
+           content deltas in streaming mode even when non-streaming collapses them
+           into the tool_calls object.
 
-        Returns the token ID, or None if discovery fails or the model doesn't use
-        a dedicated control token (e.g. it emits raw JSON without a special marker).
+        Returns the validated token ID, or None if discovery fails or the model
+        doesn't use a dedicated control token.
         """
+        import re
+
         # Known tool-call start token strings across common model families.
-        # Checked by exact match against the logprobs token strings.
         KNOWN_TOOL_STARTS = {
-            "<|tool_call>",       # Gemma 4 (stc_token)
-            "<|python_tag|>",     # Llama / Code-Llama family
+            "<|tool_call>",       # Gemma 4  (stc_token)
+            "<|python_tag|>",     # Llama / Code-Llama
             "[TOOL_CALL]",        # Mistral
             "<tool_call>",        # Various open models
             "<function_calls>",   # Some fine-tunes
             "<|tool_calls|>",
             "<|function_calls|>",
         }
+
+        # Matches well-formed control tokens only:
+        #   <|...|>  <|...>  [...] (all-caps/underscore word inside brackets)
+        # Rejects generic subwords, whitespace sequences, code fences, etc.
+        _CONTROL_RE = re.compile(r'^(<\|.+\|?>|\[[A-Z_]+\])$')
 
         dummy_tool = {
             "type": "function",
@@ -197,101 +205,167 @@ class LLMClient:
                 "parameters": {"type": "object", "properties": {}},
             },
         }
-        # Use enough tokens to get through a thinking preamble before the tool call.
-        body = {
+        probe_messages = [{"role": "user", "content": "Call the dummy tool now."}]
+        probe_base = {
             "model": model,
-            "messages": [{"role": "user", "content": "Call the dummy tool now."}],
+            "messages": probe_messages,
             "tools": [dummy_tool],
             "tool_choice": "required",
             "max_tokens": 150,
-            "stream": False,
             "logprobs": True,
             "top_logprobs": 1,
+            # Item 1: disable reasoning so thinking tokens don't consume the budget
+            # before the model reaches the tool-call control token.
+            "reasoning": {"enabled": False},
         }
 
-        logger.info("discover_tool_start_token: probing model=%s", model)
-        try:
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                resp = await client.post(self._url(), json=body, headers=self._headers())
-                if resp.status_code != 200:
-                    logger.warning("discover_tool_start_token: probe returned HTTP %d", resp.status_code)
-                    return None
-                data = resp.json()
-        except Exception as e:
-            logger.warning("discover_tool_start_token: probe request failed: %s", e)
-            return None
-
-        entries: list[dict] = []
-        try:
-            lp = data["choices"][0].get("logprobs") or {}
-            entries = lp.get("content") or []
-        except (KeyError, IndexError, TypeError):
-            pass
-
-        if not entries:
-            logger.info("discover_tool_start_token: no logprobs content in response")
-            return None
-
         def _entry_id(entry: dict) -> int | None:
-            # llama.cpp uses "id"; others use "token_id" or "token_ids"
+            """Extract integer token ID from a logprob entry (field name varies by server)."""
             raw = entry.get("id") or entry.get("token_id") or (entry.get("token_ids") or [None])[0]
             return int(raw) if raw is not None else None
 
-        # Pass 1: exact match against known tool-call start tokens
-        for entry in entries:
-            if entry.get("token") in KNOWN_TOOL_STARTS:
-                tid = _entry_id(entry)
-                if tid is not None:
-                    logger.info(
-                        "discover_tool_start_token: matched known pattern '%s' -> %d",
-                        entry["token"], tid,
-                    )
-                    return tid
-                # ID missing from logprobs; try /tokenize
-                tid = await self._tokenize_string(model, entry["token"])
-                if tid is not None:
-                    logger.info(
-                        "discover_tool_start_token: matched known pattern '%s' -> %d (via /tokenize)",
-                        entry["token"], tid,
-                    )
-                    return tid
+        async def _resolve(token_str: str, lp_id: int | None) -> int | None:
+            """Validate a token string/ID pair; return a confirmed integer ID or None.
 
-        # Pass 2: structural heuristic — special token immediately followed by
-        # "call" or "{" (covers formats we don't have in the known list yet)
-        import string as _string
-        for i, entry in enumerate(entries[:-1]):
-            token_str = entry.get("token", "")
-            next_str = entries[i + 1].get("token", "")
-            is_special = token_str and not (len(token_str) == 1 and (token_str.isalnum() or token_str in _string.punctuation))
-            follows_call = next_str.lstrip().startswith(("call", "{"))
-            if is_special and follows_call:
-                tid = _entry_id(entry)
-                if tid is None:
-                    tid = await self._tokenize_string(model, token_str)
-                if tid is not None:
-                    logger.info(
-                        "discover_tool_start_token: heuristic match '%s' -> %d",
-                        token_str, tid,
+            Prefers /tokenize as the authoritative source (item 7). Warns on
+            mismatches and on suspiciously low IDs (item 8) but does not discard —
+            Gemma 4's <|tool_call> is ID 48, well below common thresholds.
+            """
+            tok_id = await self._tokenize_string(model, token_str)
+            if tok_id is not None:
+                if lp_id is not None and tok_id != lp_id:
+                    logger.warning(
+                        "discover_tool_start_token: ID mismatch for '%s': logprobs=%d /tokenize=%d — using /tokenize",
+                        token_str, lp_id, tok_id,
                     )
-                    return tid
+                if tok_id < 100:
+                    logger.warning(
+                        "discover_tool_start_token: '%s' has low ID %d — confirm it's not a structural token",
+                        token_str, tok_id,
+                    )
+                return tok_id
+            # /tokenize unavailable; trust the logprobs ID
+            if lp_id is not None:
+                if lp_id < 100:
+                    logger.warning(
+                        "discover_tool_start_token: '%s' has low ID %d — confirm it's not a structural token",
+                        token_str, lp_id,
+                    )
+                return lp_id
+            return None
 
-        # Pass 3: fallback — the very first non-generic special token, for
-        # models that don't think before calling tools
-        for entry in entries:
-            token_str = entry.get("token", "")
-            if not token_str:
-                continue
-            if len(token_str) == 1 and (token_str.isalnum() or token_str in _string.punctuation):
-                continue
-            tid = _entry_id(entry) or await self._tokenize_string(model, token_str)
-            if tid is not None:
-                logger.info(
-                    "discover_tool_start_token: fallback first special token '%s' -> %d",
-                    token_str, tid,
-                )
-                return tid
+        def _scan_entries(entries: list[dict]) -> tuple[str, int | None] | None:
+            """Run Pass 1 (exact match + top_logprobs) and Pass 2 (structural heuristic)
+            over a list of logprob entries. Returns (token_str, lp_id) on first hit."""
+            # Pass 1: exact match in chosen token AND top_logprobs alternatives (item 5)
+            for entry in entries:
+                for candidate in [entry] + (entry.get("top_logprobs") or []):
+                    ts = candidate.get("token")
+                    if ts in KNOWN_TOOL_STARTS:
+                        return ts, _entry_id(candidate)
 
-        logger.info("discover_tool_start_token: no usable tool-call token found in %d logprob entries", len(entries))
+            # Pass 2: structural heuristic — control-token regex immediately followed
+            # by "call" or "{" in the next chosen token (item 4: tightened is_special)
+            for i, entry in enumerate(entries[:-1]):
+                ts = entry.get("token", "")
+                next_ts = entries[i + 1].get("token", "")
+                if _CONTROL_RE.match(ts) and next_ts.lstrip().startswith(("call", "{")):
+                    return ts, _entry_id(entry)
+
+            return None
+
+        # ── Non-streaming probe ─────────────────────────────────────────────────
+        logger.info("discover_tool_start_token: non-streaming probe model=%s", model)
+        ns_data: dict | None = None
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as http:
+                r = await http.post(self._url(), json={**probe_base, "stream": False}, headers=self._headers())
+                if r.status_code == 200:
+                    ns_data = r.json()
+                else:
+                    logger.warning("discover_tool_start_token: non-streaming probe HTTP %d", r.status_code)
+        except Exception as e:
+            logger.warning("discover_tool_start_token: non-streaming probe error: %s", e)
+
+        if ns_data:
+            choice = (ns_data.get("choices") or [{}])[0]
+            lp_entries: list[dict] = (choice.get("logprobs") or {}).get("content") or []
+            has_tool_calls = bool((choice.get("message") or {}).get("tool_calls"))
+
+            hit = _scan_entries(lp_entries)
+            if hit:
+                ts, lp_id = hit
+                result = await _resolve(ts, lp_id)
+                if result is not None:
+                    logger.info("discover_tool_start_token: non-streaming scan '%s' -> %d", ts, result)
+                    return result
+
+            # Item 6: logprobs missed the token but the response has a tool_calls object
+            # → brute-force tokenize each known string to find which one this model uses.
+            if has_tool_calls and not lp_entries:
+                logger.info("discover_tool_start_token: tool_calls present but logprobs empty — brute-forcing known list")
+                for known_str in KNOWN_TOOL_STARTS:
+                    tid = await self._tokenize_string(model, known_str)
+                    if tid is not None:
+                        logger.info("discover_tool_start_token: brute-force '%s' -> %d", known_str, tid)
+                        return tid
+
+        # ── Streaming probe fallback (item 2) ───────────────────────────────────
+        # Some backends emit raw control tokens as content deltas in streaming mode
+        # even when non-streaming collapses them into the tool_calls structure.
+        logger.info("discover_tool_start_token: falling back to streaming probe model=%s", model)
+        try:
+            async with httpx.AsyncClient(timeout=60.0) as http:
+                async with http.stream(
+                    "POST", self._url(),
+                    json={**probe_base, "stream": True},
+                    headers=self._headers(),
+                ) as r:
+                    r.raise_for_status()
+                    stream_entries: list[dict] = []
+                    async for line in r.aiter_lines():
+                        if not line.startswith("data: "):
+                            continue
+                        payload = line[6:].strip()
+                        if payload == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(payload)
+                            delta = chunk["choices"][0].get("delta", {})
+                            content = delta.get("content") or ""
+                            chunk_entries: list[dict] = (chunk["choices"][0].get("logprobs") or {}).get("content") or []
+
+                            # Quick check: raw content delta matches a known start token
+                            if content in KNOWN_TOOL_STARTS:
+                                lp_id = _entry_id(chunk_entries[0]) if chunk_entries else None
+                                result = await _resolve(content, lp_id)
+                                if result is not None:
+                                    logger.info(
+                                        "discover_tool_start_token: streaming delta '%s' -> %d",
+                                        content, result,
+                                    )
+                                    return result
+
+                            stream_entries.extend(chunk_entries)
+                        except (json.JSONDecodeError, KeyError, IndexError):
+                            continue
+
+                    # After streaming completes, run the same two-pass scan over
+                    # all accumulated logprob entries from the stream.
+                    hit = _scan_entries(stream_entries)
+                    if hit:
+                        ts, lp_id = hit
+                        result = await _resolve(ts, lp_id)
+                        if result is not None:
+                            logger.info(
+                                "discover_tool_start_token: streaming scan '%s' -> %d",
+                                ts, result,
+                            )
+                            return result
+        except Exception as e:
+            logger.warning("discover_tool_start_token: streaming probe error: %s", e)
+
+        logger.info("discover_tool_start_token: discovery failed, returning None")
         return None
 
 
