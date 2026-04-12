@@ -174,9 +174,19 @@ async def _run_pipeline(
             yield {"event": "prompt_rewritten", "data": {"refined_message": refined_msg}}
 
     # Style injection
-    deactivated = [f for f in fragments if f["id"] in (set(director["active_moods"]) - set(active_moods))]
-    active = [f for f in fragments if f["id"] in active_moods]
-    inj_block = build_style_injection(active, deactivated, plot_direction, writing_direction, detected_repetitions, plot_summary, keywords) if (active or deactivated or plot_direction or writing_direction or detected_repetitions or plot_summary or keywords) else ""
+    # Only use stored moods/keywords when direct_scene is enabled; otherwise
+    # the previous turn's director state would bleed into <current_scene_direction>
+    # even though the director tool has been disabled.
+    direct_scene_enabled = agent_on and bool(enabled_tools.get("direct_scene", False))
+    if direct_scene_enabled:
+        inj_active_moods = active_moods
+        inj_keywords = keywords
+    else:
+        inj_active_moods = []
+        inj_keywords = []
+    deactivated = [f for f in fragments if f["id"] in (set(director["active_moods"]) - set(inj_active_moods))] if direct_scene_enabled else []
+    active = [f for f in fragments if f["id"] in inj_active_moods]
+    inj_block = build_style_injection(active, deactivated, plot_direction, writing_direction, detected_repetitions, plot_summary, inj_keywords) if (active or deactivated or plot_direction or writing_direction or detected_repetitions or plot_summary or inj_keywords) else ""
 
     yield {"event": "director_done", "data": {
         "active_moods": active_moods, "injection_block": inj_block, "tool_calls": calls,
