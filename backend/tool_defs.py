@@ -30,7 +30,7 @@ AGENT_TOOLS = [{
                 },
                 "plot_direction": {
                     "type": "string",
-                    "description": "What happens next in the story — events, actions, reveals, turns of fate (e.g. 'she continues to bear down in a squatting position', 'the attack tears off a chunk of her clothing and she frantically tries to cover herself', 'Jack can tell she's lying and calls her out it because they have been friends forever', 'she pretends not to know what Vodka is to keep up the innocent act but he sees right through it', 'he makes fun of the Batman's dead parents and it does not go well for him'). Keep to one short sentence.",
+                    "description": "What happens next in the story — events, actions, reveals, turns of fate (e.g. 'she continues to bear down in a squatting position', 'the attack tears off a chunk of her clothing and she frantically tries to cover herself', 'Jack can tell she's lying and calls her out it because they have been friends forever', 'she pretends not to know what Vodka is to keep up the innocent act but he sees right through it', 'he shifts focus to something else entirely while deciding to be more physical'). Keep to one short sentence.",
                 },
                 "writing_direction": {
                     "type": "string",
