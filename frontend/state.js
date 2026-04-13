@@ -25,4 +25,9 @@ export const S = {
   _selectCharLock: false,
   generationPhase: null,
   hideStreamingBox: false,
+  reasoningDirector: "",
+  reasoningWriter: "",
+  reasoningRefiner: "",
+  reasoningPassActive: 0,
+  reasoningOpen: true,
 };

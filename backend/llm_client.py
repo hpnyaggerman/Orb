@@ -28,12 +28,17 @@ class LLMClient:
         tools: list[dict] | None = None,
         tool_choice: str | None = None,
         **params,
-    ) -> dict:
-        """Non-streaming completion. Used for the agent pass."""
+    ) -> AsyncIterator[dict]:
+        """Streaming completion. Yields reasoning deltas then the assembled message.
+
+        Yields:
+            {"type": "reasoning", "delta": str}  — zero or more reasoning chunks
+            {"type": "done", "message": dict}    — assembled message with content/tool_calls
+        """
         body = {
             "model": model,
             "messages": messages,
-            "stream": False,
+            "stream": True,
             "reasoning": {"effort": "low", "enabled": True},
             **params,
         }
@@ -46,37 +51,85 @@ class LLMClient:
                      model,
                      json.dumps([t["function"]["name"] for t in tools]) if tools else "None",
                      tool_choice)
-        
         logger.info(messages)
 
+        content_parts: list[str] = []
+        reasoning_parts: list[str] = []
+        tool_calls_acc: dict[int, dict] = {}
+        finish_reason: str | None = None
+
         async with httpx.AsyncClient(timeout=self.timeout) as client:
-            resp = await client.post(self._url(), json=body, headers=self._headers())
-            resp.raise_for_status()
-            data = resp.json()
+            async with client.stream("POST", self._url(), json=body, headers=self._headers()) as resp:
+                resp.raise_for_status()
+                async for line in resp.aiter_lines():
+                    if not line.startswith("data: "):
+                        continue
+                    payload = line[6:].strip()
+                    if payload == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(payload)
+                        choice = chunk["choices"][0]
+                        delta = choice.get("delta", {})
 
-        # Log raw structure before accessing keys that may not exist
-        logger.info("LLM complete: status=%d, keys=%s", resp.status_code, list(data.keys()) if isinstance(data, dict) else type(data).__name__)
-        if "choices" not in data:
-            logger.error("LLM complete: response missing 'choices' key. Full keys: %s. Body (first 1000): %s",
-                         list(data.keys()) if isinstance(data, dict) else "N/A", str(data)[:1000])
-            raise KeyError(f"LLM response missing 'choices'. Keys: {list(data.keys()) if isinstance(data, dict) else type(data).__name__}")
-        if not data["choices"]:
-            logger.error("LLM complete: 'choices' is empty. Body (first 1000): %s", str(data)[:1000])
-            raise ValueError("LLM response has empty 'choices' array")
+                        # Reasoning delta (field name varies by server)
+                        rc = delta.get("reasoning_content") or delta.get("reasoning")
+                        if rc:
+                            reasoning_parts.append(rc)
+                            yield {"type": "reasoning", "delta": rc}
 
-        choice = data["choices"][0]
-        logger.info("LLM complete: choice keys=%s, finish_reason=%s", list(choice.keys()), choice.get("finish_reason"))
+                        # Content delta
+                        c = delta.get("content")
+                        if c:
+                            content_parts.append(c)
 
-        if "message" not in choice:
-            logger.error("LLM complete: choice missing 'message' key. Choice keys: %s. Choice (first 1000): %s",
-                         list(choice.keys()), str(choice)[:1000])
-            raise KeyError(f"LLM choice missing 'message'. Keys: {list(choice.keys())}")
+                        # Tool call argument deltas — accumulate by index
+                        for tc_delta in (delta.get("tool_calls") or []):
+                            idx = tc_delta.get("index", 0)
+                            if idx not in tool_calls_acc:
+                                tool_calls_acc[idx] = {
+                                    "id": "", "type": "function",
+                                    "function": {"name": "", "arguments": ""},
+                                }
+                            entry = tool_calls_acc[idx]
+                            if tc_delta.get("id"):
+                                entry["id"] = tc_delta["id"]
+                            fn = tc_delta.get("function", {})
+                            if fn.get("name"):
+                                entry["function"]["name"] += fn["name"]
+                            if fn.get("arguments"):
+                                entry["function"]["arguments"] += fn["arguments"]
 
-        message = choice["message"]
-        logger.info("LLM complete: message keys=%s, has_tool_calls=%s, content_len=%s",
+                        if choice.get("finish_reason"):
+                            finish_reason = choice["finish_reason"]
+
+                    except (json.JSONDecodeError, KeyError, IndexError):
+                        continue
+
+        # Assemble the final message dict (mirrors the non-streaming message format)
+        message: dict = {}
+        content = "".join(content_parts)
+        if content:
+            message["content"] = content
+        reasoning = "".join(reasoning_parts)
+        if reasoning:
+            message["reasoning_content"] = reasoning
+        if tool_calls_acc:
+            message["tool_calls"] = [
+                {
+                    "id": v["id"],
+                    "type": "function",
+                    "function": {"name": v["function"]["name"], "arguments": v["function"]["arguments"]},
+                }
+                for v in (tool_calls_acc[k] for k in sorted(tool_calls_acc))
+            ]
+        if finish_reason:
+            message["finish_reason"] = finish_reason
+
+        logger.info("LLM complete: assembled keys=%s, has_tool_calls=%s, content_len=%s",
                      list(message.keys()), "tool_calls" in message,
                      len(message.get("content", "") or "") if message.get("content") else "null")
-        return message
+        yield {"type": "done", "message": message}
 
     async def stream(
         self,
@@ -86,13 +139,18 @@ class LLMClient:
         tool_choice: str | None = None,
         logit_bias: dict | None = None,
         **params,
-    ) -> AsyncIterator[str]:
-        """Streaming completion. Yields content deltas."""
+    ) -> AsyncIterator[dict]:
+        """Streaming completion. Yields content and reasoning dicts.
+
+        Yields:
+            {"type": "content",   "delta": str}
+            {"type": "reasoning", "delta": str}
+        """
         body = {
             "model": model,
             "messages": messages,
             "stream": True,
-            "reasoning": {"enabled": False},
+            "reasoning": {"effort": "low", "enabled": True},
             **params,
         }
         if tools:
@@ -106,7 +164,6 @@ class LLMClient:
                      model,
                      json.dumps([t["function"]["name"] for t in tools]) if tools else "None",
                      tool_choice)
-
         logger.info(messages)
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:
@@ -121,9 +178,12 @@ class LLMClient:
                     try:
                         chunk = json.loads(payload)
                         delta = chunk["choices"][0].get("delta", {})
+                        rc = delta.get("reasoning_content") or delta.get("reasoning")
+                        if rc:
+                            yield {"type": "reasoning", "delta": rc}
                         content = delta.get("content")
                         if content:
-                            yield content
+                            yield {"type": "content", "delta": content}
                     except (json.JSONDecodeError, KeyError, IndexError):
                         continue
 

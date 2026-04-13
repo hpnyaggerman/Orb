@@ -191,10 +191,12 @@ async def refine_pass(
     audit_enabled: bool = True,
     length_guard: dict | None = None,
     enabled_tools: dict | None = None,
-) -> tuple[str | None, str, int]:
+) -> AsyncIterator[dict]:
     """ReAct-style refinement loop with optional audit and/or length guard.
 
-    Returns (refined_draft_or_None, debug_log, latency_ms).
+    Yields:
+        {"type": "reasoning", "delta": str}                      — reasoning chunks per iteration
+        {"type": "done", "draft": str|None, "debug": str, "elapsed": int}
     """
     t0 = time.monotonic()
     debug_parts: list[str] = []
@@ -250,11 +252,13 @@ async def refine_pass(
 
     if report.is_clean and not length_guard_triggered:
         logger.info("Refine: audit clean and no length guard, skipping LLM loop")
-        return None, "\n---\n".join(debug_parts), int((time.monotonic() - t0) * 1000)
+        yield {"type": "done", "draft": None, "debug": "\n---\n".join(debug_parts), "elapsed": int((time.monotonic() - t0) * 1000)}
+        return
 
     if not refine_tools:
         logger.info("Refine: no refine tools applicable, skipping LLM loop")
-        return None, "\n---\n".join(debug_parts), int((time.monotonic() - t0) * 1000)
+        yield {"type": "done", "draft": None, "debug": "\n---\n".join(debug_parts), "elapsed": int((time.monotonic() - t0) * 1000)}
+        return
 
     # ── Build message context
     final_prompt = _build_refine_prompt(
@@ -279,8 +283,9 @@ async def refine_pass(
             if reasoning_config:
                 logger.info("Refine iteration %d: reasoning disabled", iteration + 1)
 
+            resp: dict = {}
             try:
-                resp = await client.complete(
+                async for event in client.complete(
                     messages=msgs,
                     model=settings["model_name"],
                     tools=refine_tools,
@@ -288,7 +293,11 @@ async def refine_pass(
                     temperature=0.25,
                     max_tokens=8192,
                     **({"reasoning": reasoning_config} if reasoning_config else {}),
-                )
+                ):
+                    if event["type"] == "reasoning":
+                        yield {"type": "reasoning", "delta": event["delta"]}
+                    elif event["type"] == "done":
+                        resp = event["message"]
             except Exception as llm_err:
                 logger.error("Refine iteration %d: client.complete() raised %s: %s",
                              iteration + 1, type(llm_err).__name__, llm_err, exc_info=True)
@@ -382,7 +391,7 @@ async def refine_pass(
     elapsed = int((time.monotonic() - t0) * 1000)
     changed = current_draft != draft
     logger.info("Refine: done in %dms, changed=%s, final_draft=%d chars", elapsed, changed, len(current_draft))
-    return (current_draft if changed else None), "\n---\n".join(debug_parts), elapsed
+    yield {"type": "done", "draft": current_draft if changed else None, "debug": "\n---\n".join(debug_parts), "elapsed": elapsed}
 
 
 # ── Helpers (private)

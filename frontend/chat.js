@@ -501,6 +501,12 @@ async function processSSEStream(resp, container, msgDiv, signal) {
   const decoder = new TextDecoder();
   let buffer = '', fullResponse = '', rewrittenResponse = null, firstToken = true, currentEvent = null;
 
+  // Reset reasoning state for this generation turn
+  S.reasoningDirector = "";
+  S.reasoningWriter   = "";
+  S.reasoningRefiner  = "";
+  S.reasoningPassActive = 0;
+
   if (signal) signal.addEventListener('abort', () => reader.cancel());
 
   while (true) {
@@ -548,7 +554,9 @@ function handleSSEEvent(event, data, container, msgDiv, onToken, onRewrite) {
       renderInspector();
       break;
     case 'director_done': {
-      try { S.lastDirectorData = JSON.parse(data); renderInspector(); } catch (_) {}
+      try { S.lastDirectorData = JSON.parse(data); } catch (_) {}
+      _advanceReasoningPass(1); // director done → move to Writer dot
+      renderInspector();
       break;
     }
     case 'prompt_rewritten':
@@ -574,8 +582,33 @@ function handleSSEEvent(event, data, container, msgDiv, onToken, onRewrite) {
     case 'writer_rewrite':
       clearRefineTimer();
       setGenerationPhase('refining');
+      _advanceReasoningPass(2); // writer done, refiner starting → move to Refiner dot
       try { onRewrite(JSON.parse(data).refined_text); } catch (_) {}
       break;
+    case 'reasoning': {
+      try {
+        const d = JSON.parse(data);
+        const passKey  = d.pass; // "director" | "writer" | "refiner"
+        const delta    = d.delta;
+        const stateKey = 'reasoning' + passKey.charAt(0).toUpperCase() + passKey.slice(1);
+        S[stateKey] = (S[stateKey] || '') + delta;
+
+        // Advance the dot if this token is from a later pass than currently shown
+        _advanceReasoningPass(REASONING_PASSES.findIndex(p => p.key === passKey));
+
+        let box = document.getElementById('reasoning-box');
+        if (!box) {
+          // Box not in DOM yet — bootstrap via renderInspector, then write full accumulated text
+          renderInspector();
+          box = document.getElementById('reasoning-box');
+          if (box) { box.textContent = S[stateKey]; box.scrollTop = box.scrollHeight; }
+        } else {
+          box.textContent += delta;
+          box.scrollTop = box.scrollHeight;
+        }
+      } catch (_) {}
+      break;
+    }
     case 'error':
       toast('Error: ' + data, true);
       break;
@@ -661,15 +694,90 @@ export async function regenerate(msgId) {
   await afterStream();
 }
 
+// ── Inspector — Reasoning stepper rail
+
+const REASONING_PASSES = [
+  { key: 'director', label: 'Director', color: '#E8712A' },
+  { key: 'writer',   label: 'Writer',   color: '#2A8FE8' },
+  { key: 'refiner',  label: 'Refiner',  color: '#2ABE6C' },
+];
+
+// Advance the active stepper dot to `targetIdx` only if it's further ahead.
+// Updates the DOM if the section already exists; renderInspector() handles it
+// when the section is being built fresh.
+function _advanceReasoningPass(targetIdx) {
+  if (targetIdx <= S.reasoningPassActive) return;
+  S.reasoningPassActive = targetIdx;
+  const existing = document.getElementById('reasoning-section');
+  if (existing) _refreshReasoningSection();
+}
+
+function _buildReasoningHtml() {
+  const hasAny = S.reasoningDirector || S.reasoningWriter || S.reasoningRefiner;
+  if (!hasAny) return '';
+
+  const activeIdx = S.reasoningPassActive;
+  const dotsHtml = REASONING_PASSES.map((p, i) => {
+    const hasText = !!S['reasoning' + p.key.charAt(0).toUpperCase() + p.key.slice(1)];
+    const isActive = i === activeIdx;
+    const lit = hasText || isActive;
+    const dotStyle = [
+      `background:${lit ? p.color : 'var(--bg-elevated)'}`,
+      `color:${lit ? '#fff' : 'var(--text-muted)'}`,
+      `border:2px solid ${lit ? p.color : 'var(--border)'}`,
+    ].join(';');
+    const lineColor = i < activeIdx ? REASONING_PASSES[i + 1].color : 'var(--border)';
+    return `<button class="reasoning-dot" onclick="selectReasoningPass(${i})" style="${dotStyle}">${i + 1}</button>`
+      + (i < 2 ? `<div class="reasoning-rail-line" style="background:${lineColor}"></div>` : '');
+  }).join('');
+
+  const activePass = REASONING_PASSES[activeIdx];
+  const currentText = S['reasoning' + activePass.key.charAt(0).toUpperCase() + activePass.key.slice(1)] || '';
+  const openAttr = S.reasoningOpen ? ' open' : '';
+
+  return `<details class="inspector-block reasoning-section" id="reasoning-section"${openAttr} ontoggle="S.reasoningOpen=this.open">
+    <summary class="reasoning-summary">
+      <span class="reasoning-summary-arrow">▶</span>
+      <h4 style="margin:0;display:inline">Reasoning</h4>
+    </summary>
+    <div style="margin-top:8px">
+      <div class="reasoning-stepper">
+        ${dotsHtml}
+        <span class="reasoning-pass-label">${esc(activePass.label)}</span>
+      </div>
+      <div class="reasoning-box" id="reasoning-box">${esc(currentText)}</div>
+    </div>
+  </details>`;
+}
+
+function _refreshReasoningSection() {
+  const existing = document.getElementById('reasoning-section');
+  if (!existing) return;
+  const html = _buildReasoningHtml();
+  if (!html) { existing.remove(); return; }
+  existing.outerHTML = html;
+  // Auto-scroll the newly rendered box to bottom
+  const box = document.getElementById('reasoning-box');
+  if (box) box.scrollTop = box.scrollHeight;
+}
+
+export function selectReasoningPass(idx) {
+  S.reasoningPassActive = idx;
+  _refreshReasoningSection();
+}
+
 // ── Inspector
 export function toggleInspector() { $('inspector').classList.toggle('open'); }
 
 export function renderInspector() {
   if (S.isStreaming && S.lastDirectorData === null) {
     $('inspector-content').innerHTML =
-      `<div style="color:var(--text-muted);font-size:12px;display:flex;align-items:center;gap:8px">
+      `${_buildReasoningHtml()}
+       <div style="color:var(--text-muted);font-size:12px;display:flex;align-items:center;gap:8px">
          <span class="typing-indicator"><span></span><span></span><span></span></span> Director thinking…
        </div>`;
+    const _rb = document.getElementById('reasoning-box');
+    if (_rb) _rb.scrollTop = _rb.scrollHeight;
     return;
   }
   
@@ -697,6 +805,7 @@ export function renderInspector() {
   const tc  = ld.tool_calls || [];
   const inj = ld.injection_block || '';
   $('inspector-content').innerHTML = `
+    ${_buildReasoningHtml()}
     <div class="inspector-block"><h4>Active Moods</h4>
       <div>${stylesHtml || '<span style="color:var(--text-muted);font-size:12px">None</span>'}</div>
     </div>
@@ -706,4 +815,7 @@ export function renderInspector() {
                     <div class="injection-box">${esc(JSON.stringify(tc, null, 2))}</div></div>` : ''}
     ${inj ? `<div class="inspector-block"><h4>Injection Block</h4>
                <div class="injection-box">${esc(inj)}</div></div>` : ''}`;
+  // Scroll the freshly rendered reasoning box to bottom
+  const _rb = document.getElementById('reasoning-box');
+  if (_rb) _rb.scrollTop = _rb.scrollHeight;
 }

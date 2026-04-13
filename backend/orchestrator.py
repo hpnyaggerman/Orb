@@ -72,7 +72,8 @@ _WRITER_LEAK_MARKERS = {
 }
 
 
-async def _writer_pass(client: LLMClient, msgs: list[dict], settings: dict, enabled_tools: dict | None = None, tool_start_token_id: int | None = None) -> AsyncIterator[str]:
+async def _writer_pass(client: LLMClient, msgs: list[dict], settings: dict, enabled_tools: dict | None = None, tool_start_token_id: int | None = None) -> AsyncIterator[dict]:
+    """Yields {"type": "content"|"reasoning", "delta": str} dicts."""
     params = {k: v for k in ["temperature", "max_tokens", "top_p", "min_p", "top_k", "repetition_penalty"] if (v := settings.get(k)) is not None}
     schemas = enabled_schemas(enabled_tools)
     # Only include tool schemas when we have a confirmed suppression token.
@@ -88,16 +89,17 @@ async def _writer_pass(client: LLMClient, msgs: list[dict], settings: dict, enab
 
     # Rolling tail buffer: most control tokens arrive as a single delta, but we keep the last 50 chars to catch any that straddle a token boundary.
     tail = ""
-    async for token in client.stream(messages=msgs, model=settings["model_name"], **extra, **params):
-        tail = (tail + token)[-50:]
-        for marker in _WRITER_LEAK_MARKERS:
-            if marker in tail:
-                logger.warning(
-                    "Writer pass: tool-call marker '%s' leaked through suppression — truncating output",
-                    marker,
-                )
-                return
-        yield token
+    async for item in client.stream(messages=msgs, model=settings["model_name"], **extra, **params):
+        if item["type"] == "content":
+            tail = (tail + item["delta"])[-50:]
+            for marker in _WRITER_LEAK_MARKERS:
+                if marker in tail:
+                    logger.warning(
+                        "Writer pass: tool-call marker '%s' leaked through suppression — truncating output",
+                        marker,
+                    )
+                    return
+        yield item
 
 
 # ── Agent pass
@@ -105,7 +107,13 @@ async def _writer_pass(client: LLMClient, msgs: list[dict], settings: dict, enab
 async def _agent_pass(
     client: LLMClient, prefix: list[dict], user_message: str, settings: dict,
     director: dict, fragments: list[dict], enabled_tools: dict | None = None
-) -> tuple[list[str], str, list, int, str | None, str | None, str | None, list[str] | None, str | None, list[str] | None]:
+) -> AsyncIterator[dict]:
+    """Yields reasoning dicts during each tool call, then a single done dict.
+
+    Yields:
+        {"type": "reasoning", "delta": str}   — zero or more reasoning chunks
+        {"type": "done", "result": tuple}     — final (moods, raw, calls, latency, ...)
+    """
     active_moods = director["active_moods"]
     refined_msg, plot_direction, writing_direction, detected_repetitions, plot_summary = None, None, None, None, None
     keywords = director.get("keywords", [])
@@ -121,7 +129,8 @@ async def _agent_pass(
         priority_order = ["rewrite_user_prompt", "direct_scene"]
         tool_names.sort(key=lambda x: priority_order.index(x) if x in priority_order else len(priority_order))
     if not tool_names:
-        return active_moods, "", [], 0, None, None, None, None, None, None
+        yield {"type": "done", "result": (active_moods, "", [], 0, None, None, None, None, None, None)}
+        return
 
     tool_schemas = enabled_schemas(enabled_tools)
     logger.info("Director pass: tools included=%s", json.dumps([s["function"]["name"] for s in tool_schemas]) if tool_schemas else "[]")
@@ -130,13 +139,18 @@ async def _agent_pass(
     for name in tool_names:
         msgs = prefix + [{"role": "user", "content": build_tool_prompt(name, user_message, active_moods, fragments)}]
         logger.info("Agent tool=%s prompt:\n%s", name, json.dumps(msgs, indent=2, ensure_ascii=False))
+        resp: dict = {}
         try:
             reasoning_config = reasoning_config_for_tool(name)
-            resp = await client.complete(
+            async for event in client.complete(
                 messages=msgs, model=settings["model_name"], tools=tool_schemas,
                 tool_choice=TOOLS[name]["choice"], temperature=0.25, max_tokens=8192,
                 **({"reasoning": reasoning_config} if reasoning_config else {}),
-            )
+            ):
+                if event["type"] == "reasoning":
+                    yield {"type": "reasoning", "delta": event["delta"]}
+                elif event["type"] == "done":
+                    resp = event["message"]
             last_raw = json.dumps(resp, default=str)
             logger.info("Agent tool=%s output:\n%s", name, last_raw)
             if parsed := parse_tool_calls(resp):
@@ -160,7 +174,7 @@ async def _agent_pass(
             logger.error("Agent tool=%s failed: %s", name, e)
             last_raw = f"ERROR: {e}"
 
-    return active_moods, last_raw, all_calls, int((time.monotonic() - t0) * 1000), refined_msg, plot_direction, writing_direction, detected_repetitions, plot_summary, keywords
+    yield {"type": "done", "result": (active_moods, last_raw, all_calls, int((time.monotonic() - t0) * 1000), refined_msg, plot_direction, writing_direction, detected_repetitions, plot_summary, keywords)}
 
 
 # ── Core pipeline
@@ -206,9 +220,11 @@ async def _run_pipeline(
     has_pre_writer_tools = any(enabled_tools.get(n, False) for n in TOOLS if n not in POST_WRITER_TOOLS)
     if agent_on and has_pre_writer_tools:
         yield {"event": "director_start"}
-        active_moods, agent_raw, calls, latency, refined_msg, plot_direction, writing_direction, detected_repetitions, plot_summary, keywords = await _agent_pass(
-            client, prefix, user_message, settings, director, fragments, enabled_tools
-        )
+        async for event in _agent_pass(client, prefix, user_message, settings, director, fragments, enabled_tools):
+            if event["type"] == "reasoning":
+                yield {"event": "reasoning", "data": {"pass": "director", "delta": event["delta"]}}
+            elif event["type"] == "done":
+                active_moods, agent_raw, calls, latency, refined_msg, plot_direction, writing_direction, detected_repetitions, plot_summary, keywords = event["result"]
         if refined_msg:
             effective_msg = refined_msg
             yield {"event": "prompt_rewritten", "data": {"refined_message": refined_msg}}
@@ -262,9 +278,12 @@ async def _run_pipeline(
     writer_msgs = prefix + [{"role": "user", "content": writer_tail}]
 
     resp_text = ""
-    async for token in _writer_pass(client, writer_msgs, settings, enabled_tools, tool_start_token_id):
-        resp_text += token
-        yield {"event": "token", "data": token}
+    async for item in _writer_pass(client, writer_msgs, settings, enabled_tools, tool_start_token_id):
+        if item["type"] == "reasoning":
+            yield {"event": "reasoning", "data": {"pass": "writer", "delta": item["delta"]}}
+        else:
+            resp_text += item["delta"]
+            yield {"event": "token", "data": item["delta"]}
 
     yield {"event": "_result", "data": {
         "active_moods": active_moods, "agent_raw": agent_raw, "calls": calls,
@@ -278,11 +297,15 @@ async def _run_pipeline(
     if do_refine and resp_text:
         logger.info("Refine pass starting (draft=%d chars, phrase_bank=%d groups)", len(resp_text), len(phrase_bank) if phrase_bank else 0)
         try:
-            refined_draft, _debug_log, _elapsed = await refine_pass(client, prefix, effective_msg, resp_text, settings, phrase_bank or [], audit_enabled, length_guard, enabled_tools)
-            if refined_draft and refined_draft != resp_text:
-                resp_text = refined_draft
-                yield {"event": "writer_rewrite", "data": {"refined_text": resp_text}}
-                yield {"event": "_refined_result", "data": {"resp_text": resp_text}}
+            async for event in refine_pass(client, prefix, effective_msg, resp_text, settings, phrase_bank or [], audit_enabled, length_guard, enabled_tools):
+                if event["type"] == "reasoning":
+                    yield {"event": "reasoning", "data": {"pass": "refiner", "delta": event["delta"]}}
+                elif event["type"] == "done":
+                    refined_draft = event["draft"]
+                    if refined_draft and refined_draft != resp_text:
+                        resp_text = refined_draft
+                        yield {"event": "writer_rewrite", "data": {"refined_text": resp_text}}
+                        yield {"event": "_refined_result", "data": {"resp_text": resp_text}}
         except Exception as e:
             logger.error("refine pass failed, keeping original: %s", e, exc_info=True)
     elif not do_refine:

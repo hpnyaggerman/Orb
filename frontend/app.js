@@ -11,7 +11,7 @@ import { loadConversations, resetChatUI, selectChar, newConvForChar,
          selectConversation, deleteConversationFromModal, showConvHistoryModal,
          renderMessages, startEdit, cancelEdit, saveEdit, deleteMessage,
          switchBranch, regenerate, sendMessage, stopGeneration,
-         toggleInspector } from './chat.js';
+         toggleInspector, selectReasoningPass } from './chat.js';
 import { closeModal, switchTab } from './modal.js';
 
 // ── Sidebar toggle
@@ -61,7 +61,7 @@ Object.assign(window, {
   startEdit, cancelEdit, saveEdit, deleteMessage, switchBranch, regenerate,
   sendMessage, stopGeneration,
   // inspector
-  toggleInspector,
+  toggleInspector, selectReasoningPass,
   // ui
   toggleSection, toggleBurger, closeBurger,
   // state
