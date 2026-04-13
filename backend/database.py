@@ -142,6 +142,7 @@ SEED_PHRASE_BANK = [
     ["breath hitches", "breath hitched", "breath hitching", "breath catching"],
     ["ozone"],
     ["honeyed", "velvet", "porcelain", "intoxicating"],
+    ["like a vice", "like a vise"],
     ["void", "shadowed"],
     ["incredulous"],
     ["predatory"],
