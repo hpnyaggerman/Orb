@@ -279,8 +279,8 @@ async def refine_pass(
     for iteration in range(MAX_REFINE_ITERATIONS):
         logger.info("Refine iteration %d/%d, %d issues remaining", iteration + 1, MAX_REFINE_ITERATIONS, report.total_issues)
         try:
-            reasoning_config = reasoning_config_for_schemas(refine_tools)
-            if reasoning_config:
+            reasoning_config = reasoning_config_for_schemas(refine_tools) or {"effort": "low", "enabled": True}
+            if not reasoning_config.get("enabled", True):
                 logger.info("Refine iteration %d: reasoning disabled", iteration + 1)
 
             resp: dict = {}
@@ -292,7 +292,7 @@ async def refine_pass(
                     tool_choice=_pick_tool_choice(length_guard_triggered, report, audit_enabled),
                     temperature=0.25,
                     max_tokens=8192,
-                    **({"reasoning": reasoning_config} if reasoning_config else {}),
+                    reasoning=reasoning_config,
                 ):
                     if event["type"] == "reasoning":
                         yield {"type": "reasoning", "delta": event["delta"]}

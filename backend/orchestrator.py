@@ -82,7 +82,8 @@ async def _writer_pass(client: LLMClient, msgs: list[dict], settings: dict, enab
         logger.info("Writer pass: skipping tools (no suppression token discovered) to prevent hallucination")
         schemas = []
     logger.info("Writer pass: tools included=%s", json.dumps([s["function"]["name"] for s in schemas]) if schemas else "[]")
-    extra = {"tools": schemas, "tool_choice": "none"} if schemas else {}
+    extra: dict = {"tools": schemas, "tool_choice": "none"} if schemas else {}
+    extra["reasoning"] = {"effort": "low", "enabled": True}
     if tool_start_token_id is not None:
         extra["logit_bias"] = {tool_start_token_id: -100}
         logger.info("Writer pass: logit_bias {%d: -100} applied", tool_start_token_id)
@@ -141,11 +142,11 @@ async def _agent_pass(
         logger.info("Agent tool=%s prompt:\n%s", name, json.dumps(msgs, indent=2, ensure_ascii=False))
         resp: dict = {}
         try:
-            reasoning_config = reasoning_config_for_tool(name)
+            reasoning_config = reasoning_config_for_tool(name) or {"effort": "low", "enabled": True}
             async for event in client.complete(
                 messages=msgs, model=settings["model_name"], tools=tool_schemas,
                 tool_choice=TOOLS[name]["choice"], temperature=0.25, max_tokens=8192,
-                **({"reasoning": reasoning_config} if reasoning_config else {}),
+                reasoning=reasoning_config,
             ):
                 if event["type"] == "reasoning":
                     yield {"type": "reasoning", "delta": event["delta"]}

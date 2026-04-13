@@ -39,7 +39,6 @@ class LLMClient:
             "model": model,
             "messages": messages,
             "stream": True,
-            "reasoning": {"effort": "low", "enabled": True},
             **params,
         }
         if tools:
@@ -150,7 +149,6 @@ class LLMClient:
             "model": model,
             "messages": messages,
             "stream": True,
-            "reasoning": {"effort": "low", "enabled": True},
             **params,
         }
         if tools:

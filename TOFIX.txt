@@ -1,8 +1,6 @@
 - [Post-process] Display the refine pass in the Inspector UI. Rework this view to avoid displaying excessive information.
-- [Post-process] Detect structural repetition across multiple paragraphs, not just individual sentences.
 - [Post-process] Implement phrase repetition detection as well, not just anti-slop detection. Tell the model to write about something else entirely for this sentence.
 
-- Feature: Support showing reasoning in the UI for all passes (director, writer, refiner). It should be its own collapsable arrow section in the Inspector panel. It is a box, and the height is fixed new reasoning tokens will be streamed to it and the box will automatically scroll down as new tokens arrive.
 - Feature: User-defined fields for the director to consider (e.g. physicality).
 - Feature: Reasoning toggle for writer pass - for when endpoint supports alternating reasoning.
 - Feature: Implement min_words for length_guard in refine pass.
