@@ -254,8 +254,8 @@ async def _run_pipeline(
     if length_guard_enforce and length_guard and length_guard.get("enabled"):
         max_words = length_guard.get("max_words", 240)
         max_paragraphs = length_guard.get("max_paragraphs", 4)
-        writer_tail += f"[Keep your response under {max_words} words and {max_paragraphs} paragraphs.]\n\n"
-    writer_tail += effective_msg + "\n\n"
+        writer_tail += f"**Keep your response under {max_words} words and {max_paragraphs} paragraphs.**\n\n"
+    writer_tail += "___\n\n" + effective_msg + "\n\n"
     # writer_tail += "[OOC: Tool/Function calling is STRICTLY FORBIDDEN now!]\n\n" + effective_msg + "\n\n"
     # writer_tail += effective_msg + "\n\n"
 
