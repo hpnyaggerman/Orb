@@ -45,6 +45,7 @@ def apply_tool_calls(
 async def _agent_pass(
     client: LLMClient, prefix: list[dict], user_message: str, settings: dict,
     director: dict, fragments: list[dict], enabled_tools: dict | None = None,
+    kv_tracker=None,
 ) -> AsyncIterator[dict]:
     """Yields reasoning dicts during each tool call, then a single done dict.
 
@@ -84,6 +85,8 @@ async def _agent_pass(
     for name in tool_names:
         msgs = prefix + [{"role": "user", "content": build_tool_prompt(name, user_message, active_moods, fragments)}]
         logger.info("Agent tool=%s prompt:\n%s", name, json.dumps(msgs, indent=2, ensure_ascii=False))
+        if kv_tracker is not None:
+            kv_tracker.record(f"director:{name}", msgs, tool_schemas)
         resp: dict = {}
         try:
             reasoning_config = reasoning_config_for_tool(name) or {"effort": "low", "enabled": True}

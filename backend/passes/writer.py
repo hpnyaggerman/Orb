@@ -33,6 +33,7 @@ async def _writer_pass(
     client: LLMClient, msgs: list[dict], settings: dict,
     enabled_tools: dict | None = None,
     tool_start_token_id: int | None = None,
+    kv_tracker=None,
 ) -> AsyncIterator[dict]:
     """Yields {"type": "content"|"reasoning", "delta": str} dicts."""
     params = {
@@ -55,6 +56,9 @@ async def _writer_pass(
     if tool_start_token_id is not None:
         extra["logit_bias"] = {tool_start_token_id: -100}
         logger.info("Writer pass: logit_bias {%d: -100} applied", tool_start_token_id)
+
+    if kv_tracker is not None:
+        kv_tracker.record("writer", msgs, schemas if schemas else None)
 
     # Rolling tail buffer: most control tokens arrive as a single delta, but
     # we keep the last 50 chars to catch any that straddle a token boundary.

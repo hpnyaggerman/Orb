@@ -195,6 +195,7 @@ async def refine_pass(
     audit_enabled: bool = True,
     length_guard: dict | None = None,
     enabled_tools: dict | None = None,
+    kv_tracker=None,
 ) -> AsyncIterator[dict]:
     """ReAct-style refinement loop with optional audit and/or length guard.
 
@@ -284,6 +285,8 @@ async def refine_pass(
     # ── ReAct loop
     for iteration in range(MAX_REFINE_ITERATIONS):
         logger.info("Refine iteration %d/%d, %d issues remaining", iteration + 1, MAX_REFINE_ITERATIONS, report.total_issues)
+        if kv_tracker is not None and iteration == 0:
+            kv_tracker.record("refine", msgs, refine_tools)
         try:
             reasoning_config = reasoning_config_for_schemas(refine_tools) or {"effort": "low", "enabled": True}
             if not reasoning_config.get("enabled", True):

@@ -21,6 +21,65 @@ from .passes.refine import refine_pass
 logger = logging.getLogger(__name__)
 
 
+# ── KV cache tracker ──────────────────────────────────────────────────────────
+
+class _KVCacheTracker:
+    """Accumulates per-call prompt character counts to estimate KV cache reuse across passes.
+
+    Each LLM call records (label, messages, tools).  After all passes complete,
+    ``log_summary`` prints a table showing total prompt size, tail size, tools
+    size, and whether the shared prefix was a cache HIT or BUST vs the previous
+    call.  Character counts are a proxy for token counts — no tokeniser needed.
+    """
+
+    def __init__(self, prefix_chars: int):
+        self._prefix_chars = prefix_chars
+        self._entries: list[dict] = []
+
+    def record(self, label: str, messages: list[dict], tools: list[dict] | None) -> None:
+        """Snapshot a single LLM call. Call once per pass (or per tool in the director)."""
+        msg_chars = sum(len(m.get("content") or "") for m in messages)
+        tools_chars = len(json.dumps(tools, separators=(",", ":"))) if tools else 0
+        self._entries.append({
+            "label": label,
+            "msg_chars": msg_chars,
+            "tail_chars": msg_chars - self._prefix_chars,
+            "tools_chars": tools_chars,
+            "tools_names": [t["function"]["name"] for t in tools] if tools else [],
+        })
+
+    def log_summary(self) -> None:
+        if not self._entries:
+            return
+        lines = [f"KV cache comparison  (shared prefix={self._prefix_chars} chars):"]
+        prev_tools_names: list | None = None
+        prev_tools_chars = 0
+        total_saved = 0
+
+        for i, e in enumerate(self._entries):
+            total = e["msg_chars"] + e["tools_chars"]
+            if i == 0:
+                cache_note = "baseline"
+                saved = 0
+            elif e["tools_names"] == prev_tools_names:
+                saved = self._prefix_chars + prev_tools_chars
+                total_saved += saved
+                cache_note = f"HIT  saved={saved}"
+            else:
+                saved = 0
+                cache_note = f"BUST tools_changed {prev_tools_names!r} → {e['tools_names']!r}"
+
+            lines.append(
+                f"  {e['label']:<28}  total={total:7d}  "
+                f"tail={e['tail_chars']:6d}  tools={e['tools_chars']:6d}  {cache_note}"
+            )
+            prev_tools_names = e["tools_names"]
+            prev_tools_chars = e["tools_chars"]
+
+        lines.append(f"  Total estimated KV cache char savings: {total_saved}")
+        logger.info("\n".join(lines))
+
+
 # ── Character context loader ──────────────────────────────────────────────────
 
 async def _load_char_context(conv: dict, settings: dict) -> tuple[str, str, str]:
@@ -75,11 +134,14 @@ async def _run_pipeline(
 
     do_refine = audit_enabled or (length_guard_enabled and agent_on)
 
+    prefix_chars = sum(len(m.get("content") or "") for m in prefix)
+    kv_tracker = _KVCacheTracker(prefix_chars)
+
     # --- Director pass ---
     has_pre_writer_tools = any(enabled_tools.get(n, False) for n in TOOLS if n not in POST_WRITER_TOOLS)
     if agent_on and has_pre_writer_tools:
         yield {"event": "director_start"}
-        async for event in _agent_pass(client, prefix, user_message, settings, director, fragments, enabled_tools):
+        async for event in _agent_pass(client, prefix, user_message, settings, director, fragments, enabled_tools, kv_tracker=kv_tracker):
             if event["type"] == "reasoning":
                 yield {"event": "reasoning", "data": {"pass": "director", "delta": event["delta"]}}
             elif event["type"] == "done":
@@ -135,7 +197,7 @@ async def _run_pipeline(
     writer_msgs = prefix + [{"role": "user", "content": writer_tail}]
 
     resp_text = ""
-    async for item in _writer_pass(client, writer_msgs, settings, enabled_tools, tool_start_token_id):
+    async for item in _writer_pass(client, writer_msgs, settings, enabled_tools, tool_start_token_id, kv_tracker=kv_tracker):
         if item["type"] == "reasoning":
             yield {"event": "reasoning", "data": {"pass": "writer", "delta": item["delta"]}}
         else:
@@ -154,7 +216,7 @@ async def _run_pipeline(
     if do_refine and resp_text:
         logger.info("Refine pass starting (draft=%d chars, phrase_bank=%d groups)", len(resp_text), len(phrase_bank) if phrase_bank else 0)
         try:
-            async for event in refine_pass(client, prefix, effective_msg, resp_text, settings, phrase_bank or [], audit_enabled, length_guard, enabled_tools):
+            async for event in refine_pass(client, prefix, effective_msg, resp_text, settings, phrase_bank or [], audit_enabled, length_guard, enabled_tools, kv_tracker=kv_tracker):
                 if event["type"] == "reasoning":
                     yield {"event": "reasoning", "data": {"pass": "refiner", "delta": event["delta"]}}
                 elif event["type"] == "done":
@@ -167,6 +229,8 @@ async def _run_pipeline(
             logger.error("refine pass failed, keeping original: %s", e, exc_info=True)
     elif not do_refine:
         logger.info("Refine pass skipped (do_refine=%s)", do_refine)
+
+    kv_tracker.log_summary()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
