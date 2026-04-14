@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 from typing import Optional
-from fastapi import FastAPI, HTTPException, Request, UploadFile, File
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Query
 from fastapi.responses import StreamingResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -410,8 +410,8 @@ async def api_update_character(card_id: str, data: CharacterCardUpdate):
 
 
 @app.delete("/api/characters/{card_id}")
-async def api_delete_character(card_id: str):
-    if not await delete_character_card(card_id):
+async def api_delete_character(card_id: str, delete_conversations: bool = False):
+    if not await delete_character_card(card_id, delete_conversations):
         raise HTTPException(404, "Character card not found")
     return {"ok": True}
 

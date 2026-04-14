@@ -158,12 +158,29 @@ export async function handleImportFile(inp) {
 }
 
 export async function deleteCharacter(id) {
-  if (!confirm('Delete this character card?')) return;
+  showModal(`
+    <h2>Delete Character</h2>
+    <p>Are you sure you want to delete this character card?</p>
+    <label style="display: flex; align-items: center; gap: 8px; margin: 16px 0;">
+      <input type="checkbox" id="delete-conversations-checkbox">
+      Also delete all conversations associated with this character
+    </label>
+    <div class="modal-actions">
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-danger" onclick="performDeleteCharacter('${id}')">Delete</button>
+    </div>
+  `);
+}
+
+export async function performDeleteCharacter(id) {
+  const deleteConversations = document.getElementById('delete-conversations-checkbox')?.checked || false;
+  const url = '/characters/' + id + (deleteConversations ? '?delete_conversations=true' : '');
   try {
-    await api.del('/characters/' + id);
+    await api.del(url);
     if (S.activeCharId === id) resetChatUI();
     await loadCharacters();
     await loadConversations();
+    closeModal();
     toast('Deleted');
   } catch (e) { toast(e.message, true); }
 }
@@ -251,7 +268,7 @@ export async function showCharEditModal(id) {
     </div>
     ${charFormTabs('ce', c, true)}
     <div class="modal-actions">
-      <button class="btn btn-danger btn-sm" onclick="deleteCharacter('${c.id}');closeModal()">Delete</button>
+      <button class="btn btn-danger btn-sm" onclick="deleteCharacter('${c.id}')">Delete</button>
       <div style="flex:1"></div>
       <button class="btn" onclick="closeModal()">Cancel</button>
       <button class="btn btn-accent" onclick="saveCharEdit('${c.id}')">Save</button>

@@ -1020,9 +1020,11 @@ async def update_character_card(card_id: str, data: dict) -> dict | None:
         await db.close()
 
 
-async def delete_character_card(card_id: str) -> bool:
+async def delete_character_card(card_id: str, delete_conversations: bool = False) -> bool:
     db = await get_db()
     try:
+        if delete_conversations:
+            await db.execute("DELETE FROM conversations WHERE character_card_id = ?", (card_id,))
         cur = await db.execute("DELETE FROM character_cards WHERE id = ?", (card_id,))
         await db.commit()
         return cur.rowcount > 0

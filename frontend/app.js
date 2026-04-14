@@ -5,7 +5,7 @@ import { initTheme, loadSettings, saveSetting, showUserModal, saveUserProfile, a
          toggleLengthGuard, saveLengthGuardConfig, toggleLengthGuardEnforce, showPhraseBankModal } from './settings.js';
 import { loadFragments, showFragmentModal, saveFragment, deleteFragment, toggleFragmentEnabled,
          loadCharacters, renderCharacters, triggerImport, handleImportFile,
-         deleteCharacter, showCharCreateModal, createCharacter,
+         deleteCharacter, performDeleteCharacter, showCharCreateModal, createCharacter,
          showCharEditModal, saveCharEdit } from './library.js';
 import { loadConversations, resetChatUI, selectChar, newConvForChar,
          selectConversation, deleteConversationFromModal, showConvHistoryModal,
@@ -53,7 +53,7 @@ Object.assign(window, {
   // fragments
   showFragmentModal, saveFragment, deleteFragment, toggleFragmentEnabled,
   // characters
-  selectChar, triggerImport, handleImportFile, deleteCharacter,
+  selectChar, triggerImport, handleImportFile, deleteCharacter, performDeleteCharacter,
   showCharCreateModal, createCharacter, showCharEditModal, saveCharEdit,
   // conversations
   newConvForChar, selectConversation, deleteConversationFromModal, showConvHistoryModal,

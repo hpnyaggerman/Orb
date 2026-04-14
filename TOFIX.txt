@@ -3,7 +3,8 @@
 
 - Check: Handle many chars with the same name.
 
-- Feature: Deleting a character should prompt the user if they want to delete all associated conversations too.
+- Feature: Image attachments => Save b64 encoded images as is in DB, render them in chat always.
+- Feature: Deleting a character should prompt the user if they want to delete all associated conversations too => Does the yes/no box support a checkbox 'Delete Associated Conversations' for this?
 - Feature: User-defined fields for the director to consider (e.g. physicality).
 - Feature: Reasoning toggle for writer pass - for when endpoint supports alternating reasoning.
 - Feature: Implement min_words for length_guard in refine pass.
