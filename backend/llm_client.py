@@ -224,7 +224,7 @@ class LLMClient:
             "logprobs": True,
             "top_logprobs": 1,
             # Item 1: disable reasoning so thinking tokens don't consume the budget before the model reaches the tool-call control token.
-            "reasoning": {"enabled": False},
+            "reasoning": {"effort": "none", "enabled": False},
         }
 
         def _entry_id(entry: dict) -> int | None:
