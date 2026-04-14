@@ -5,14 +5,14 @@ import { initTheme, loadSettings, saveSetting, showUserModal, saveUserProfile, a
          toggleLengthGuard, saveLengthGuardConfig, toggleLengthGuardEnforce, showPhraseBankModal } from './settings.js';
 import { loadFragments, showFragmentModal, saveFragment, deleteFragment, toggleFragmentEnabled,
          loadCharacters, renderCharacters, triggerImport, handleImportFile,
-         deleteCharacter, performDeleteCharacter, showCharCreateModal, createCharacter,
+         deleteCharacter, showCharCreateModal, createCharacter,
          showCharEditModal, saveCharEdit } from './library.js';
 import { loadConversations, resetChatUI, selectChar, newConvForChar,
          selectConversation, deleteConversationFromModal, showConvHistoryModal,
          renderMessages, startEdit, cancelEdit, saveEdit, deleteMessage,
          switchBranch, regenerate, sendMessage, stopGeneration,
          toggleInspector, selectReasoningPass, clearRefineDiff } from './chat.js';
-import { closeModal, switchTab } from './modal.js';
+import { closeModal, switchTab, showConfirmModal, runConfirmCb } from './modal.js';
 
 // ── Sidebar toggle
 function toggleSection(header) {
@@ -40,7 +40,7 @@ $('chat-input').addEventListener('keydown', function (e) {
 // ── Expose to inline handlers
 Object.assign(window, {
   // modal
-  closeModal, switchTab,
+  closeModal, switchTab, showConfirmModal, runConfirmCb,
   // theme
   applyTheme,
   // settings / user
@@ -53,7 +53,7 @@ Object.assign(window, {
   // fragments
   showFragmentModal, saveFragment, deleteFragment, toggleFragmentEnabled,
   // characters
-  selectChar, triggerImport, handleImportFile, deleteCharacter, performDeleteCharacter,
+  selectChar, triggerImport, handleImportFile, deleteCharacter,
   showCharCreateModal, createCharacter, showCharEditModal, saveCharEdit,
   // conversations
   newConvForChar, selectConversation, deleteConversationFromModal, showConvHistoryModal,

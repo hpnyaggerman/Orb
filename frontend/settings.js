@@ -1,7 +1,7 @@
 import { S } from './state.js';
 import { $, esc, toast } from './utils.js';
 import { api } from './api.js';
-import { showModal, closeModal } from './modal.js';
+import { showModal, closeModal, showConfirmModal } from './modal.js';
 
 // ── Theme
 const THEMES = ['dark','halloween','dark_forest','ocean_depths','ghostly','pastel_neon','vintage_wood','newspaper'];
@@ -330,14 +330,19 @@ window.editPhraseGroup = async function(groupId) {
 };
 
 window.deletePhraseGroup = async function(groupId) {
-  if (!confirm('Delete this phrase group?')) return;
-  try {
-    await api.del(`/phrase-bank/${groupId}`);
-    toast('Phrase group deleted');
-    showPhraseBankModal(); // Refresh the modal
-  } catch (e) {
-    toast('Failed to delete: ' + e.message, true);
-  }
+  showConfirmModal({
+    title: 'Delete Phrase Group',
+    message: 'Are you sure you want to delete this phrase group?',
+    confirmText: 'Delete',
+  }, async () => {
+    try {
+      await api.del(`/phrase-bank/${groupId}`);
+      toast('Phrase group deleted');
+      showPhraseBankModal();
+    } catch (e) {
+      toast('Failed to delete: ' + e.message, true);
+    }
+  });
 };
 
 window.savePhraseGroup = async function(editId) {

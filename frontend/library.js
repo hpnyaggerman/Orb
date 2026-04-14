@@ -1,7 +1,7 @@
 import { S } from './state.js';
 import { $, esc, toast, avatarUrl } from './utils.js';
 import { api } from './api.js';
-import { showModal, closeModal, switchTab } from './modal.js';
+import { showModal, closeModal, switchTab, showConfirmModal } from './modal.js';
 import { resetChatUI, loadConversations } from './chat.js';
 
 // ── Fragments
@@ -66,7 +66,7 @@ export function showFragmentModal(fragId = null) {
       <textarea id="frag-neg" rows="3">${esc(d.negative_prompt || '')}</textarea>
     </div>
     <div class="modal-actions">
-      ${isEdit ? `<button class="btn btn-danger btn-sm" onclick="deleteFragment('${esc(d.id)}');closeModal()">Delete</button>` : ''}
+      ${isEdit ? `<button class="btn btn-danger btn-sm" onclick="deleteFragment('${esc(d.id)}')">Delete</button>` : ''}
       <div style="flex:1"></div>
       <button class="btn" onclick="closeModal()">Cancel</button>
       <button class="btn btn-accent" onclick="saveFragment(${isEdit})">${isEdit ? 'Save' : 'Create'}</button>
@@ -92,12 +92,17 @@ export async function saveFragment(isEdit) {
 }
 
 export async function deleteFragment(id) {
-  if (!confirm('Delete this fragment?')) return;
-  try {
-    await api.del('/fragments/' + id);
-    await loadFragments();
-    toast('Fragment deleted');
-  } catch (e) { toast(e.message, true); }
+  showConfirmModal({
+    title: 'Delete Fragment',
+    message: 'Are you sure you want to delete this fragment?',
+    confirmText: 'Delete',
+  }, async () => {
+    try {
+      await api.del('/fragments/' + id);
+      await loadFragments();
+      toast('Fragment deleted');
+    } catch (e) { toast(e.message, true); }
+  });
 }
 
 export async function toggleFragmentEnabled(id, newEnabled) {
@@ -158,23 +163,21 @@ export async function handleImportFile(inp) {
 }
 
 export async function deleteCharacter(id) {
-  showModal(`
-    <h2>Delete Character</h2>
-    <p>Are you sure you want to delete this character card?</p>
-    <div class="field">
-      <label class="modal-checkbox-label">
-        <input type="checkbox" id="delete-conversations-checkbox">
-        Also delete all conversations associated with this character
-      </label>
-    </div>
-    <div class="modal-actions">
-      <button class="btn" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-danger" onclick="performDeleteCharacter('${id}')">Delete</button>
-    </div>
-  `);
+  showConfirmModal({
+    title: 'Delete Character',
+    message: 'Are you sure you want to delete this character card?',
+    confirmText: 'Delete',
+    extraHtml: `
+      <div class="field">
+        <label class="modal-checkbox-label">
+          <input type="checkbox" id="delete-conversations-checkbox">
+          Also delete all conversations associated with this character
+        </label>
+      </div>`,
+  }, () => performDeleteCharacter(id));
 }
 
-export async function performDeleteCharacter(id) {
+async function performDeleteCharacter(id) {
   const deleteConversations = document.getElementById('delete-conversations-checkbox')?.checked || false;
   const url = '/characters/' + id + (deleteConversations ? '?delete_conversations=true' : '');
   try {

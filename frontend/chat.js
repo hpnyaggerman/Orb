@@ -1,7 +1,7 @@
 import { S } from './state.js';
 import { $, esc, formatProse, formatProseWithDiff, wordDiff, toast, scrollToBottom, scrollToMessage, avatarUrl, convUrl, formatRelativeDate, resolvePlaceholders } from './utils.js';
 import { api } from './api.js';
-import { showModal, closeModal } from './modal.js';
+import { showModal, closeModal, showConfirmModal } from './modal.js';
 import { renderCharacters, loadCharacters } from './library.js';
 
 // ── Generation Phase
@@ -166,33 +166,43 @@ export async function selectConversation(id) {
 }
 
 async function deleteConversation(id) {
-  if (!confirm('Delete?')) return;
-  try {
-    await api.del('/conversations/' + id);
-    if (S.activeConvId === id) {
-      S.activeConvId = null;
-      S.messages = [];
-      $('chat-input').disabled = true;
-      $('send-btn').disabled = true;
-      renderMessages();
-    }
-    await loadConversations();
-  } catch (e) { toast(e.message, true); }
+  showConfirmModal({
+    title: 'Delete Conversation',
+    message: 'Are you sure you want to delete this conversation?',
+    confirmText: 'Delete',
+  }, async () => {
+    try {
+      await api.del('/conversations/' + id);
+      if (S.activeConvId === id) {
+        S.activeConvId = null;
+        S.messages = [];
+        $('chat-input').disabled = true;
+        $('send-btn').disabled = true;
+        renderMessages();
+      }
+      await loadConversations();
+    } catch (e) { toast(e.message, true); }
+  });
 }
 
 export async function deleteConversationFromModal(id) {
-  if (!confirm('Delete?')) return;
-  try {
-    await api.del('/conversations/' + id);
-    if (S.activeConvId === id) {
-      S.activeConvId = null;
-      S.messages = [];
-      $('chat-input').disabled = true;
-      $('send-btn').disabled = true;
-      renderMessages();
-    }
-    await showConvHistoryModal();
-  } catch (e) { toast(e.message, true); }
+  showConfirmModal({
+    title: 'Delete Conversation',
+    message: 'Are you sure you want to delete this conversation?',
+    confirmText: 'Delete',
+  }, async () => {
+    try {
+      await api.del('/conversations/' + id);
+      if (S.activeConvId === id) {
+        S.activeConvId = null;
+        S.messages = [];
+        $('chat-input').disabled = true;
+        $('send-btn').disabled = true;
+        renderMessages();
+      }
+      await showConvHistoryModal();
+    } catch (e) { toast(e.message, true); }
+  });
 }
 
 export async function showConvHistoryModal() {
@@ -320,13 +330,18 @@ export function cancelEdit() {
 
 export async function deleteMessage(msgId) {
   if (S.isStreaming) return;
-  if (!confirm('Delete this message and all its children?')) return;
-  try {
-    S.messages = await api.del(convUrl(S.activeConvId, 'messages', msgId));
-    S.lastDirectorData = null;
-    renderMessages(); renderInspector(); scrollToBottom();
-    toast('Message deleted');
-  } catch (e) { toast(e.message, true); }
+  showConfirmModal({
+    title: 'Delete Message',
+    message: 'Delete this message and all its children?',
+    confirmText: 'Delete',
+  }, async () => {
+    try {
+      S.messages = await api.del(convUrl(S.activeConvId, 'messages', msgId));
+      S.lastDirectorData = null;
+      renderMessages(); renderInspector(); scrollToBottom();
+      toast('Message deleted');
+    } catch (e) { toast(e.message, true); }
+  });
 }
 
 export async function switchBranch(msgId) {
