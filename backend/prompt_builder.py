@@ -86,6 +86,47 @@ def build_tool_prompt(tool_name: str, user_message: str, active_moods: list[str]
 
 # ── Style injection block
 
+def compute_style_injection_block(
+    active_moods: list[str],
+    prior_moods: list[str],
+    fragments: list[dict],
+    direct_scene_enabled: bool,
+    plot_direction: str | None = None,
+    writing_direction: str | None = None,
+    detected_repetitions: list[str] | None = None,
+    plot_summary: str | None = None,
+    keywords: list[str] | None = None,
+) -> str:
+    """Compute the style injection block from director-pass outputs.
+
+    When *direct_scene_enabled* is False the active-mood and keyword signals are
+    suppressed so the previous turn's director state cannot bleed into the writer.
+    Only the unconditional fields (plot_direction, etc.) are still forwarded in
+    that case, though in practice they are also None when direct_scene is off.
+    """
+    if direct_scene_enabled:
+        inj_active_moods = active_moods
+        inj_keywords = keywords
+    else:
+        inj_active_moods = []
+        inj_keywords = []
+
+    deactivated = (
+        [f for f in fragments if f["id"] in (set(prior_moods) - set(inj_active_moods))]
+        if direct_scene_enabled else []
+    )
+    active = [f for f in fragments if f["id"] in inj_active_moods]
+
+    if not (active or deactivated or plot_direction or writing_direction
+            or detected_repetitions or plot_summary or inj_keywords):
+        return ""
+
+    return build_style_injection(
+        active, deactivated, plot_direction, writing_direction,
+        detected_repetitions, plot_summary, inj_keywords,
+    )
+
+
 def build_style_injection(
     active: list[dict], deactivated: list[dict] | None = None,
     plot_direction: str | None = None, writing_direction: str | None = None,

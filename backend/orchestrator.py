@@ -5,15 +5,14 @@ plus the public entry points handle_turn() and handle_regenerate().
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import time
 from typing import AsyncIterator
 
 from . import database as db
 from .llm_client import LLMClient
 from .tool_defs import TOOLS, POST_WRITER_TOOLS, enabled_schemas
-from .prompt_builder import build_prefix, build_style_injection
+from .prompt_builder import build_prefix, compute_style_injection_block
+from .kv_tracker import _KVCacheTracker
 from .passes.director import apply_tool_calls, _agent_pass
 from .passes.writer import _writer_pass
 from .passes.refine import refine_pass
@@ -21,78 +20,21 @@ from .passes.refine import refine_pass
 logger = logging.getLogger(__name__)
 
 
-# ── KV cache tracker ──────────────────────────────────────────────────────────
+# ── Token-start resolution ────────────────────────────────────────────────────
 
-class _KVCacheTracker:
-    """Accumulates per-call prompt character counts to estimate KV cache reuse across passes.
-
-    Each LLM call records (label, messages, tools).  After all passes complete,
-    ``log_summary`` prints a table showing total prompt size, tail size, tools
-    size, and whether the shared prefix was a cache HIT or BUST vs the previous
-    call.  Character counts are a proxy for token counts — no tokeniser needed.
-    """
-
-    def __init__(self, prefix_chars: int):
-        self._prefix_chars = prefix_chars
-        self._entries: list[dict] = []
-
-    def record(self, label: str, messages: list[dict], tools: list[dict] | None) -> None:
-        """Snapshot a single LLM call. Call once per pass (or per tool in the director)."""
-        msg_chars = sum(len(m.get("content") or "") for m in messages)
-        tools_chars = len(json.dumps(tools, separators=(",", ":"))) if tools else 0
-        self._entries.append({
-            "label": label,
-            "msg_chars": msg_chars,
-            "tail_chars": msg_chars - self._prefix_chars,
-            "tools_chars": tools_chars,
-            "tools_names": [t["function"]["name"] for t in tools] if tools else [],
-        })
-
-    def log_summary(self) -> None:
-        if not self._entries:
-            return
-        lines = [f"KV cache comparison  (shared prefix={self._prefix_chars} chars):"]
-        prev_tools_names: list | None = None
-        prev_tools_chars = 0
-        total_saved = 0
-
-        for i, e in enumerate(self._entries):
-            total = e["msg_chars"] + e["tools_chars"]
-            if i == 0:
-                cache_note = "baseline"
-                saved = 0
-            elif e["tools_names"] == prev_tools_names:
-                saved = self._prefix_chars + prev_tools_chars
-                total_saved += saved
-                cache_note = f"HIT  saved={saved}"
-            else:
-                saved = 0
-                cache_note = f"BUST tools_changed {prev_tools_names!r} → {e['tools_names']!r}"
-
-            lines.append(
-                f"  {e['label']:<28}  total={total:7d}  "
-                f"tail={e['tail_chars']:6d}  tools={e['tools_chars']:6d}  {cache_note}"
-            )
-            prev_tools_names = e["tools_names"]
-            prev_tools_chars = e["tools_chars"]
-
-        lines.append(f"  Total estimated KV cache char savings: {total_saved}")
-        logger.info("\n".join(lines))
-
-
-# ── Character context loader ──────────────────────────────────────────────────
-
-async def _load_char_context(conv: dict, settings: dict) -> tuple[str, str, str]:
-    system_prompt = settings["system_prompt"]
-    char_persona, mes_example = "", ""
-    if card_id := conv.get("character_card_id"):
-        card = await db.get_character_card(card_id)
-        if card:
-            char_persona = "\n\n".join(filter(None, [card.get("description", ""), card.get("personality", "")]))
-            mes_example = card.get("mes_example", "")
-            if card.get("system_prompt"):
-                system_prompt = card["system_prompt"]
-    return system_prompt, char_persona, mes_example
+async def _resolve_tool_start_token(
+    client: LLMClient, settings: dict, enabled_tools: dict,
+) -> int | None:
+    """Return the cached (or freshly discovered) tool-start token ID for logit bias."""
+    if not enabled_schemas(enabled_tools):
+        return None
+    model_key = f"{settings['endpoint_url']}||{settings['model_name']}"
+    cached, cached_id = await db.get_tool_start_token(model_key)
+    if cached:
+        return cached_id
+    token_id = await client.discover_tool_start_token(settings["model_name"])
+    await db.set_tool_start_token(model_key, token_id)
+    return token_id
 
 
 # ── Core pipeline ─────────────────────────────────────────────────────────────
@@ -151,19 +93,11 @@ async def _run_pipeline(
             yield {"event": "prompt_rewritten", "data": {"refined_message": refined_msg}}
 
     # Style injection
-    # Only use stored moods/keywords when direct_scene is enabled; otherwise
-    # the previous turn's director state would bleed into <current_scene_direction>
-    # even though the director tool has been disabled.
     direct_scene_enabled = agent_on and bool(enabled_tools.get("direct_scene", False))
-    if direct_scene_enabled:
-        inj_active_moods = active_moods
-        inj_keywords = keywords
-    else:
-        inj_active_moods = []
-        inj_keywords = []
-    deactivated = [f for f in fragments if f["id"] in (set(director["active_moods"]) - set(inj_active_moods))] if direct_scene_enabled else []
-    active = [f for f in fragments if f["id"] in inj_active_moods]
-    inj_block = build_style_injection(active, deactivated, plot_direction, writing_direction, detected_repetitions, plot_summary, inj_keywords) if (active or deactivated or plot_direction or writing_direction or detected_repetitions or plot_summary or inj_keywords) else ""
+    inj_block = compute_style_injection_block(
+        active_moods, director["active_moods"], fragments, direct_scene_enabled,
+        plot_direction, writing_direction, detected_repetitions, plot_summary, keywords,
+    )
 
     yield {"event": "director_done", "data": {
         "active_moods": active_moods, "injection_block": inj_block, "tool_calls": calls,
@@ -171,33 +105,16 @@ async def _run_pipeline(
         "detected_repetitions": detected_repetitions, "plot_summary": plot_summary, "keywords": keywords,
     }}
 
-    # --- Resolve tool-start token for writer logit bias ---
-    # Only needed when tool schemas are sent during the writer pass (for KV cache).
-    tool_start_token_id: int | None = None
-    if enabled_schemas(enabled_tools):
-        model_key = f"{settings['endpoint_url']}||{settings['model_name']}"
-        cached, cached_id = await db.get_tool_start_token(model_key)
-        if cached:
-            tool_start_token_id = cached_id
-        else:
-            tool_start_token_id = await client.discover_tool_start_token(settings["model_name"])
-            await db.set_tool_start_token(model_key, tool_start_token_id)
-
     # --- Writer pass ---
-    writer_tail = ""
-    if inj_block:
-        writer_tail += "___\n\n" + inj_block + "\n\n"
-    writer_tail += "**Do not use tool or function calls.**\n\n"
-    if length_guard_enforce and length_guard and length_guard.get("enabled"):
-        max_words = length_guard.get("max_words", 240)
-        max_paragraphs = length_guard.get("max_paragraphs", 4)
-        writer_tail += f"**Keep your response under {max_words} words and {max_paragraphs} paragraphs.**\n\n"
-    writer_tail += "___\n\n" + effective_msg + "\n\n"
-
-    writer_msgs = prefix + [{"role": "user", "content": writer_tail}]
+    tool_start_token_id = await _resolve_tool_start_token(client, settings, enabled_tools)
 
     resp_text = ""
-    async for item in _writer_pass(client, writer_msgs, settings, enabled_tools, tool_start_token_id, kv_tracker=kv_tracker):
+    async for item in _writer_pass(
+        client, prefix, settings, enabled_tools, tool_start_token_id,
+        inj_block=inj_block, effective_msg=effective_msg,
+        length_guard_enforce=length_guard_enforce, length_guard=length_guard,
+        kv_tracker=kv_tracker,
+    ):
         if item["type"] == "reasoning":
             yield {"event": "reasoning", "data": {"pass": "writer", "delta": item["delta"]}}
         else:
@@ -259,7 +176,7 @@ async def _load_pipeline_context(conversation_id: str) -> dict | None:
     phrase_bank = await db.get_phrase_bank()
     client = LLMClient(settings["endpoint_url"], api_key=settings.get("api_key", ""))
 
-    system_prompt, char_persona, mes_example = await _load_char_context(conv, settings)
+    system_prompt, char_persona, mes_example = await db.resolve_char_context(conv, settings)
 
     return {
         "settings": settings,

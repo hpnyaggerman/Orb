@@ -30,20 +30,39 @@ _WRITER_LEAK_MARKERS = {
 
 
 async def _writer_pass(
-    client: LLMClient, msgs: list[dict], settings: dict,
+    client: LLMClient,
+    prefix: list[dict],
+    settings: dict,
     enabled_tools: dict | None = None,
     tool_start_token_id: int | None = None,
+    *,
+    inj_block: str = "",
+    effective_msg: str,
+    length_guard_enforce: bool = False,
+    length_guard: dict | None = None,
     kv_tracker=None,
 ) -> AsyncIterator[dict]:
     """Yields {"type": "content"|"reasoning", "delta": str} dicts."""
+    tail = ""
+    if inj_block:
+        tail += "___\n\n" + inj_block + "\n\n"
+    if len(enabled_tools) > 0:
+        tail += "**Do not use tool or function calls.**\n\n"
+    if length_guard_enforce and length_guard and length_guard.get("enabled"):
+        max_words = length_guard.get("max_words", 240)
+        max_paragraphs = length_guard.get("max_paragraphs", 4)
+        tail += f"**Keep your response under {max_words} words and {max_paragraphs} paragraphs.**\n\n"
+    tail += "___\n\n" + effective_msg + "\n\n"
+
+    msgs = prefix + [{"role": "user", "content": tail}]
+
     params = {
         k: v for k in ["temperature", "max_tokens", "top_p", "min_p", "top_k", "repetition_penalty"]
         if (v := settings.get(k)) is not None
     }
     schemas = enabled_schemas(enabled_tools)
     # Only include tool schemas when we have a confirmed suppression token.
-    # Without logit_bias, small models ignore tool_choice:"none" and emit
-    # tool-call tokens anyway, causing hallucinated output.
+    # Without logit_bias, small models ignore tool_choice:"none" and emit tool-call tokens anyway, causing hallucinated output.
     if schemas and tool_start_token_id is None:
         logger.info("Writer pass: skipping tools (no suppression token discovered) to prevent hallucination")
         schemas = []
@@ -60,8 +79,7 @@ async def _writer_pass(
     if kv_tracker is not None:
         kv_tracker.record("writer", msgs, schemas if schemas else None)
 
-    # Rolling tail buffer: most control tokens arrive as a single delta, but
-    # we keep the last 50 chars to catch any that straddle a token boundary.
+    # Rolling tail buffer: most control tokens arrive as a single delta, but we keep the last 50 chars to catch any that straddle a token boundary.
     tail = ""
     async for item in client.complete(messages=msgs, model=settings["model_name"], **extra, **params):
         if item["type"] == "done":

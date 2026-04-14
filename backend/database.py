@@ -1136,6 +1136,23 @@ async def delete_message_with_descendants(cid: str, msg_id: int) -> bool:
         await db.close()
 
 
+async def resolve_char_context(conv: dict, settings: dict) -> tuple[str, str, str]:
+    """Load character card data and resolve the effective system prompt, persona, and example messages.
+
+    Returns (system_prompt, char_persona, mes_example).
+    """
+    system_prompt = settings["system_prompt"]
+    char_persona, mes_example = "", ""
+    if card_id := conv.get("character_card_id"):
+        card = await get_character_card(card_id)
+        if card:
+            char_persona = "\n\n".join(filter(None, [card.get("description", ""), card.get("personality", "")]))
+            mes_example = card.get("mes_example", "")
+            if card.get("system_prompt"):
+                system_prompt = card["system_prompt"]
+    return system_prompt, char_persona, mes_example
+
+
 async def get_character_avatar(card_id: str) -> tuple[bytes, str] | None:
     """Returns (image_bytes, mime_type) or None."""
     db = await get_db()
