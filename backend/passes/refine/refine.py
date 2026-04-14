@@ -302,6 +302,7 @@ async def refine_pass(
                     temperature=0.25,
                     max_tokens=8192,
                     reasoning=reasoning_config,
+                    chat_template_kwargs={"enable_thinking": False},
                 ):
                     if event["type"] == "reasoning":
                         yield {"type": "reasoning", "delta": event["delta"]}

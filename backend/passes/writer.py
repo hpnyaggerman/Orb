@@ -72,6 +72,7 @@ async def _writer_pass(
     )
     extra: dict = {"tools": schemas, "tool_choice": "none"} if schemas else {}
     extra["reasoning"] = {"effort": "low", "enabled": True}
+    extra["chat_template_kwargs"] = { "enable_thinking": True }
     if tool_start_token_id is not None:
         extra["logit_bias"] = {tool_start_token_id: -100}
         logger.info("Writer pass: logit_bias {%d: -100} applied", tool_start_token_id)
