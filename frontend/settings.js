@@ -51,6 +51,8 @@ export async function loadSettings() {
 
   if (S.settings.length_guard_max_words) S.lengthGuardMaxWords = S.settings.length_guard_max_words;
   if (S.settings.length_guard_max_paragraphs) S.lengthGuardMaxParagraphs = S.settings.length_guard_max_paragraphs;
+  if (S.settings.reasoning_enabled_passes)
+    S.reasoningEnabled = { ...S.reasoningEnabled, ...S.settings.reasoning_enabled_passes };
   renderSettings();
   renderToolsPanel();
   updateUserBtn();

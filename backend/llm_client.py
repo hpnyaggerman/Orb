@@ -36,6 +36,15 @@ class LLMClient:
             {"type": "reasoning", "delta": str}  — zero or more reasoning chunks
             {"type": "done", "message": dict}    — assembled message with content/tool_calls
         """
+        # Keep chat_template_kwargs.enable_thinking in sync with reasoning.enabled
+        # so callers only need to set `reasoning` and never touch chat_template_kwargs
+        # for this purpose.  An explicit caller-supplied enable_thinking wins.
+        reasoning = params.get("reasoning")
+        if reasoning is not None:
+            ctk = dict(params.get("chat_template_kwargs") or {})
+            ctk.setdefault("enable_thinking", bool(reasoning.get("enabled", True)))
+            params = {**params, "chat_template_kwargs": ctk}
+
         body = {
             "model": model,
             "messages": messages,

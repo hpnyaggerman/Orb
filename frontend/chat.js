@@ -759,9 +759,6 @@ function _advanceReasoningPass(targetIdx) {
 }
 
 function _buildReasoningHtml() {
-  const hasAny = S.reasoningDirector || S.reasoningWriter || S.reasoningRefiner;
-  if (!hasAny) return '';
-
   // reasoningPassActive tracks streaming progress (for dot lighting/lines).
   // reasoningPassSelected tracks what the user is viewing.
   const streamIdx   = S.reasoningPassActive;
@@ -771,14 +768,23 @@ function _buildReasoningHtml() {
     const isStreaming = i === streamIdx;
     const isSelected = i === selectedIdx;
     const lit = hasText || isStreaming;
+    const enabled = S.reasoningEnabled[p.key] !== false;
     const dotStyle = [
       `background:${lit ? p.color : 'var(--bg-elevated)'}`,
       `color:${lit ? '#fff' : 'var(--text-muted)'}`,
       `border:2px solid ${isSelected ? 'var(--accent)' : (lit ? p.color : 'var(--border)')}`,
       isSelected ? 'box-shadow:0 0 0 2px var(--accent)' : '',
+      !enabled ? 'opacity:0.4' : '',
     ].filter(Boolean).join(';');
     const lineColor = i < streamIdx ? REASONING_PASSES[i + 1].color : 'var(--border)';
-    return `<button class="reasoning-dot" onclick="selectReasoningPass(${i})" style="${dotStyle}">${i + 1}</button>`
+    const checkId = `reasoning-enabled-${p.key}`;
+    return `<div class="reasoning-dot-col">
+        <button class="reasoning-dot" onclick="selectReasoningPass(${i})" style="${dotStyle}">${i + 1}</button>
+        <label class="reasoning-enabled-label" for="${checkId}">
+          <input type="checkbox" id="${checkId}" ${enabled ? 'checked' : ''} onchange="toggleReasoningPass('${p.key}')">
+          <span>on</span>
+        </label>
+      </div>`
       + (i < 2 ? `<div class="reasoning-rail-line" style="background:${lineColor}"></div>` : '');
   }).join('');
 
@@ -804,9 +810,7 @@ function _buildReasoningHtml() {
 function _refreshReasoningSection() {
   const existing = document.getElementById('reasoning-section');
   if (!existing) return;
-  const html = _buildReasoningHtml();
-  if (!html) { existing.remove(); return; }
-  existing.outerHTML = html;
+  existing.outerHTML = _buildReasoningHtml();
   // Auto-scroll the newly rendered box to bottom only when viewing the streaming pass
   if (!S.reasoningUserOverride) {
     const box = document.getElementById('reasoning-box');
@@ -819,6 +823,12 @@ export function selectReasoningPass(idx) {
   S.reasoningPassSelected = idx;
   S.reasoningUserOverride = true;
   _refreshReasoningSection();
+}
+
+export async function toggleReasoningPass(passKey) {
+  S.reasoningEnabled[passKey] = !S.reasoningEnabled[passKey];
+  _refreshReasoningSection();
+  await api.put('/settings', { reasoning_enabled_passes: { ...S.reasoningEnabled } });
 }
 
 // ── Inspector
@@ -844,9 +854,9 @@ export function renderInspector() {
     (S.lastDirectorData && Object.keys(S.lastDirectorData).length > 0);
   
   if (!hasDirectorData) {
-    // Show default message for new/empty conversations
     $('inspector-content').innerHTML =
-      `<div style="color:var(--text-muted);font-size:12px;">
+      `${_buildReasoningHtml()}
+       <div style="color:var(--text-muted);font-size:12px;">
          Send a message to see director output
        </div>`;
     return;

@@ -77,6 +77,7 @@ class SettingsUpdate(BaseModel):
     length_guard_enabled: Optional[bool] = None
     length_guard_max_words: Optional[int] = None
     length_guard_max_paragraphs: Optional[int] = None
+    reasoning_enabled_passes: Optional[dict] = None
 
 
 class FragmentCreate(BaseModel):

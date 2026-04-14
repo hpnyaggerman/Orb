@@ -190,7 +190,8 @@ async def init_db():
                 enabled_tools TEXT NOT NULL DEFAULT '{}',
                 enable_agent INTEGER NOT NULL DEFAULT 1,
                 length_guard_max_words INTEGER NOT NULL DEFAULT 240,
-                length_guard_max_paragraphs INTEGER NOT NULL DEFAULT 4
+                length_guard_max_paragraphs INTEGER NOT NULL DEFAULT 4,
+                reasoning_enabled_passes TEXT NOT NULL DEFAULT '{"director":true,"writer":true,"refiner":true}'
             );
 
             CREATE TABLE IF NOT EXISTS fragments (
@@ -287,6 +288,8 @@ async def init_db():
             await db.execute("ALTER TABLE settings ADD COLUMN length_guard_max_words INTEGER NOT NULL DEFAULT 400")
         if "length_guard_max_paragraphs" not in existing_cols:
             await db.execute("ALTER TABLE settings ADD COLUMN length_guard_max_paragraphs INTEGER NOT NULL DEFAULT 5")
+        if "reasoning_enabled_passes" not in existing_cols:
+            await db.execute("ALTER TABLE settings ADD COLUMN reasoning_enabled_passes TEXT NOT NULL DEFAULT '{\"director\":true,\"writer\":true,\"refiner\":true}'")
 
         # Migration for director_state keywords column
         director_cols = {row[1] for row in await db.execute_fetchall("PRAGMA table_info(director_state)")}
@@ -338,6 +341,7 @@ async def get_settings() -> dict:
             return DEFAULT_SETTINGS
         s = dict(rows[0])
         s["enabled_tools"] = json.loads(s.get("enabled_tools") or "{}")
+        s["reasoning_enabled_passes"] = json.loads(s.get("reasoning_enabled_passes") or '{"director":true,"writer":true,"refiner":true}')
         return s
     finally:
         await db.close()
@@ -346,14 +350,15 @@ async def get_settings() -> dict:
 async def update_settings(data: dict) -> dict:
     db = await get_db()
     try:
-        allowed = ["endpoint_url", "api_key", "model_name", "temperature", "min_p", "top_k", "top_p", "repetition_penalty", "max_tokens", "system_prompt", "user_name", "user_description", "enabled_tools", "enable_agent", "length_guard_max_words", "length_guard_max_paragraphs"]
+        allowed = ["endpoint_url", "api_key", "model_name", "temperature", "min_p", "top_k", "top_p", "repetition_penalty", "max_tokens", "system_prompt", "user_name", "user_description", "enabled_tools", "enable_agent", "length_guard_max_words", "length_guard_max_paragraphs", "reasoning_enabled_passes"]
+        json_fields = {"enabled_tools", "reasoning_enabled_passes"}
         sets = []
         vals = []
-        
+
         for k in allowed:
             if k in data:
                 sets.append(f"{k} = ?")
-                vals.append(json.dumps(data[k]) if k == "enabled_tools" else data[k])
+                vals.append(json.dumps(data[k]) if k in json_fields else data[k])
         if sets:
             await db.execute(f"UPDATE settings SET {', '.join(sets)} WHERE id = 1", vals)
             await db.commit()

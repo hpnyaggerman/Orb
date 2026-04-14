@@ -196,6 +196,7 @@ async def refine_pass(
     length_guard: dict | None = None,
     enabled_tools: dict | None = None,
     kv_tracker=None,
+    reasoning_on: bool = True,
 ) -> AsyncIterator[dict]:
     """ReAct-style refinement loop with optional audit and/or length guard.
 
@@ -288,7 +289,7 @@ async def refine_pass(
         if kv_tracker is not None and iteration == 0:
             kv_tracker.record("refine", msgs, refine_tools)
         try:
-            reasoning_config = reasoning_config_for_schemas(refine_tools) or {"effort": "low", "enabled": True}
+            reasoning_config = {"enabled": False} if not reasoning_on else (reasoning_config_for_schemas(refine_tools) or {"effort": "low", "enabled": True})
             if not reasoning_config.get("enabled", True):
                 logger.info("Refine iteration %d: reasoning disabled", iteration + 1)
 
@@ -302,7 +303,6 @@ async def refine_pass(
                     temperature=0.25,
                     max_tokens=8192,
                     reasoning=reasoning_config,
-                    chat_template_kwargs={"enable_thinking": False},
                 ):
                     if event["type"] == "reasoning":
                         yield {"type": "reasoning", "delta": event["delta"]}

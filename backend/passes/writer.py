@@ -41,6 +41,7 @@ async def _writer_pass(
     length_guard_enforce: bool = False,
     length_guard: dict | None = None,
     kv_tracker=None,
+    reasoning_on: bool = True,
 ) -> AsyncIterator[dict]:
     """Yields {"type": "content"|"reasoning", "delta": str} dicts."""
     tail = ""
@@ -71,8 +72,7 @@ async def _writer_pass(
         json.dumps([s["function"]["name"] for s in schemas]) if schemas else "[]",
     )
     extra: dict = {"tools": schemas, "tool_choice": "none"} if schemas else {}
-    extra["reasoning"] = {"effort": "low", "enabled": True}
-    extra["chat_template_kwargs"] = { "enable_thinking": True }
+    extra["reasoning"] = {"effort": "low", "enabled": True} if reasoning_on else {"enabled": False}
     if tool_start_token_id is not None:
         extra["logit_bias"] = {tool_start_token_id: -100}
         logger.info("Writer pass: logit_bias {%d: -100} applied", tool_start_token_id)

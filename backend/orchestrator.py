@@ -57,6 +57,11 @@ async def _run_pipeline(
     if not agent_on:
         enabled_tools = {}
 
+    reasoning_passes = settings.get("reasoning_enabled_passes") or {}
+    director_reasoning_on = bool(reasoning_passes.get("director", True))
+    writer_reasoning_on   = bool(reasoning_passes.get("writer", True))
+    refiner_reasoning_on  = bool(reasoning_passes.get("refiner", True))
+
     active_moods = director["active_moods"]
     agent_raw, calls, latency = "", [], 0
     refined_msg, plot_direction, writing_direction, detected_repetitions, plot_summary = None, None, None, None, None
@@ -83,7 +88,7 @@ async def _run_pipeline(
     has_pre_writer_tools = any(enabled_tools.get(n, False) for n in TOOLS if n not in POST_WRITER_TOOLS)
     if agent_on and has_pre_writer_tools:
         yield {"event": "director_start"}
-        async for event in _agent_pass(client, prefix, user_message, settings, director, fragments, enabled_tools, kv_tracker=kv_tracker):
+        async for event in _agent_pass(client, prefix, user_message, settings, director, fragments, enabled_tools, kv_tracker=kv_tracker, reasoning_on=director_reasoning_on):
             if event["type"] == "reasoning":
                 yield {"event": "reasoning", "data": {"pass": "director", "delta": event["delta"]}}
             elif event["type"] == "done":
@@ -113,7 +118,7 @@ async def _run_pipeline(
         client, prefix, settings, enabled_tools, tool_start_token_id,
         inj_block=inj_block, effective_msg=effective_msg,
         length_guard_enforce=length_guard_enforce, length_guard=length_guard,
-        kv_tracker=kv_tracker,
+        kv_tracker=kv_tracker, reasoning_on=writer_reasoning_on,
     ):
         if item["type"] == "reasoning":
             yield {"event": "reasoning", "data": {"pass": "writer", "delta": item["delta"]}}
@@ -133,7 +138,7 @@ async def _run_pipeline(
     if do_refine and resp_text:
         logger.info("Refine pass starting (draft=%d chars, phrase_bank=%d groups)", len(resp_text), len(phrase_bank) if phrase_bank else 0)
         try:
-            async for event in refine_pass(client, prefix, effective_msg, resp_text, settings, phrase_bank or [], audit_enabled, length_guard, enabled_tools, kv_tracker=kv_tracker):
+            async for event in refine_pass(client, prefix, effective_msg, resp_text, settings, phrase_bank or [], audit_enabled, length_guard, enabled_tools, kv_tracker=kv_tracker, reasoning_on=refiner_reasoning_on):
                 if event["type"] == "reasoning":
                     yield {"event": "reasoning", "data": {"pass": "refiner", "delta": event["delta"]}}
                 elif event["type"] == "done":

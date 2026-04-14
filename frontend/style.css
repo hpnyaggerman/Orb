@@ -1019,8 +1019,36 @@ body {
 
 .reasoning-stepper {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   margin-bottom: 8px;
+}
+
+/* Wrapper that stacks the dot + enabled checkbox vertically */
+.reasoning-dot-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+}
+
+.reasoning-enabled-label {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 9px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+
+.reasoning-enabled-label input[type="checkbox"] {
+  width: 10px;
+  height: 10px;
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--accent);
 }
 
 .reasoning-dot {
@@ -1045,12 +1073,14 @@ body {
   height: 2px;
   flex-shrink: 0;
   transition: background .3s;
+  margin-top: 9px; /* align with dot center (dot is 20px tall, so 10px - 1px border) */
 }
 
 .reasoning-pass-label {
   font-size: 10px;
   color: var(--text-muted);
   margin-left: 8px;
+  margin-top: 4px; /* optically align with dot center */
   letter-spacing: .04em;
   font-family: var(--font-mono);
 }
