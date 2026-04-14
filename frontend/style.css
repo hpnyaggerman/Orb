@@ -537,6 +537,43 @@ body {
 .message .msg-body strong { font-weight: 600; }
 .message .msg-body .quoted { color: var(--accent); }
 
+/* Refiner diff highlights */
+.diff-change {
+  background: var(--accent-glow);
+  border-bottom: 1.5px solid var(--accent-dim);
+  border-radius: 2px;
+  padding: 0 2px;
+  position: relative;
+  cursor: default;
+  transition: background 0.15s, border-color 0.15s;
+}
+.diff-change:hover { border-bottom-color: var(--accent); }
+.diff-change[data-original]:hover::after {
+  content: "was: " attr(data-original);
+  position: absolute;
+  bottom: calc(100% + 7px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-light);
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-family: var(--font-prose);
+  white-space: pre-wrap;
+  max-width: 280px;
+  min-width: 60px;
+  padding: 5px 10px;
+  border-radius: var(--radius);
+  z-index: 100;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.5);
+  pointer-events: none;
+}
+.diff-deleted {
+  color: var(--text-muted);
+  text-decoration: line-through;
+  text-decoration-color: var(--red);
+}
+
 /* Message toolbar */
 .msg-toolbar {
   display: flex;

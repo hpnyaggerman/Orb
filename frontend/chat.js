@@ -1,5 +1,5 @@
 import { S } from './state.js';
-import { $, esc, formatProse, toast, scrollToBottom, scrollToMessage, avatarUrl, convUrl, formatRelativeDate, resolvePlaceholders } from './utils.js';
+import { $, esc, formatProse, formatProseWithDiff, wordDiff, toast, scrollToBottom, scrollToMessage, avatarUrl, convUrl, formatRelativeDate, resolvePlaceholders } from './utils.js';
 import { api } from './api.js';
 import { showModal, closeModal } from './modal.js';
 import { renderCharacters, loadCharacters } from './library.js';
@@ -55,7 +55,10 @@ function finalizeStreamingDiv(lastMsg) {
   div.setAttribute('data-msg-id', lastMsg.id);
   body.removeAttribute('id');
 
-  smoothUpdateBody(body, formatProse(resolvePlaceholders(lastMsg.content)));
+  const bodyHtml = S.pendingRefineDiff
+    ? formatProseWithDiff(S.pendingRefineDiff.ops)
+    : formatProse(resolvePlaceholders(lastMsg.content));
+  smoothUpdateBody(body, bodyHtml);
 
   if (!div.querySelector('.msg-toolbar')) {
     const tb = document.createElement('div');
@@ -260,6 +263,7 @@ export function renderMessages() {
           ${m.role === 'assistant' && m.id ? `<button onclick="regenerate(${m.id})" title="Regenerate">🔄 Regen</button>` : ''}
           ${m.id ? `<button onclick="deleteMessage(${m.id})" title="Delete message and all children" style="color:var(--red)">✕ Del</button>` : ''}
         </div>`;
+      const isLastAssistant = m.role === 'assistant' && m === msgs[msgs.length - 1];
       const body = isEditing ? `
         <div class="msg-edit-area">
           <textarea id="edit-textarea-${m.id}" rows="5">${esc(m.content)}</textarea>
@@ -269,7 +273,11 @@ export function renderMessages() {
               Save${m.role === 'user' ? ' & Regen' : ''}
             </button>
           </div>
-        </div>` : `<div class="msg-body">${formatProse(resolvePlaceholders(m.content))}</div>`;
+        </div>` : `<div class="msg-body">${
+          (isLastAssistant && S.pendingRefineDiff)
+            ? formatProseWithDiff(S.pendingRefineDiff.ops)
+            : formatProse(resolvePlaceholders(m.content))
+        }</div>`;
       return `<div class="message ${m.role}" data-msg-id="${m.id}">
         <div class="msg-role">${m.role === 'user' ? 'You' : esc(getCharName())} ${branchHtml}</div>
         ${body}${toolbar}
@@ -501,6 +509,9 @@ async function processSSEStream(resp, container, msgDiv, signal) {
   const decoder = new TextDecoder();
   let buffer = '', fullResponse = '', rewrittenResponse = null, firstToken = true, currentEvent = null;
 
+  // Clear any diff from the previous turn
+  S.pendingRefineDiff = null;
+
   // Reset reasoning state for this generation turn
   S.reasoningDirector = "";
   S.reasoningWriter   = "";
@@ -538,7 +549,12 @@ async function processSSEStream(resp, container, msgDiv, signal) {
           (text) => {
             rewrittenResponse = text;
             S.streamingContent = text;
-            if (S.streamingBodyEl) smoothUpdateBody(S.streamingBodyEl, formatProse(text));
+            if (S.streamingBodyEl) {
+              const html = S.pendingRefineDiff
+                ? formatProseWithDiff(S.pendingRefineDiff.ops)
+                : formatProse(text);
+              smoothUpdateBody(S.streamingBodyEl, html);
+            }
             scrollToBottom();
           }
         );
@@ -585,7 +601,14 @@ function handleSSEEvent(event, data, container, msgDiv, onToken, onRewrite) {
       clearRefineTimer();
       setGenerationPhase('refining');
       _advanceReasoningPass(2); // writer done, refiner starting → move to Refiner dot
-      try { onRewrite(JSON.parse(data).refined_text); } catch (_) {}
+      try {
+        const refined = JSON.parse(data).refined_text;
+        // S.streamingContent still holds the writer's unrefined text at this point
+        const original = resolvePlaceholders(S.streamingContent || '');
+        const refinedResolved = resolvePlaceholders(refined);
+        S.pendingRefineDiff = { original, ops: wordDiff(original, refinedResolved) };
+        onRewrite(refined);
+      } catch (_) {}
       break;
     case 'reasoning': {
       try {

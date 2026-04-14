@@ -50,6 +50,85 @@ export function formatRelativeDate(iso) {
   return date.toLocaleDateString();
 }
 
+// ── Word-level diff
+
+function _tokenize(text) {
+  // Split into alternating word-tokens and whitespace-tokens
+  return text.split(/(\s+)/);
+}
+
+function _lcs(a, b) {
+  const m = a.length, n = b.length;
+  const dp = Array.from({ length: m + 1 }, () => new Int32Array(n + 1));
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      dp[i][j] = a[i - 1] === b[j - 1]
+        ? dp[i - 1][j - 1] + 1
+        : Math.max(dp[i - 1][j], dp[i][j - 1]);
+    }
+  }
+  const ops = [];
+  let i = m, j = n;
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && a[i - 1] === b[j - 1]) {
+      ops.push({ type: 'equal', text: a[i - 1] }); i--; j--;
+    } else if (j > 0 && (i === 0 || dp[i][j - 1] >= dp[i - 1][j])) {
+      ops.push({ type: 'insert', text: b[j - 1] }); j--;
+    } else {
+      ops.push({ type: 'delete', text: a[i - 1] }); i--;
+    }
+  }
+  return ops.reverse();
+}
+
+function _mergeOps(ops) {
+  const result = [];
+  for (const op of ops) {
+    const last = result[result.length - 1];
+    if (last && last.type === op.type) last.text += op.text;
+    else result.push({ ...op });
+  }
+  return result;
+}
+
+// Returns merged diff ops: [{type: 'equal'|'insert'|'delete', text}]
+export function wordDiff(oldText, newText) {
+  if (!oldText || !newText) return [{ type: 'equal', text: newText || '' }];
+  return _mergeOps(_lcs(_tokenize(oldText), _tokenize(newText)));
+}
+
+function _applyInlineFormatting(escaped) {
+  escaped = escaped.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  escaped = escaped.replace(/\*([^*]+?)\*/g, '<em>$1</em>');
+  return escaped.replace(/"([^"]+)"/g, '<span class="quoted">"$1"</span>');
+}
+
+// Renders diff ops as HTML with change highlights and tooltips for original text.
+// delete ops immediately followed by an insert carry the original text as data-original.
+// Standalone deletes are shown as strikethrough.
+export function formatProseWithDiff(ops) {
+  let html = '';
+  for (let i = 0; i < ops.length; i++) {
+    const op = ops[i];
+    if (op.type === 'equal') {
+      html += _applyInlineFormatting(esc(op.text));
+    } else if (op.type === 'insert') {
+      const prev = ops[i - 1];
+      const original = prev?.type === 'delete' ? prev.text : '';
+      const attr = original ? ` data-original="${esc(original)}"` : '';
+      html += `<span class="diff-change"${attr}>${_applyInlineFormatting(esc(op.text))}</span>`;
+    } else if (op.type === 'delete') {
+      const next = ops[i + 1];
+      if (!next || next.type !== 'insert') {
+        // Standalone deletion — show inline as strikethrough
+        html += `<span class="diff-deleted">${_applyInlineFormatting(esc(op.text))}</span>`;
+      }
+      // else: paired with following insert; insert carries data-original, skip here
+    }
+  }
+  return html.replace(/\n/g, '<br>');
+}
+
 export function formatProse(text) {
   if (!text) return '';
   let escaped = esc(text);
