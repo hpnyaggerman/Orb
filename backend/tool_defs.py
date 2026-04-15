@@ -171,7 +171,8 @@ TOOLS: dict[str, dict] = {
     "refine_rewrite": {"choice": {"type": "function", "function": {"name": "refine_rewrite"}}, "schema": REFINE_REWRITE_TOOL},
 }
 
-POST_WRITER_TOOLS = {"refine_apply_patch"}
+PRE_WRITER_TOOLS  = {"rewrite_user_prompt"}
+POST_WRITER_TOOLS = {"refine_apply_patch", "refine_rewrite"}
 ALL_SCHEMAS = [t["schema"] for t in TOOLS.values()]
 
 

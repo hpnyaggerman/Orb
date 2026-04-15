@@ -241,9 +241,9 @@ async def refine_pass(
 
     # Start from the same enabled-tool set used by the director and writer
     # passes so the KV-cache prefix stays aligned.  REFINE_APPLY_PATCH_TOOL
-    # is already included when audit_enabled is True (the flag requires it).
-    # REFINE_REWRITE_TOOL is appended conditionally below when the length
-    # guard fires — an acceptable cache-miss because it rarely triggers.
+    # is included when audit_enabled is True; REFINE_REWRITE_TOOL is included
+    # when length_guard is enabled — both injected by the orchestrator into
+    # enabled_tools before reaching this pass.
     refine_tools: list[dict] = enabled_schemas(enabled_tools)
 
     if length_guard and length_guard.get("enabled"):
@@ -255,8 +255,6 @@ async def refine_pass(
             length_guard_instruction = LENGTH_GUARD_INSTRUCTIONS.format(
                 word_count=word_count, max_paragraphs=max_paragraphs, max_words=max_words
             )
-            if REFINE_REWRITE_TOOL not in refine_tools:
-                refine_tools.append(REFINE_REWRITE_TOOL)
             logger.info("Refine: length guard triggered (word_count=%d > max_words=%d)", word_count, max_words)
             debug_parts.append(f"Length guard triggered: {word_count} words (max {max_words})")
 

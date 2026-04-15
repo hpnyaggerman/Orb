@@ -49,8 +49,8 @@ async def _run_pipeline(
     schema list returned by ``enabled_schemas(enabled_tools)`` are kept
     identical across all three passes so the LLM can reuse cached KV entries.
     Only ``tool_choice`` and the trailing user message differ per pass.
-    The refine pass may append REFINE_REWRITE_TOOL when the length guard
-    fires — an intentional cache-miss that rarely occurs.
+    ``refine_rewrite`` is included in the schema set whenever the length guard
+    is enabled (mirroring how ``refine_apply_patch`` tracks ``audit_enabled``).
     """
     enabled_tools = settings.get("enabled_tools") or {}
     agent_on = bool(settings.get("enable_agent", 1))
@@ -72,7 +72,12 @@ async def _run_pipeline(
 
     # Length guard
     length_guard_enabled = bool(enabled_tools.get("length_guard", False)) if agent_on else False
+    # Mirror refine_rewrite into enabled_tools so enabled_schemas() includes its schema in all
+    # three passes — same KV-cache consistency approach as refine_apply_patch.
+    if length_guard_enabled:
+        enabled_tools = {**enabled_tools, "refine_rewrite": True}
     length_guard_enforce = bool(enabled_tools.get("length_guard_enforce", False)) if agent_on else False
+
     length_guard = {
         "enabled": length_guard_enabled,
         "max_words": int(settings.get("length_guard_max_words", 240)),
