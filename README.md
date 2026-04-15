@@ -1,5 +1,6 @@
 # Orb - Agentic RP Frontend
 
+![Orb](Orb.png)
 ## Problem Statement
 
 LLMs suffer from stylistic inertia in long roleplay sessions. Once a tone, pacing, or prose style is established over several turns, the model tends to perpetuate it regardless of narrative shifts. A lighthearted conversation that turns tragic will often retain the cadence and vocabulary of the earlier tone because the weight of prior context anchors the model's generation.
@@ -20,7 +21,8 @@ The system uses a three-pass architecture for each user message:
 
 1. **Director Pass** - Tool-calling phase where the LLM selects moods, plot direction, and potentially rewrites user prompts
 2. **Writer Pass** - Story generation phase where the LLM writes the actual roleplay response
-3. **Refine Pass** - Optional self-audit for slop and length optimization phase
+3. **Refine Pass** - A ReAct loop - Self-audit for slop and length optimization phase. This is surgical, errors will be programmatically detected, 
+the model only needs to write replacement for targeted sentences
 
 ## KV Cache Reuse Requirements
 
@@ -28,12 +30,11 @@ For optimal KV cache reuse, the following must remain consistent across passes:
 
 ### 1. System Prompt
 - The system prompt (character card, instructions, etc.) is identical across all passes
-- Built once using `build_prefix()` and reused
+- Built once and reused forever
 - Includes character description, scenario, example dialogue, and additional instructions
 
 ### 2. Chat History
 - The conversation history (previous messages) is identical across all passes
-- Processed through `build_prefix()` with placeholders replaced
 - Maintains exact same message content and ordering
 
 ### 3. Tool Schemas
@@ -43,12 +44,12 @@ For optimal KV cache reuse, the following must remain consistent across passes:
 
 ## Benefits
 
-1. **Reduced Latency**: Subsequent passes reuse cached computations
-2. **Lower Token Processing**: Shared prefix doesn't need re-processing
-3. **Cost Efficiency**: Fewer total tokens processed by the LLM
-4. **Consistent Behavior**: Model maintains same tool understanding across passes
+1. **Clear direction for Writer**: Grounding the story + actively steering the writing style = better output
+2. **Customizability**: Customizable prompt injection that's automatically used by Director model
+3. **Anti-slop**: Get rid of overused words and phrases often seen in LLM outputs
+4. **Length Guard**: Actively or passively protect from length degradation as context grows
 
 ## Drawbacks
 
 1. **Speed**: Multiple passes will obviously have a longer time to final response
-2. **Cost**: Neligible cost increase, which comes naturally with multiple passes. However, KV cache reuse strategy alleviates this somewhat
+2. **Cost**: Neligible cost increase, which comes naturally with multiple passes, somewhat alleviated by KV cache reuse strategy
