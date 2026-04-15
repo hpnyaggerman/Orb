@@ -4,6 +4,7 @@ Contrastive-negation ("AI slop") detector.
 Catches rhetorical patterns like:
     "It's not a bug, but a feature."
     "This isn't a setback, it is an opportunity."
+    "He doesn't just give up; he breaks down."
 
 Avoids common false positives:
     - "not only … but (also)"
@@ -31,7 +32,8 @@ _PRONOUNS = frozenset(
     "i me my he him his she her it its we us our they them their "
     "this that these those you your".split()
 )
-_BE_VERBS = frozenset("is am are was were be been being".split())
+_BE_VERBS = frozenset("is am are was were be been being 's 're 'm".split())
+_DO_VERBS = frozenset("do does did".split())
 _CONJUNCTIONS = frozenset("but and or yet so".split())
 _CLAUSE_SIGNALS = frozenset(
     "i he she we they you who which what where when why how if because "
@@ -44,9 +46,11 @@ def _tag_word(word: str) -> str:
     low = word.lower()
     if low in _BE_VERBS:
         return "VERB"
+    if low in _DO_VERBS:
+        return "VERB"
     if low in ("a", "an", "the"):
         return "DET"
-    if low in ("not", "n't"):
+    if low in ("not", "n't") or low.endswith("n't"):
         return "NEG"
     if low in _CONJUNCTIONS:
         return "CONJ"
@@ -67,9 +71,12 @@ def _tag_word(word: str) -> str:
 
 _NEGATED_BE = frozenset({
     "isn't", "aren't", "wasn't", "weren't",
-    "is not", "are not", "was not", "were not",
+    "is not", "are not", "was not", "were not", "am not",
+    "'s not", "'re not", "'m not",
 })
+_NEGATED_DO_CONTRACTIONS = frozenset({"doesn't", "don't", "didn't"})
 _SAME_SUBJECT_PRONOUNS = frozenset("it this that".split())
+_PERSONAL_PRONOUNS = frozenset("i me he him she her we us they them you".split())
 
 
 # ── guard helpers ─────────────────────────────────────────────────────────────
@@ -117,12 +124,12 @@ def _find_negated_be_pattern(tokens: list[str], tags: list[str]) -> dict | None:
     neg_idx = None
     neg_width = 1
     for i, t in enumerate(tokens):
-        if t in ("isn't", "aren't", "wasn't", "weren't"):
+        if t.lower() in ("isn't", "aren't", "wasn't", "weren't"):
             neg_idx = i
             break
         if (i + 1 < len(tokens) and tags[i] == "VERB"
-                and tokens[i + 1] == "not"
-                and f"{tokens[i]} not" in _NEGATED_BE):
+                and tokens[i + 1].lower() == "not"
+                and f"{tokens[i].lower()} not" in _NEGATED_BE):
             neg_idx = i
             neg_width = 2
             break
@@ -132,7 +139,7 @@ def _find_negated_be_pattern(tokens: list[str], tags: list[str]) -> dict | None:
 
     boundary = None
     for i in range(neg_idx + neg_width + 1, len(tokens)):
-        if tokens[i] in (",", ";") or tokens[i] == "but":
+        if tokens[i] in (",", ";", "—", "–") or tokens[i] == "but":
             boundary = i
             break
 
@@ -141,21 +148,22 @@ def _find_negated_be_pattern(tokens: list[str], tags: list[str]) -> dict | None:
 
     aff_idx = None
     for i in range(boundary + 1, len(tokens)):
-        if tokens[i] in _BE_VERBS:
+        if tokens[i].lower() in _BE_VERBS:
             aff_idx = i
             break
 
     if aff_idx is None:
         return None
 
-    # Subject-continuity check: allow anaphoric pronouns, same subject word,
-    # or elided subject (be-verb right after boundary).
     neg_subject = tokens[neg_idx - 1] if neg_idx > 0 else None
     if aff_idx > boundary + 1:
         pre_aff = tokens[aff_idx - 1]
         same_subject = (
-            pre_aff in _SAME_SUBJECT_PRONOUNS
-            or (neg_subject is not None and pre_aff == neg_subject)
+            (pre_aff.lower() in _SAME_SUBJECT_PRONOUNS
+             and (neg_subject is None
+                  or neg_subject.lower() not in _PERSONAL_PRONOUNS))
+            or (neg_subject is not None
+                and pre_aff.lower() == neg_subject.lower())
         )
         if not same_subject:
             return None
@@ -168,13 +176,97 @@ def _find_negated_be_pattern(tokens: list[str], tags: list[str]) -> dict | None:
     _strip_trailing_punct(x_tokens, x_tags)
     _strip_trailing_punct(y_tokens, y_tags)
 
-    if x_tags and y_tags:
+    if x_tags:
         return {
             "x_template": " ".join(x_tags),
             "y_template": " ".join(y_tags),
             "is_parallel": x_tags == y_tags,
         }
     return None
+
+
+# ── Strategy 3: do-support ───────────────────────────────────────────────────
+
+def _find_do_support_pattern(tokens: list[str], tags: list[str], lowers: list[str]) -> dict | None:
+    """Match 'doesn't X, ... [it] Ys' but only when the affirmative clause
+    shares the same subject and opens with a verb."""
+
+    neg_idx = None
+    neg_width = 1
+    for i, t in enumerate(tokens):
+        if t.lower() in _NEGATED_DO_CONTRACTIONS:
+            neg_idx = i
+            break
+        if (i + 1 < len(tokens) and tags[i] == "VERB"
+                and t.lower() in _DO_VERBS
+                and tokens[i + 1].lower() == "not"):
+            neg_idx = i
+            neg_width = 2
+            break
+
+    if neg_idx is None:
+        return None
+
+    boundary = None
+    for i in range(neg_idx + neg_width + 1, len(tokens)):
+        if tokens[i] in (",", ";", "—", "–") or tokens[i] == "but":
+            boundary = i
+            break
+
+    if boundary is None:
+        return None
+
+    neg_subject = tokens[neg_idx - 1] if neg_idx > 0 else None
+
+    aff_verb_idx = None
+    for i in range(boundary + 1, len(tokens)):
+        if tags[i] == "VERB":
+            aff_verb_idx = i
+            break
+
+    if aff_verb_idx is None:
+        return None
+
+    # Subject-continuity check for do-support
+    same_subject = False
+
+    # 1. Explicit subject right before the verb
+    if aff_verb_idx > boundary + 1:
+        pre_verb = tokens[aff_verb_idx - 1]
+        if pre_verb in _SAME_SUBJECT_PRONOUNS or (neg_subject is not None and pre_verb.lower() == neg_subject.lower()):
+            same_subject = True
+
+    # 2. Elided subject (verb immediately after boundary, or boundary + conjunction)
+    if not same_subject:
+        if aff_verb_idx == boundary + 1:
+            same_subject = True  # Verb right after boundary
+        elif aff_verb_idx == boundary + 2 and tokens[boundary + 1].lower() in _CONJUNCTIONS:
+            same_subject = True  # Verb right after "but"/"yet"
+
+    if not same_subject:
+        return None
+
+    x_tokens = tokens[neg_idx + neg_width : boundary]
+    x_tags   = tags  [neg_idx + neg_width : boundary]
+    y_tokens = tokens[aff_verb_idx + 1 :]
+    y_tags   = tags  [aff_verb_idx + 1 :]
+
+    _strip_trailing_punct(x_tokens, x_tags)
+    _strip_trailing_punct(y_tokens, y_tags)
+
+    # Allow intransitive Y (e.g. "doesn't break, it bends") by only requiring x_tags
+    if not x_tags:
+        return None
+    if _x_looks_like_clause(x_tokens):
+        return None
+    if _y_looks_like_clause(y_tokens):
+        return None
+
+    return {
+        "x_template": " ".join(x_tags),
+        "y_template": " ".join(y_tags),
+        "is_parallel": x_tags == y_tags,
+    }
 
 
 # ── Strategy 1: "not … but …" ────────────────────────────────────────────────
@@ -221,8 +313,34 @@ def _find_not_but_pattern(lowers: list[str], words: list[str],
 
 # ── main entry point ──────────────────────────────────────────────────────────
 
+_BE_CONTRACTION_STARTERS = frozenset({
+    "i", "you", "he", "she", "it", "we", "they",
+    "that", "this", "there", "here",
+    "who", "what", "where", "when", "how",
+})
+
+
+def _split_contractions(tokens: list[str]) -> list[str]:
+    """Split pronoun+be contractions:  she's → she 's,  they're → they 're."""
+    result = []
+    for token in tokens:
+        low = token.lower()
+        split = False
+        for suffix in ("'s", "'re", "'m"):
+            if low.endswith(suffix) and len(token) > len(suffix):
+                stem = token[: -len(suffix)]
+                if stem.lower() in _BE_CONTRACTION_STARTERS:
+                    result.append(stem)
+                    result.append(suffix)
+                    split = True
+                    break
+        if not split:
+            result.append(token)
+    return result
+
+
 def detect_contrastive_negation(text: str) -> list[dict]:
-    """Find 'Not X, but Y' and 'isn't X, it is Y' rhetorical patterns.
+    """Find 'Not X, but Y', 'isn't X, it is Y', and 'doesn't X, it Ys' rhetorical patterns.
 
     Returns a list of dicts with keys:
         sentence, x_template, y_template, is_parallel
@@ -231,7 +349,7 @@ def detect_contrastive_negation(text: str) -> list[dict]:
     results = []
 
     for sent in sentences:
-        words = _tokenize(sent)
+        words = _split_contractions(_tokenize(sent))
         if len(words) < 4:
             continue
 
@@ -243,7 +361,9 @@ def detect_contrastive_negation(text: str) -> list[dict]:
 
         hit = _find_not_but_pattern(lowers, words, tags)
         if hit is None:
-            hit = _find_negated_be_pattern(lowers, tags)
+            hit = _find_negated_be_pattern(words, tags)
+        if hit is None:
+            hit = _find_do_support_pattern(words, tags, lowers)
 
         if hit:
             hit["sentence"] = sent
