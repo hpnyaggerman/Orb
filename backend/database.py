@@ -75,7 +75,7 @@ SEED_FRAGMENTS = [
         "prompt_text": (
             'The narration may describe body parts that are exposed or looked at - visually, or interacted with - tactilely, but sparingly in order to avoid repetition. Take initiative and actively push the scene forward, no need to ask. '
             'The narration can use NSFW, vulgar, uncensored, explicit vocabulary where applicable. Avoid roundabout allegories like "heat", "core", etc. The prose is now more brutal, vivid, and direct. '
-            'Consider positions and clothing states of the characters - what are they wearing, and where are they in relation to each other?. ',
+            'Consider positions and clothing states of the characters - what are they wearing, and where are they in relation to each other?. '
             "Focus on staying in character even though the vibes are sensual - characters still have their own boundaries and will behave realistically and warily of strangers."
         ),
         "negative_prompt": (
