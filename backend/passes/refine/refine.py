@@ -60,8 +60,11 @@ def filter_audit_report_to_text(report: AuditReport, target_text: str) -> AuditR
     """
     target_sents = _split_target_sentences(target_text)
 
-    # Cliché results
-    filtered_fs = [fs for fs in report.cliche_result.flagged_sentences if fs.sentence in target_sents]
+    # Cliché results — slop_detector splits only on [.!?] while _split_target_sentences
+    # also splits after quote chars, so sentences may not match as set members.
+    # Use substring containment instead, which is guaranteed correct since the
+    # detector can only flag sentences it found within the text.
+    filtered_fs = [fs for fs in report.cliche_result.flagged_sentences if fs.sentence in target_text]
     filtered_cliche = DetectionResult(
         flagged_sentences=filtered_fs,
         unique_cliches=report.cliche_result.unique_cliches,
@@ -96,8 +99,9 @@ def filter_audit_report_to_text(report: AuditReport, target_text: str) -> AuditR
         repetition_score=report.template_result.repetition_score,
     )
 
-    # Not-but results
-    filtered_not_but = [nb for nb in report.not_but_result if nb.get("sentence", "") in target_sents]
+    # Not-but results — same mismatch issue as clichés (contrastive_negation also
+    # splits only on [.!?]), so use substring containment here too.
+    filtered_not_but = [nb for nb in report.not_but_result if nb.get("sentence", "") in target_text]
 
     return AuditReport(
         cliche_result=filtered_cliche,
