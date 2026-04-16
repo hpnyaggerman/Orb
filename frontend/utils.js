@@ -50,11 +50,24 @@ export function formatRelativeDate(iso) {
   return date.toLocaleDateString();
 }
 
-// ── Word-level diff
+// ── Sentence-level diff
 
-function _tokenize(text) {
-  // Split into alternating word-tokens and whitespace-tokens
-  return text.split(/(\s+)/);
+function _tokenizeSentences(text) {
+  // Split on sentence boundaries: [.!?] + space before a capital letter, or at newlines.
+  // Heuristic avoids splitting on mid-sentence abbreviations like "e.g." because those
+  // are rarely followed directly by a capital letter.
+  // Each token retains its terminating punctuation; the inter-sentence space stays with
+  // the preceding token so round-tripping via join('') reproduces the original.
+  const raw = text.split(/(?<=[.!?]) +(?=[A-Z])|(?=\n)|\n+/);
+  const tokens = [];
+  for (let i = 0; i < raw.length; i++) {
+    const t = raw[i];
+    if (!t.length) continue;
+    // Re-attach one space if the original had an inter-sentence space here
+    const needsTrailingSpace = i < raw.length - 1 && !t.endsWith('\n') && raw[i + 1] && !raw[i + 1].startsWith('\n');
+    tokens.push(needsTrailingSpace ? t + ' ' : t);
+  }
+  return tokens.length > 0 ? tokens : [text];
 }
 
 function _lcs(a, b) {
@@ -92,9 +105,11 @@ function _mergeOps(ops) {
 }
 
 // Returns merged diff ops: [{type: 'equal'|'insert'|'delete', text}]
-export function wordDiff(oldText, newText) {
+// Tokenises at sentence granularity so changed sentences appear as whole units
+// rather than fragmented word-level edits.
+export function sentenceDiff(oldText, newText) {
   if (!oldText || !newText) return [{ type: 'equal', text: newText || '' }];
-  return _mergeOps(_lcs(_tokenize(oldText), _tokenize(newText)));
+  return _mergeOps(_lcs(_tokenizeSentences(oldText), _tokenizeSentences(newText)));
 }
 
 function _applyInlineFormatting(escaped) {
@@ -104,27 +119,30 @@ function _applyInlineFormatting(escaped) {
   return escaped.replace(/\u201c([^\u201d]+)\u201d/g, '<span class="quoted">\u201c$1\u201d</span>');
 }
 
-// Renders diff ops as HTML with change highlights and tooltips for original text.
-// delete ops immediately followed by an insert carry the original text as data-original.
-// Standalone deletes are shown as strikethrough.
+// Renders diff ops as HTML with change highlights.
+// For delete→insert pairs: shows the old sentence struck-through immediately before
+// the new highlighted sentence so both are readable in context.
+// Standalone deletes are shown as strikethrough; standalone inserts as highlighted.
 export function formatProseWithDiff(ops) {
   let html = '';
   for (let i = 0; i < ops.length; i++) {
     const op = ops[i];
     if (op.type === 'equal') {
       html += _applyInlineFormatting(esc(op.text));
-    } else if (op.type === 'insert') {
-      const prev = ops[i - 1];
-      const original = prev?.type === 'delete' ? prev.text : '';
-      const attr = original ? ` data-original="${esc(original)}"` : '';
-      html += `<span class="diff-change"${attr}>${_applyInlineFormatting(esc(op.text))}</span>`;
     } else if (op.type === 'delete') {
       const next = ops[i + 1];
-      if (!next || next.type !== 'insert') {
-        // Standalone deletion — show inline as strikethrough
+      if (next?.type === 'insert') {
+        // Paired replacement: show old struck-through, new highlighted side-by-side
+        html += `<span class="diff-deleted">${_applyInlineFormatting(esc(op.text))}</span>`;
+        html += `<span class="diff-change">${_applyInlineFormatting(esc(next.text))}</span>`;
+        i++; // consume the paired insert
+      } else {
+        // Standalone deletion
         html += `<span class="diff-deleted">${_applyInlineFormatting(esc(op.text))}</span>`;
       }
-      // else: paired with following insert; insert carries data-original, skip here
+    } else if (op.type === 'insert') {
+      // Standalone insertion (not preceded by a delete)
+      html += `<span class="diff-change">${_applyInlineFormatting(esc(op.text))}</span>`;
     }
   }
   return html.replace(/\n/g, '<br>');

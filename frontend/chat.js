@@ -1,5 +1,5 @@
 import { S } from './state.js';
-import { $, esc, formatProse, formatProseWithDiff, wordDiff, toast, scrollToBottom, scrollToMessage, avatarUrl, convUrl, formatRelativeDate, resolvePlaceholders } from './utils.js';
+import { $, esc, formatProse, formatProseWithDiff, sentenceDiff, toast, scrollToBottom, scrollToMessage, avatarUrl, convUrl, formatRelativeDate, resolvePlaceholders } from './utils.js';
 import { api } from './api.js';
 import { showModal, closeModal, showConfirmModal } from './modal.js';
 import { renderCharacters, loadCharacters } from './library.js';
@@ -628,7 +628,7 @@ function handleSSEEvent(event, data, container, msgDiv, onToken, onRewrite) {
         // S.streamingContent still holds the writer's unrefined text at this point
         const original = resolvePlaceholders(S.streamingContent || '');
         const refinedResolved = resolvePlaceholders(refined);
-        S.pendingRefineDiff = { original, ops: wordDiff(original, refinedResolved) };
+        S.pendingRefineDiff = { original, ops: sentenceDiff(original, refinedResolved) };
         onRewrite(refined);
       } catch (_) {}
       break;
