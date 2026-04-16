@@ -144,8 +144,12 @@ export function formatProse(text) {
         return `<pre><code${langAttr}>${code}</code></pre>`;
       }
     }
+    // Strip boundary newlines that would double-up spacing next to <pre> blocks
+    let prose = part;
+    if (i > 0)                prose = prose.replace(/^\n/, '');   // after a code block
+    if (i < parts.length - 1) prose = prose.replace(/\n$/, '');   // before a code block
     // Normal prose: apply inline formatting
-    let escaped = esc(part);
+    let escaped = esc(prose);
     escaped = escaped.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
     escaped = escaped.replace(/\*([^*]+?)\*/g, '<em>$1</em>');
     escaped = escaped.replace(/"([^"]+)"/g, '<span class="quoted">"$1"</span>');
