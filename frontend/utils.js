@@ -131,16 +131,26 @@ export function formatProseWithDiff(ops) {
 
 export function formatProse(text) {
   if (!text) return '';
-  let escaped = esc(text);
-  // Convert markdown-like formatting
-  // Handle **bold** -> <strong>
-  escaped = escaped.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-  // Handle *italic* -> <em>
-  escaped = escaped.replace(/\*([^*]+?)\*/g, '<em>$1</em>');
-  // Handle quoted text "..." -> <span class="quoted">
-  escaped = escaped.replace(/"([^"]+)"/g, '<span class="quoted">"$1"</span>');
-  // Replace newlines with <br>
-  return escaped.replace(/\n/g, '<br>');
+  // Split on fenced code blocks before escaping so we can handle them separately
+  const parts = text.split(/(```[\w]*\n?[\s\S]*?```)/g);
+  return parts.map((part, i) => {
+    // Odd-indexed parts are fenced code block matches
+    if (i % 2 === 1) {
+      const match = part.match(/^```(\w*)\n?([\s\S]*?)```$/);
+      if (match) {
+        const lang = match[1];
+        const code = esc(match[2]);
+        const langAttr = lang ? ` class="language-${esc(lang)}"` : '';
+        return `<pre><code${langAttr}>${code}</code></pre>`;
+      }
+    }
+    // Normal prose: apply inline formatting
+    let escaped = esc(part);
+    escaped = escaped.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+    escaped = escaped.replace(/\*([^*]+?)\*/g, '<em>$1</em>');
+    escaped = escaped.replace(/"([^"]+)"/g, '<span class="quoted">"$1"</span>');
+    return escaped.replace(/\n/g, '<br>');
+  }).join('');
 }
 
 /**

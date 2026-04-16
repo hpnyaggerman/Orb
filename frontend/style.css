@@ -536,6 +536,20 @@ body {
 .message .msg-body em { font-style: italic; color: var(--text-secondary); }
 .message .msg-body strong { font-weight: 600; }
 .message .msg-body .quoted { color: var(--accent); }
+.message .msg-body pre {
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: .75em 1em;
+  margin: .5em 0;
+  overflow-x: auto;
+}
+.message .msg-body pre code {
+  font-family: ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
+  font-size: .875em;
+  white-space: pre;
+  color: var(--text-primary);
+}
 
 /* Refiner diff highlights */
 .diff-change {
