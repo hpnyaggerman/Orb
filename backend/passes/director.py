@@ -21,10 +21,10 @@ logger = logging.getLogger(__name__)
 
 def apply_tool_calls(
     tool_calls: list[dict], current_moods: list[str],
-) -> tuple[list[str], str | None, str | None, str | None, list[str] | None, str | None, list[str] | None]:
+) -> tuple[list[str], str | None, str | None, str | None, list[str] | None, str | None, list[str] | None, str | None]:
     moods = list(current_moods)
-    refined, next_event, writing_direction, detected_repetitions, plot_summary, keywords = (
-        None, None, None, None, None, None,
+    refined, next_event, writing_direction, detected_repetitions, plot_summary, keywords, user_intent = (
+        None, None, None, None, None, None, None,
     )
     for tc in tool_calls:
         args = tc.get("arguments", {})
@@ -35,9 +35,10 @@ def apply_tool_calls(
             detected_repetitions = args.get("detected_repetitions") or None
             plot_summary         = args.get("plot_summary") or None
             keywords             = args.get("keywords") or None
+            user_intent          = args.get("user_intent") or None
         elif tc["name"] == "rewrite_user_prompt":
             refined = args.get("refined_message") or None
-    return moods, refined, next_event, writing_direction, detected_repetitions, plot_summary, keywords
+    return moods, refined, next_event, writing_direction, detected_repetitions, plot_summary, keywords, user_intent
 
 
 # ── Agent pass ────────────────────────────────────────────────────────────────
@@ -54,8 +55,8 @@ async def _agent_pass(
         {"type": "done", "result": tuple}     — final (moods, raw, calls, latency, ...)
     """
     active_moods = director["active_moods"]
-    refined_msg, next_event, writing_direction, detected_repetitions, plot_summary = (
-        None, None, None, None, None,
+    refined_msg, next_event, writing_direction, detected_repetitions, plot_summary, user_intent = (
+        None, None, None, None, None, None,
     )
     keywords = director.get("keywords", [])
     all_calls: list[dict] = []
@@ -72,7 +73,7 @@ async def _agent_pass(
         tool_names.sort(key=lambda x: priority.index(x) if x in priority else len(priority))
 
     if not tool_names:
-        yield {"type": "done", "result": (active_moods, "", [], 0, None, None, None, None, None, None)}
+        yield {"type": "done", "result": (active_moods, "", [], 0, None, None, None, None, None, None, None)}
         return
 
     tool_schemas = enabled_schemas(enabled_tools)
@@ -103,13 +104,14 @@ async def _agent_pass(
             logger.info("Agent tool=%s output:\n%s", name, last_raw)
             if parsed := parse_tool_calls(resp):
                 all_calls.extend(parsed)
-                active_moods, new_refined, new_plot, new_narration, new_reps, new_summary, new_kw = apply_tool_calls(parsed, active_moods)
+                active_moods, new_refined, new_plot, new_narration, new_reps, new_summary, new_kw, new_intent = apply_tool_calls(parsed, active_moods)
                 if new_refined:    refined_msg           = new_refined
-                if new_plot:       next_event        = new_plot
+                if new_plot:       next_event            = new_plot
                 if new_narration:  writing_direction     = new_narration
                 if new_reps:       detected_repetitions  = new_reps
                 if new_summary:    plot_summary          = new_summary
                 if new_kw:         keywords              = new_kw[:6]
+                if new_intent:     user_intent           = new_intent
             else:
                 logger.info("Agent tool=%s: model skipped", name)
         except Exception as e:
@@ -122,6 +124,6 @@ async def _agent_pass(
             active_moods, last_raw, all_calls,
             int((time.monotonic() - t0) * 1000),
             refined_msg, next_event, writing_direction,
-            detected_repetitions, plot_summary, keywords,
+            detected_repetitions, plot_summary, keywords, user_intent,
         ),
     }

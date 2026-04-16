@@ -14,23 +14,27 @@ AGENT_TOOLS = [{
         "parameters": {
             "type": "object",
             "properties": {
-                "moods": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "List of moods to activate. Leave empty for a neutral tone.",
+                "plot_summary": {
+                    "type": "string",
+                    "description": "A brief and specific summary of what has happened so far in the story. Call things for what they are, avoid being generic, avoid adjectives. 3 sentences max (e.g. Rob was working on his lake house when his wife called for him to help moving some furnitue. The weather was hot so he took off his shirt. Then the couch fell on his leg, eliciting his pain receptors.).",
+                },
+                "user_intent": {
+                    "type": "string",
+                    "description": "Deduced intention of user based on their input, what they want to see. Be extremely literal and specific (e.g. 'The user wants the character to clarify what they meant by \"the pain\"', 'The user wants to know what\'s in the picture', 'The user is confessing his love in a roundabout way', 'The user wants to push the scenario forward already').",
                 },
                 "keywords": {
                     "type": "array",
                     "items": {"type": "string"},
                     "description": "List of nouns (keywords) to remind the important subjects in the roleplay so far. This list shouldn't grow too long (keep under 6 items). Extract from the messages and plot summary. Ignore obvious things like names of the characters. Examples: 'ancient Egypt', 'headlock', 'monetary deal', 'language/accent', 'desert night', 'six-sided dice', 'discarded belt'. Avoid generic concepts (e.g. 'anger', 'ruin', etc.)",
                 },
-                "plot_summary": {
-                    "type": "string",
-                    "description": "A brief and specific summary of what has happened so far in the story. Call things for what they are, avoid being generic, avoid adjectives. 3 sentences max (e.g. Rob was working on his lake house when his wife called for him to help moving some furnitue. The weather was hot so he took off his shirt. Then the couch fell on his leg, eliciting his pain receptors.).",
-                },
                 "next_event": {
                     "type": "string",
                     "description": "What happens immediately next in the story — the next event, action, reveal, or turn of fate (e.g. 'She continues to bear down in a squatting position. Somebody in the gym asks if she's okay', 'The attack tears off a chunk of her clothing. She frantically tries to cover herself', 'Jack can tell she's lying. He calls her out it because they have been friends forever', 'She pretends not to know what Vodka is to keep up the innocent act', 'He gets bored and shifts focus to something else entirely'). Keep to two short sentences.",
+                },
+                "moods": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of moods to activate. Leave empty for a neutral tone.",
                 },
                 "writing_direction": {
                     "type": "string",

@@ -47,7 +47,7 @@ async def _run_pipeline(
 
     active_moods = director["active_moods"]
     agent_raw, calls, latency = "", [], 0
-    refined_msg, next_event, writing_direction, detected_repetitions, plot_summary = None, None, None, None, None
+    refined_msg, next_event, writing_direction, detected_repetitions, plot_summary, user_intent = None, None, None, None, None, None
     keywords = director.get("keywords", [])
     effective_msg = user_message
 
@@ -80,7 +80,7 @@ async def _run_pipeline(
             if event["type"] == "reasoning":
                 yield {"event": "reasoning", "data": {"pass": "director", "delta": event["delta"]}}
             elif event["type"] == "done":
-                active_moods, agent_raw, calls, latency, refined_msg, next_event, writing_direction, detected_repetitions, plot_summary, keywords = event["result"]
+                active_moods, agent_raw, calls, latency, refined_msg, next_event, writing_direction, detected_repetitions, plot_summary, keywords, user_intent = event["result"]
         if refined_msg:
             effective_msg = refined_msg
             yield {"event": "prompt_rewritten", "data": {"refined_message": refined_msg}}
@@ -89,13 +89,14 @@ async def _run_pipeline(
     direct_scene_enabled = agent_on and bool(enabled_tools.get("direct_scene", False))
     inj_block = compute_style_injection_block(
         active_moods, director["active_moods"], fragments, direct_scene_enabled,
-        next_event, writing_direction, detected_repetitions, plot_summary, keywords,
+        next_event, writing_direction, detected_repetitions, plot_summary, keywords, user_intent,
     )
 
     yield {"event": "director_done", "data": {
         "active_moods": active_moods, "injection_block": inj_block, "tool_calls": calls,
         "agent_latency_ms": latency, "next_event": next_event, "writing_direction": writing_direction,
         "detected_repetitions": detected_repetitions, "plot_summary": plot_summary, "keywords": keywords,
+        "user_intent": user_intent,
     }}
 
     # --- Writer pass ---

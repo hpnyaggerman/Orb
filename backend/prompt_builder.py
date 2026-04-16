@@ -96,6 +96,7 @@ def compute_style_injection_block(
     detected_repetitions: list[str] | None = None,
     plot_summary: str | None = None,
     keywords: list[str] | None = None,
+    user_intent: str | None = None,
 ) -> str:
     """Compute the style injection block from director-pass outputs.
 
@@ -118,12 +119,12 @@ def compute_style_injection_block(
     active = [f for f in fragments if f["id"] in inj_active_moods]
 
     if not (active or deactivated or next_event or writing_direction
-            or detected_repetitions or plot_summary or inj_keywords):
+            or detected_repetitions or plot_summary or inj_keywords or user_intent):
         return ""
 
     return build_style_injection(
         active, deactivated, next_event, writing_direction,
-        detected_repetitions, plot_summary, inj_keywords,
+        detected_repetitions, plot_summary, inj_keywords, user_intent,
     )
 
 
@@ -133,21 +134,24 @@ def build_style_injection(
     detected_repetitions: list[str] | None = None,
     plot_summary: str | None = None,
     keywords: list[str] | None = None,
+    user_intent: str | None = None,
 ) -> str:
     parts = ["**Scene Direction**"]
     if plot_summary:
         parts.append(f"Plot summary: {plot_summary}")
-    if next_event:
-        parts.append(f"Next event: {next_event}")
-    if writing_direction:
-        parts.append(f"Narration: {writing_direction}")
-    if detected_repetitions:
-        parts.append("Avoid repeating:\n" + "\n".join(f"- {phrase}" for phrase in detected_repetitions))
+    if user_intent:
+        parts.append(f"User intent: {user_intent}")
     if keywords:
         parts.append("Keywords: " + ", ".join(keywords))
+    if next_event:
+        parts.append(f"Next event: {next_event}")
     for f in active:
         parts.append(f'Mood [{f["id"]}]: {f["prompt_text"]}')
     for f in (deactivated or []):
         if neg := f.get("negative_prompt", "").strip():
             parts.append(f'Deactivated [{f["id"]}]: {neg}')
+    if writing_direction:
+        parts.append(f"Narration: {writing_direction}")
+    if detected_repetitions:
+        parts.append("Avoid repeating:\n" + "\n".join(f"- {phrase}" for phrase in detected_repetitions))
     return "\n\n".join(parts)
