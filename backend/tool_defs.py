@@ -30,7 +30,7 @@ AGENT_TOOLS = [{
                 },
                 "next_event": {
                     "type": "string",
-                    "description": "What happens immediately next in the story — the next event, action, reveal, or turn of fate (e.g. 'she continues to bear down in a squatting position', 'the attack tears off a chunk of her clothing and she frantically tries to cover herself', 'Jack can tell she's lying and calls her out it because they have been friends forever', 'she pretends not to know what Vodka is to keep up the innocent act', 'he shifts focus to something else entirely and gets more physical'). Keep to two short sentences.",
+                    "description": "What happens immediately next in the story — the next event, action, reveal, or turn of fate (e.g. 'She continues to bear down in a squatting position. Somebody in the gym asks if she's okay', 'The attack tears off a chunk of her clothing. She frantically tries to cover herself', 'Jack can tell she's lying. He calls her out it because they have been friends forever', 'She pretends not to know what Vodka is to keep up the innocent act', 'He gets bored and shifts focus to something else entirely'). Keep to two short sentences.",
                 },
                 "writing_direction": {
                     "type": "string",
@@ -142,7 +142,7 @@ REFINE_AUDIT_INSTRUCTIONS = (
     "REWRITING RULES (when using `refine_rewrite`):\n"
     "- Send ONE `refine_rewrite` call with the complete rewritten text.\n"
     "- Address all audit issues (if any) while also respecting length constraints.\n"
-    "- Preserve the author's vocabulary and creative word choices and all key story beats.\n"
+    "- Preserve the author's vocabulary and creative word choices and all key story beats. Sentence starters should be varied - avoid repetitive 'she, she, she'.\n"
     "- First priority is to get rid of repetitiveness and condense comma-separated adjectives into stronger, more precise words (e.g. old, ruined building -> decrepit building).\n"
     "- Be more concise but maintain coherence and narrative flow.\n\n"
     "GENERAL NOTES:\n"
