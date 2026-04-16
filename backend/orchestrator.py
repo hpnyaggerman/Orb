@@ -20,23 +20,6 @@ from .passes.refine import refine_pass
 logger = logging.getLogger(__name__)
 
 
-# ── Token-start resolution ────────────────────────────────────────────────────
-
-async def _resolve_tool_start_token(
-    client: LLMClient, settings: dict, enabled_tools: dict,
-) -> int | None:
-    """Return the cached (or freshly discovered) tool-start token ID for logit bias."""
-    if not enabled_schemas(enabled_tools):
-        return None
-    model_key = f"{settings['endpoint_url']}||{settings['model_name']}"
-    cached, cached_id = await db.get_tool_start_token(model_key)
-    if cached:
-        return cached_id
-    token_id = await client.discover_tool_start_token(settings["model_name"])
-    await db.set_tool_start_token(model_key, token_id)
-    return token_id
-
-
 # ── Core pipeline ─────────────────────────────────────────────────────────────
 
 async def _run_pipeline(
@@ -116,11 +99,9 @@ async def _run_pipeline(
     }}
 
     # --- Writer pass ---
-    tool_start_token_id = await _resolve_tool_start_token(client, settings, enabled_tools)
-
     resp_text = ""
     async for item in _writer_pass(
-        client, prefix, settings, enabled_tools, tool_start_token_id,
+        client, prefix, settings, enabled_tools,
         inj_block=inj_block, effective_msg=effective_msg,
         length_guard_enforce=length_guard_enforce, length_guard=length_guard,
         kv_tracker=kv_tracker, reasoning_on=writer_reasoning_on,
