@@ -24,9 +24,9 @@ The system uses a three-pass architecture for each user message:
 3. **Refine Pass** - A ReAct loop - Self-audit for slop and length optimization phase. This is surgical, errors will be programmatically detected, 
 the model only needs to write replacement for targeted sentences
 
-## KV Cache Reuse Requirements
+## KV Cache Reuse Strategy
 
-For optimal KV cache reuse, the following must remain consistent across passes:
+For optimal KV cache reuse, the following will remain consistent across passes:
 
 ### 1. System Prompt
 - The system prompt (character card, instructions, etc.) is identical across all passes
@@ -38,7 +38,7 @@ For optimal KV cache reuse, the following must remain consistent across passes:
 - Maintains exact same message content and ordering
 
 ### 3. Tool Schemas
-- **CRITICAL**: The same tool definitions must be sent in each LLM call for kv cache reuse
+- The same tool definitions must be sent in each LLM call for kv cache reuse
 - Tool schemas affect the model's internal representation
 - Inconsistent tool schemas break KV cache alignment
 
