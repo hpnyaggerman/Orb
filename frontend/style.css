@@ -550,6 +550,14 @@ body {
   white-space: pre;
   color: var(--text-primary);
 }
+.message .msg-body code.inline-code {
+  font-family: ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
+  font-size: .85em;
+  background: var(--bg-surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: .1em .4em;
+}
 
 /* Refiner diff highlights */
 .diff-change {

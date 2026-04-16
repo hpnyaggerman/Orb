@@ -149,10 +149,15 @@ export function formatProse(text) {
     if (i > 0)                prose = prose.replace(/^\n/, '');   // after a code block
     if (i < parts.length - 1) prose = prose.replace(/\n$/, '');   // before a code block
     // Normal prose: apply inline formatting
+    // esc() does not affect # or `, so all patterns are applied post-escape
     let escaped = esc(prose);
     escaped = escaped.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
     escaped = escaped.replace(/\*([^*]+?)\*/g, '<em>$1</em>');
     escaped = escaped.replace(/"([^"]+)"/g, '<span class="quoted">"$1"</span>');
+    escaped = escaped.replace(/`([^`]+)`/g, '<code class="inline-code">$1</code>');
+    // Headers applied last so prior patterns don't corrupt the injected HTML attributes
+    escaped = escaped.replace(/^(#{1,6}) (.+)$/gm, (_, hashes, content) =>
+      `<strong class="md-h${hashes.length}">${content}</strong>`);
     return escaped.replace(/\n/g, '<br>');
   }).join('');
 }

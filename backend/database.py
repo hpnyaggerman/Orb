@@ -67,7 +67,7 @@ SEED_FRAGMENTS = [
     {
         "id": "sensual",
         "label": "Sensual",
-        "description": "NSFW mode - descriptive, enable if the vibes of the situation call for it",
+        "description": "NSFW mode - enable if the vibes of the situation call for it",
         "prompt_text": (
             'The narration may describe body parts that are exposed or looked at - visually, or interacted with - tactilely, but sparingly in order to avoid repetition. Take initiative and actively push the scene forward, no need to ask. '
             'The narration can use NSFW, vulgar, uncensored, explicit vocabulary where applicable. Avoid roundabout euphemisms like "heat", "core", etc. The prose is now more brutal, vivid, and direct. '
