@@ -1,61 +1,69 @@
 """
 tool_defs.py — Tool schemas, constants, and helper lookups for the orchestrator pipeline.
 """
+
 from __future__ import annotations
 
 
 # ── Agent tool definitions (OpenAI function-calling format)
 
-AGENT_TOOLS = [{
-    "type": "function",
-    "function": {
-        "name": "direct_scene",
-        "description": "Call this to direct the scene. Deduce what the user wants to see and show them. Combine and configure the moods; extract keywords; summarize the plot; specify the direction the scene should take; detect and report repetitive tropes, phrases, subjects, plot points, narrative patterns to avoid. Be very specific and intentional with the directions.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "plot_summary": {
-                    "type": "string",
-                    "description": "A brief and specific summary of what has happened so far in the story. Call things for what they are, avoid being generic, avoid adjectives. 3 sentences max (e.g. Rob was working on his lake house when his wife called for him to help moving some furnitue. The weather was hot so he took off his shirt. Then the couch fell on his leg, eliciting his pain receptors.).",
+AGENT_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "direct_scene",
+            "description": "Call this to direct the scene. Deduce what the user wants to see and show them. Combine and configure the moods; extract keywords; summarize the plot; specify the direction the scene should take; detect and report repetitive tropes, phrases, subjects, plot points, narrative patterns to avoid. Be very specific and intentional with the directions.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "plot_summary": {
+                        "type": "string",
+                        "description": "A brief and specific summary of what has happened so far in the story. Call things for what they are, avoid being generic, avoid adjectives. 3 sentences max (e.g. Rob was working on his lake house when his wife called for him to help moving some furnitue. The weather was hot so he took off his shirt. Then the couch fell on his leg, eliciting his pain receptors.).",
+                    },
+                    "user_intent": {
+                        "type": "string",
+                        "description": "Deduced intention of user based on their input, what they want to see. Be extremely literal and specific (e.g. 'The user wants the character to clarify what they meant by \"the pain\"', 'The user wants to know what's in the picture', 'The user is confessing his love in a roundabout way', 'The user wants to push the scenario forward already').",
+                    },
+                    "keywords": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of nouns (keywords) to remind the important subjects in the roleplay so far. This list shouldn't grow too long (keep under 6 items). Extract from the messages and plot summary. Ignore obvious things like names of the characters. Examples: 'ancient Egypt', 'headlock', 'monetary deal', 'language/accent', 'desert night', 'six-sided dice', 'discarded belt'. Avoid generic concepts (e.g. 'anger', 'ruin', etc.)",
+                    },
+                    "next_event": {
+                        "type": "string",
+                        "description": "What happens immediately next in the story — the next event, action, reveal, or turn of fate (e.g. 'She continues to bear down in a squatting position. Somebody in the gym asks if she's okay', 'The attack tears off a chunk of her clothing. She frantically tries to cover herself', 'Jack can tell she's lying. He calls her out it because they have been friends forever', 'She pretends not to know what Vodka is to keep up the innocent act', 'He gets bored and shifts focus to something else entirely'). Keep to two short sentences.",
+                    },
+                    "moods": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "List of moods to activate. Leave empty for a neutral tone.",
+                    },
+                    "writing_direction": {
+                        "type": "string",
+                        "description": "How the scene should be written — focus, emphasis, descriptive lens, internal state (e.g. 'focus on his anxious tics in detail', 'narrate her spiraling thoughts on why it went wrong', 'describe her exposed stomach vividly', 'describe what he sees in the picture', 'emphasize her speech quirks'). Keep to one short sentence. Show don't tell.",
+                    },
+                    "detected_repetitions": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Specific tropes, phrases, subjects, plot points, narrative patterns that are recently overused in the narration (e.g. 'banal description of eyes', 'mundane narration of internal struggles', 'overuse of murderous rage', 'repeated trope of the user getting away with everything', 'constant narration of his accent without showing it', 'constant focus on the tree'). This list may have up to 8 items.",
+                    },
                 },
-                "user_intent": {
-                    "type": "string",
-                    "description": "Deduced intention of user based on their input, what they want to see. Be extremely literal and specific (e.g. 'The user wants the character to clarify what they meant by \"the pain\"', 'The user wants to know what\'s in the picture', 'The user is confessing his love in a roundabout way', 'The user wants to push the scenario forward already').",
-                },
-                "keywords": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "List of nouns (keywords) to remind the important subjects in the roleplay so far. This list shouldn't grow too long (keep under 6 items). Extract from the messages and plot summary. Ignore obvious things like names of the characters. Examples: 'ancient Egypt', 'headlock', 'monetary deal', 'language/accent', 'desert night', 'six-sided dice', 'discarded belt'. Avoid generic concepts (e.g. 'anger', 'ruin', etc.)",
-                },
-                "next_event": {
-                    "type": "string",
-                    "description": "What happens immediately next in the story — the next event, action, reveal, or turn of fate (e.g. 'She continues to bear down in a squatting position. Somebody in the gym asks if she's okay', 'The attack tears off a chunk of her clothing. She frantically tries to cover herself', 'Jack can tell she's lying. He calls her out it because they have been friends forever', 'She pretends not to know what Vodka is to keep up the innocent act', 'He gets bored and shifts focus to something else entirely'). Keep to two short sentences.",
-                },
-                "moods": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "List of moods to activate. Leave empty for a neutral tone.",
-                },
-                "writing_direction": {
-                    "type": "string",
-                    "description": "How the scene should be written — focus, emphasis, descriptive lens, internal state (e.g. 'focus on his anxious tics in detail', 'narrate her spiraling thoughts on why it went wrong', 'describe her exposed stomach vividly', 'describe what he sees in the picture', 'emphasize her speech quirks'). Keep to one short sentence. Show don't tell.",
-                },
-                "detected_repetitions": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Specific tropes, phrases, subjects, plot points, narrative patterns that are recently overused in the narration (e.g. 'banal description of eyes', 'mundane narration of internal struggles', 'overuse of murderous rage', 'repeated trope of the user getting away with everything', 'constant narration of his accent without showing it', 'constant focus on the tree'). This list may have up to 8 items.",
-                },
+                "required": [
+                    "keywords",
+                    "plot_summary",
+                    "next_event",
+                    "writing_direction",
+                ],
             },
-            "required": ["keywords", "plot_summary", "next_event", "writing_direction"],
         },
-    },
-}]
+    }
+]
 
 REWRITE_PROMPT_TOOL = {
     "type": "function",
     "function": {
         "name": "rewrite_user_prompt",
-        "description": "Rewrite the user's message into a more detailed action or dialogue. Use ONLY when the input is too short or vague (e.g. \"I laugh\", \"Sure.\", \"I nod\") to generate a compelling response. Write 2 sentences max, be direct and succinct. If the message is already detailed enough, leave empty.",
+        "description": 'Rewrite the user\'s message into a more detailed action or dialogue. Use ONLY when the input is too short or vague (e.g. "I laugh", "Sure.", "I nod") to generate a compelling response. Write 2 sentences max, be direct and succinct. If the message is already detailed enough, leave empty.',
         "parameters": {
             "type": "object",
             "properties": {
@@ -100,8 +108,14 @@ REFINE_APPLY_PATCH_TOOL = {
                     "items": {
                         "type": "object",
                         "properties": {
-                            "search": {"type": "string", "description": "Exact text to find in the draft."},
-                            "replace": {"type": "string", "description": "Replacement text."},
+                            "search": {
+                                "type": "string",
+                                "description": "Exact text to find in the draft.",
+                            },
+                            "replace": {
+                                "type": "string",
+                                "description": "Replacement text.",
+                            },
                         },
                         "required": ["search", "replace"],
                     },
@@ -174,13 +188,25 @@ MAX_REFINE_ITERATIONS = 3
 # ── Tool registry & helpers
 
 TOOLS: dict[str, dict] = {
-    "direct_scene": {"choice": {"type": "function", "function": {"name": "direct_scene"}}, "schema": AGENT_TOOLS[0]},
-    "rewrite_user_prompt": {"choice": {"type": "function", "function": {"name": "rewrite_user_prompt"}}, "schema": REWRITE_PROMPT_TOOL},
-    "refine_apply_patch": {"choice": {"type": "function", "function": {"name": "refine_apply_patch"}}, "schema": REFINE_APPLY_PATCH_TOOL},
-    "refine_rewrite": {"choice": {"type": "function", "function": {"name": "refine_rewrite"}}, "schema": REFINE_REWRITE_TOOL},
+    "direct_scene": {
+        "choice": {"type": "function", "function": {"name": "direct_scene"}},
+        "schema": AGENT_TOOLS[0],
+    },
+    "rewrite_user_prompt": {
+        "choice": {"type": "function", "function": {"name": "rewrite_user_prompt"}},
+        "schema": REWRITE_PROMPT_TOOL,
+    },
+    "refine_apply_patch": {
+        "choice": {"type": "function", "function": {"name": "refine_apply_patch"}},
+        "schema": REFINE_APPLY_PATCH_TOOL,
+    },
+    "refine_rewrite": {
+        "choice": {"type": "function", "function": {"name": "refine_rewrite"}},
+        "schema": REFINE_REWRITE_TOOL,
+    },
 }
 
-PRE_WRITER_TOOLS  = {"rewrite_user_prompt"}
+PRE_WRITER_TOOLS = {"rewrite_user_prompt"}
 POST_WRITER_TOOLS = {"refine_apply_patch", "refine_rewrite"}
 ALL_SCHEMAS = [t["schema"] for t in TOOLS.values()]
 
@@ -190,5 +216,3 @@ def enabled_schemas(enabled_tools: dict | None) -> list[dict]:
     if enabled_tools is None:
         return ALL_SCHEMAS
     return [TOOLS[n]["schema"] for n in TOOLS if enabled_tools.get(n, False)]
-
-

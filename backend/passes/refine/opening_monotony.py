@@ -1,6 +1,7 @@
 """
 opening_monotony.py — Detect repetitive sentence openings in LLM output.
 """
+
 from __future__ import annotations
 
 import re
@@ -61,12 +62,14 @@ def detect_opening_monotony(
     for opener, count in sorted(counts.items(), key=lambda x: x[1], reverse=True):
         frac = count / total
         if frac >= flag_threshold and count >= 2:
-            flagged.append(FlaggedOpener(
-                opener=opener,
-                count=count,
-                fraction=round(frac, 4),
-                sentences=opener_sentences[opener],
-            ))
+            flagged.append(
+                FlaggedOpener(
+                    opener=opener,
+                    count=count,
+                    fraction=round(frac, 4),
+                    sentences=opener_sentences[opener],
+                )
+            )
 
     repeated_count = sum(c for c in counts.values() if c >= 2)
     monotony_score = round(repeated_count / total, 4) if total else 0.0

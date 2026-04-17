@@ -1,6 +1,7 @@
 """
 kv_tracker.py — Lightweight KV-cache hit/miss estimator shared across passes.
 """
+
 from __future__ import annotations
 
 import json
@@ -22,17 +23,21 @@ class _KVCacheTracker:
         self._prefix_chars = prefix_chars
         self._entries: list[dict] = []
 
-    def record(self, label: str, messages: list[dict], tools: list[dict] | None) -> None:
+    def record(
+        self, label: str, messages: list[dict], tools: list[dict] | None
+    ) -> None:
         """Snapshot a single LLM call. Call once per pass (or per tool in the director)."""
         msg_chars = sum(len(m.get("content") or "") for m in messages)
         tools_chars = len(json.dumps(tools, separators=(",", ":"))) if tools else 0
-        self._entries.append({
-            "label": label,
-            "msg_chars": msg_chars,
-            "tail_chars": msg_chars - self._prefix_chars,
-            "tools_chars": tools_chars,
-            "tools_names": [t["function"]["name"] for t in tools] if tools else [],
-        })
+        self._entries.append(
+            {
+                "label": label,
+                "msg_chars": msg_chars,
+                "tail_chars": msg_chars - self._prefix_chars,
+                "tools_chars": tools_chars,
+                "tools_names": [t["function"]["name"] for t in tools] if tools else [],
+            }
+        )
 
     def log_summary(self) -> None:
         if not self._entries:
@@ -53,7 +58,9 @@ class _KVCacheTracker:
                 cache_note = f"HIT  saved={saved}"
             else:
                 saved = 0
-                cache_note = f"BUST tools_changed {prev_tools_names!r} → {e['tools_names']!r}"
+                cache_note = (
+                    f"BUST tools_changed {prev_tools_names!r} → {e['tools_names']!r}"
+                )
 
             lines.append(
                 f"  {e['label']:<28}  total={total:7d}  "

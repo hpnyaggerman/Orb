@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """
 Tavern Cards, as defined by Character Card Spec V2:
     https://github.com/malfoyslastname/character-card-spec-v2
@@ -122,26 +123,42 @@ def parse(image_path: str) -> Union[TavernCardV2, TavernCardV1]:
     logger.info(f"Parsing tavern card from: {image_path}")
     metadata = extract_exif_data(image_path)
     if "chara" not in metadata:
-        logger.error("Invalid Tavern card format - missing 'chara' field in image metadata")
-        raise ValueError("Invalid Tavern card format - missing 'chara' field in image metadata")
+        logger.error(
+            "Invalid Tavern card format - missing 'chara' field in image metadata"
+        )
+        raise ValueError(
+            "Invalid Tavern card format - missing 'chara' field in image metadata"
+        )
 
     try:
         raw_json_bytes = base64.b64decode(metadata["chara"])
         raw_json_string = raw_json_bytes.decode("utf-8")
         logger.info(f"Decoded JSON string length: {len(raw_json_string)} chars")
     except (TypeError, base64.binascii.Error) as e:
-        logger.error(f"Invalid Tavern card format - 'chara' field is not valid base64: {e}")
-        raise ValueError(f"Invalid Tavern card format - 'chara' field is not valid base64: {e}")
+        logger.error(
+            f"Invalid Tavern card format - 'chara' field is not valid base64: {e}"
+        )
+        raise ValueError(
+            f"Invalid Tavern card format - 'chara' field is not valid base64: {e}"
+        ) from e
     except UnicodeDecodeError as e:
-        logger.error(f"Invalid Tavern card format - 'chara' field does not decode to UTF-8: {e}")
-        raise ValueError(f"Invalid Tavern card format - 'chara' field does not decode to UTF-8: {e}")
+        logger.error(
+            f"Invalid Tavern card format - 'chara' field does not decode to UTF-8: {e}"
+        )
+        raise ValueError(
+            f"Invalid Tavern card format - 'chara' field does not decode to UTF-8: {e}"
+        ) from e
 
     try:
         jobj = json.loads(raw_json_string)
         logger.info(f"Parsed JSON object keys: {list(jobj.keys())}")
     except json.JSONDecodeError as e:
-        logger.error(f"Invalid Tavern card format - 'chara' field does not contain valid JSON: {e}")
-        raise ValueError(f"Invalid Tavern card format - 'chara' field does not contain valid JSON: {e}")
+        logger.error(
+            f"Invalid Tavern card format - 'chara' field does not contain valid JSON: {e}"
+        )
+        raise ValueError(
+            f"Invalid Tavern card format - 'chara' field does not contain valid JSON: {e}"
+        ) from e
 
     is_v2 = "spec" in jobj and jobj["spec"] == "chara_card_v2"
     logger.info(f"Detected card version: {'V2' if is_v2 else 'V1'}")
@@ -154,23 +171,33 @@ def parse(image_path: str) -> Union[TavernCardV2, TavernCardV1]:
         try:
             card = dacite.from_dict(data_class=TavernCardV2, data=jobj, config=config)
             logger.info(f"Successfully parsed V2 card: {card.data.name}")
-            logger.info(f"V2 card has {len(card.data.alternate_greetings)} alternate greetings")
-            logger.info(f"V2 card fields: name={card.data.name}, first_mes={len(card.data.first_mes)} chars")
+            logger.info(
+                f"V2 card has {len(card.data.alternate_greetings)} alternate greetings"
+            )
+            logger.info(
+                f"V2 card fields: name={card.data.name}, first_mes={len(card.data.first_mes)} chars"
+            )
             return card
         except dacite.DaciteError as error:
-            logger.warning(f"Error parsing as TavernCardV2, attempting V1 format: {error}")
+            logger.warning(
+                f"Error parsing as TavernCardV2, attempting V1 format: {error}"
+            )
 
     try:
         config = dacite.Config(strict=False)
         card = dacite.from_dict(data_class=TavernCardV1, data=jobj, config=config)
         logger.info(f"Successfully parsed V1 card: {card.name}")
-        logger.info(f"V1 card fields: name={card.name}, first_mes={len(card.first_mes)} chars")
+        logger.info(
+            f"V1 card fields: name={card.name}, first_mes={len(card.first_mes)} chars"
+        )
         return card
     except dacite.DaciteError as error:
-        logger.error(f"Error parsing TavernCardV1 data from '{image_path}': {error}")
+        logger.error(f"Error parsing TavernCardV1 data from {image_path!r}: {error}")
         raise
     except Exception as error:
-        logger.error(f"An unexpected error occurred while parsing '{image_path}': {error}")
+        logger.error(
+            f"An unexpected error occurred while parsing {image_path!r}: {error}"
+        )
         raise
 
 
@@ -178,9 +205,15 @@ def card_to_dict(card: Union[TavernCardV2, TavernCardV1]) -> dict:
     """Normalize a parsed card (V1 or V2) into a flat dictionary for storage."""
     if isinstance(card, TavernCardV2):
         d = card.data
-        logger.info(f"Converting V2 card to dict: name={d.name}, alternate_greetings={len(d.alternate_greetings)}")
-        for i, greeting in enumerate(d.alternate_greetings[:3]):  # Log first 3 greetings
-            logger.info(f"  Alternate greeting {i}: {greeting[:100]}{'...' if len(greeting) > 100 else ''}")
+        logger.info(
+            f"Converting V2 card to dict: name={d.name}, alternate_greetings={len(d.alternate_greetings)}"
+        )
+        for i, greeting in enumerate(
+            d.alternate_greetings[:3]
+        ):  # Log first 3 greetings
+            logger.info(
+                f"  Alternate greeting {i}: {greeting[:100]}{'...' if len(greeting) > 100 else ''}"
+            )
         if len(d.alternate_greetings) > 3:
             logger.info(f"  ... and {len(d.alternate_greetings) - 3} more")
         return {
@@ -200,7 +233,9 @@ def card_to_dict(card: Union[TavernCardV2, TavernCardV1]) -> dict:
             "source_format": "tavern_v2",
         }
     else:
-        logger.info(f"Converting V1 card to dict: name={card.name}, no alternate greetings")
+        logger.info(
+            f"Converting V1 card to dict: name={card.name}, no alternate greetings"
+        )
         return {
             "name": card.name,
             "description": card.description,

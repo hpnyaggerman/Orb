@@ -1,6 +1,7 @@
 """
 audit.py — Run all programmatic scanners and produce a consolidated AuditReport.
 """
+
 from __future__ import annotations
 
 from .slop_detector import detect_cliches, DetectionResult
@@ -11,8 +12,14 @@ from .contrastive_negation import detect_contrastive_negation
 
 # Data container
 
+
 class AuditReport:
-    __slots__ = ("cliche_result", "monotony_result", "template_result", "not_but_result")
+    __slots__ = (
+        "cliche_result",
+        "monotony_result",
+        "template_result",
+        "not_but_result",
+    )
 
     def __init__(
         self,
@@ -57,6 +64,7 @@ class AuditReport:
 
 # Run all scanners
 
+
 def run_audit(
     text: str,
     phrase_bank: list[list[str]],
@@ -69,12 +77,15 @@ def run_audit(
     return AuditReport(
         cliche_result=detect_cliches(text, phrase_bank, cliche_threshold),
         monotony_result=detect_opening_monotony(text, opener_n_words, opener_threshold),
-        template_result=detect_template_repetition(text, template_max_tags, template_flag_threshold),
+        template_result=detect_template_repetition(
+            text, template_max_tags, template_flag_threshold
+        ),
         not_but_result=detect_contrastive_negation(text),
     )
 
 
 # Format into text report
+
 
 def format_report(report: AuditReport) -> str:
     if report.is_clean:
@@ -92,7 +103,9 @@ def format_report(report: AuditReport) -> str:
         for fs in cr.flagged_sentences:
             for hit in fs.cliches:
                 if hit.canonical != hit.variant:
-                    lines.append(f'   - "{hit.canonical}" (variant "{hit.variant}") in sentence: {fs.sentence}')
+                    lines.append(
+                        f'   - "{hit.canonical}" (variant "{hit.variant}") in sentence: {fs.sentence}'
+                    )
                 else:
                     lines.append(f'   - "{hit.canonical}" in sentence: {fs.sentence}')
         sections.append("\n".join(lines))
@@ -143,7 +156,7 @@ def format_report(report: AuditReport) -> str:
             parallel_note = " (parallel structure)" if is_parallel else ""
             lines.append(f'   - Sentence: "{sentence}"{parallel_note}')
             if x_template and y_template:
-                lines.append(f'     X: {x_template} → Y: {y_template}')
+                lines.append(f"     X: {x_template} → Y: {y_template}")
         sections.append("\n".join(lines))
     else:
         sections.append("4. 'Not X, but Y' Patterns — CLEAN")

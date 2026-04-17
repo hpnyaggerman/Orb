@@ -9,24 +9,45 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
 from typing import Optional
-from fastapi import FastAPI, HTTPException, Request, UploadFile, File, Query
+from fastapi import FastAPI, HTTPException, Request, UploadFile, File
 from fastapi.responses import StreamingResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 import os
 
 from .database import (
-    init_db, get_settings, update_settings,
-    get_fragments, get_fragment, create_fragment, update_fragment, delete_fragment,
-    list_conversations, get_conversation, create_conversation, delete_conversation,
-    get_messages, get_messages_with_branch_info,
-    get_director_state, get_conversation_logs,
-    list_character_cards, get_character_card, create_character_card,
-    update_character_card, delete_character_card, get_character_avatar,
-    add_message, set_active_leaf, get_message_by_id, switch_to_branch,
-    delete_message_with_descendants, update_message_content, get_db,
-    get_phrase_bank, get_phrase_bank_rows, add_phrase_group,
-    update_phrase_group, delete_phrase_group,
+    init_db,
+    get_settings,
+    update_settings,
+    get_fragments,
+    get_fragment,
+    create_fragment,
+    update_fragment,
+    delete_fragment,
+    list_conversations,
+    get_conversation,
+    create_conversation,
+    delete_conversation,
+    get_messages_with_branch_info,
+    get_director_state,
+    get_conversation_logs,
+    list_character_cards,
+    get_character_card,
+    create_character_card,
+    update_character_card,
+    delete_character_card,
+    get_character_avatar,
+    add_message,
+    set_active_leaf,
+    get_message_by_id,
+    switch_to_branch,
+    delete_message_with_descendants,
+    update_message_content,
+    get_db,
+    get_phrase_bank_rows,
+    add_phrase_group,
+    update_phrase_group,
+    delete_phrase_group,
 )
 import asyncio
 from .orchestrator import handle_turn, handle_regenerate
@@ -35,7 +56,9 @@ from . import tavern_cards
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-FRONTEND_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend")
+FRONTEND_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend"
+)
 
 
 @asynccontextmanager
@@ -56,6 +79,7 @@ async def no_cache_middleware(request: Request, call_next):
 
 
 # Pydantic models ──
+
 
 class SettingsUpdate(BaseModel):
     model_config = {"protected_namespaces": ()}
@@ -166,6 +190,7 @@ class PhraseGroupUpdate(BaseModel):
 
 # Settings ──
 
+
 @app.get("/api/settings")
 async def api_get_settings():
     return await get_settings()
@@ -177,6 +202,7 @@ async def api_update_settings(data: SettingsUpdate):
 
 
 # Fragments ──
+
 
 @app.get("/api/fragments")
 async def api_list_fragments():
@@ -207,6 +233,7 @@ async def api_delete_fragment(fid: str):
 
 
 # Phrase Bank ──
+
 
 @app.get("/api/phrase-bank")
 async def api_get_phrase_bank():
@@ -253,6 +280,7 @@ async def api_delete_phrase_group(group_id: int):
 
 # Conversations ──
 
+
 @app.get("/api/conversations")
 async def api_list_conversations():
     return await list_conversations()
@@ -260,7 +288,6 @@ async def api_list_conversations():
 
 @app.post("/api/conversations")
 async def api_create_conversation(data: ConversationCreate):
-    settings = await get_settings()
     cid = str(uuid.uuid4())
 
     char_name = data.character_name
@@ -296,13 +323,15 @@ async def api_create_conversation(data: ConversationCreate):
     if first_mes.strip():
         msg_id = await add_message(cid, "assistant", first_mes.strip(), 0)
         await set_active_leaf(cid, msg_id)
-        
+
         # If we have a character card with alternate greetings, create swipe versions for them
         if card_id:
             card = await get_character_card(card_id)
             if card and "alternate_greetings" in card:
                 alternate_greetings = card.get("alternate_greetings", [])
-                logger.info(f"Creating {len(alternate_greetings)} alternate greeting swipes for conversation {cid}")
+                logger.info(
+                    f"Creating {len(alternate_greetings)} alternate greeting swipes for conversation {cid}"
+                )
                 for i, greeting in enumerate(alternate_greetings):
                     if greeting and greeting.strip():
                         # Create swipe with increasing swipe_index (starting from 1 since 0 is the first_mes)
@@ -313,10 +342,19 @@ async def api_create_conversation(data: ConversationCreate):
                             now = datetime.now(timezone.utc).isoformat()
                             await db.execute(
                                 "INSERT INTO messages (conversation_id, role, content, turn_index, swipe_index, is_active, parent_id, created_at) VALUES (?, ?, ?, ?, ?, 0, NULL, ?)",
-                                (cid, "assistant", greeting.strip(), 0, swipe_index, now),
+                                (
+                                    cid,
+                                    "assistant",
+                                    greeting.strip(),
+                                    0,
+                                    swipe_index,
+                                    now,
+                                ),
                             )
                             await db.commit()
-                            logger.info(f"Created alternate greeting swipe {swipe_index}: {greeting[:50]}...")
+                            logger.info(
+                                f"Created alternate greeting swipe {swipe_index}: {greeting[:50]}..."
+                            )
                         finally:
                             await db.close()
 
@@ -332,8 +370,9 @@ async def api_delete_conversation(cid: str):
 
 # Character Cards ──
 
+
 def _slugify(name: str) -> str:
-    slug = re.sub(r'[^a-z0-9]+', '-', name.lower()).strip('-')
+    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
     return slug[:60] if slug else "character"
 
 
@@ -374,10 +413,10 @@ async def api_import_character(file: UploadFile = File(...)):
         card = tavern_cards.parse(tmp_path)
         card_dict = tavern_cards.card_to_dict(card)
     except ValueError as e:
-        raise HTTPException(400, str(e))
+        raise HTTPException(400, str(e)) from e
     except Exception as e:
         logger.exception("Failed to parse tavern card")
-        raise HTTPException(400, f"Failed to parse character card: {e}")
+        raise HTTPException(400, f"Failed to parse character card: {e}") from e
     finally:
         os.unlink(tmp_path)
 
@@ -481,7 +520,7 @@ async def _sse_stream(gen, request: Request):
             if isinstance(evt_data, dict):
                 evt_data = json.dumps(evt_data)
             elif isinstance(evt_data, str):
-                evt_data = evt_data.replace('\n', '\\n')
+                evt_data = evt_data.replace("\n", "\\n")
             yield f"event: {evt_type}\ndata: {evt_data}\n\n"
     finally:
         # Shield aclose() from CancelledError so the orchestrator's finally
@@ -524,16 +563,21 @@ async def api_edit_message(cid: str, msg_id: int, data: EditMessage, request: Re
 
     # Create sibling (same parent_id as original)
     new_msg_id = await add_message(
-        cid, original["role"], data.content,
-        original["turn_index"], parent_id=original.get("parent_id"),
+        cid,
+        original["role"],
+        data.content,
+        original["turn_index"],
+        parent_id=original.get("parent_id"),
     )
     await set_active_leaf(cid, new_msg_id)
 
-    should_stream_regen = (original["role"] == "user" and data.regenerate)
+    should_stream_regen = original["role"] == "user" and data.regenerate
 
     if should_stream_regen:
         return _CleanupStreamingResponse(
-            _sse_stream(handle_turn(cid, data.content, skip_user_persist=True), request),
+            _sse_stream(
+                handle_turn(cid, data.content, skip_user_persist=True), request
+            ),
             media_type="text/event-stream",
         )
 
@@ -564,7 +608,9 @@ async def api_switch_branch(cid: str, msg_id: int):
 
 
 @app.post("/api/conversations/{cid}/messages/{msg_id}/regenerate")
-async def api_regenerate_msg(cid: str, msg_id: int, request: Request, data: Optional[RegenerateMsg] = None):
+async def api_regenerate_msg(
+    cid: str, msg_id: int, request: Request, data: Optional[RegenerateMsg] = None
+):
     """Regenerate a specific assistant message as a new sibling branch."""
     conv = await get_conversation(cid)
     if not conv:
@@ -594,6 +640,7 @@ async def api_get_logs(cid: str):
 
 # Chat (SSE streaming) ──
 
+
 @app.post("/api/conversations/{cid}/send")
 async def api_send_message(cid: str, data: SendMessage, request: Request):
     conv = await get_conversation(cid)
@@ -607,6 +654,7 @@ async def api_send_message(cid: str, data: SendMessage, request: Request):
 
 
 # Frontend serving ──
+
 
 @app.get("/")
 async def serve_frontend():

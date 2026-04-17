@@ -5,6 +5,7 @@ These run without a real database — they just validate that every seed
 entry has the right Python types so SQLite binding never sees a tuple,
 list, or None where a string is expected.
 """
+
 import pytest
 from backend.database import SEED_FRAGMENTS, SEED_PHRASE_BANK
 
@@ -17,10 +18,9 @@ class TestSeedFragments:
     def test_string_fields_are_str(self, fragment):
         for field in STR_FIELDS:
             value = fragment[field]
-            assert isinstance(value, str), (
-                f"Fragment '{fragment.get('id')}': '{field}' must be str, got {type(value).__name__!r}"
-            )
-
+            assert isinstance(
+                value, str
+            ), f"Fragment {fragment.get('id')!r}: {field!r} must be str, got {type(value).__name__!r}"
 
 
 class TestSeedPhraseBank:
@@ -28,6 +28,6 @@ class TestSeedPhraseBank:
         for i, group in enumerate(SEED_PHRASE_BANK):
             assert isinstance(group, list), f"Group {i} must be a list"
             for j, phrase in enumerate(group):
-                assert isinstance(phrase, str), (
-                    f"Group {i}[{j}] must be str, got {type(phrase).__name__!r}"
-                )
+                assert isinstance(
+                    phrase, str
+                ), f"Group {i}[{j}] must be str, got {type(phrase).__name__!r}"

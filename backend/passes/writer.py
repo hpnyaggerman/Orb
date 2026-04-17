@@ -1,6 +1,7 @@
 """
 passes/writer.py — Writer pass: streams the story response.
 """
+
 from __future__ import annotations
 
 import json
@@ -41,7 +42,15 @@ async def _writer_pass(
     msgs = prefix + [{"role": "user", "content": tail}]
 
     params = {
-        k: v for k in ["temperature", "max_tokens", "top_p", "min_p", "top_k", "repetition_penalty"]
+        k: v
+        for k in [
+            "temperature",
+            "max_tokens",
+            "top_p",
+            "min_p",
+            "top_k",
+            "repetition_penalty",
+        ]
         if (v := settings.get(k)) is not None
     }
     schemas = enabled_schemas(enabled_tools)
@@ -55,7 +64,9 @@ async def _writer_pass(
     if kv_tracker is not None:
         kv_tracker.record("writer", msgs, schemas if schemas else None)
 
-    async for item in client.complete(messages=msgs, model=settings["model_name"], **extra, **params):
+    async for item in client.complete(
+        messages=msgs, model=settings["model_name"], **extra, **params
+    ):
         if item["type"] == "done":
             return
         yield item
