@@ -457,7 +457,7 @@ async def update_settings(data: dict) -> dict:
                 vals.append(json.dumps(data[k]) if k in json_fields else data[k])
         if sets:
             await db.execute(
-                f"UPDATE settings SET {', '.join(sets)} WHERE id = 1", vals
+                f"UPDATE settings SET {', '.join(sets)} WHERE id = 1", vals  # nosec B608 — cols from hardcoded allowlist, values parameterised
             )
             await db.commit()
         return await get_settings()
@@ -520,7 +520,7 @@ async def update_fragment(fid: str, data: dict) -> dict | None:
         if sets:
             vals.append(fid)
             await db.execute(
-                f"UPDATE fragments SET {', '.join(sets)} WHERE id = ?", vals
+                f"UPDATE fragments SET {', '.join(sets)} WHERE id = ?", vals  # nosec B608 — cols from hardcoded allowlist, values parameterised
             )
             await db.commit()
         return await get_fragment(fid)
@@ -1102,7 +1102,7 @@ async def get_character_card(card_id: str, include_avatar: bool = False) -> dict
             )
         )
         rows = await db.execute_fetchall(
-            f"SELECT {cols} FROM character_cards WHERE id = ?", (card_id,)
+            f"SELECT {cols} FROM character_cards WHERE id = ?", (card_id,)  # nosec B608 — cols is a hardcoded literal, not user input
         )
         if not rows:
             return None
@@ -1235,7 +1235,7 @@ async def update_character_card(card_id: str, data: dict) -> dict | None:
             vals.append(datetime.now(timezone.utc).isoformat())
             vals.append(card_id)
             await db.execute(
-                f"UPDATE character_cards SET {', '.join(sets)} WHERE id = ?", vals
+                f"UPDATE character_cards SET {', '.join(sets)} WHERE id = ?", vals  # nosec B608 — cols from hardcoded allowlist, values parameterised
             )
             await db.commit()
         return await get_character_card(card_id)
@@ -1358,7 +1358,7 @@ async def delete_message_with_descendants(cid: str, msg_id: int) -> bool:
 
         placeholders = ",".join("?" * len(deleted_ids))
         await db.execute(
-            f"DELETE FROM messages WHERE id IN ({placeholders})",
+            f"DELETE FROM messages WHERE id IN ({placeholders})",  # nosec B608 — placeholders is only '?' chars, ids are parameterised
             list(deleted_ids),
         )
 
