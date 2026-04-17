@@ -1,7 +1,7 @@
 from __future__ import annotations
+import hashlib
 import json
 import uuid
-import re
 import logging
 import base64
 import tempfile
@@ -371,10 +371,6 @@ async def api_delete_conversation(cid: str):
 # Character Cards ──
 
 
-def _slugify(name: str) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
-    return slug[:60] if slug else "character"
-
 
 @app.get("/api/characters")
 async def api_list_characters():
@@ -383,16 +379,8 @@ async def api_list_characters():
 
 @app.post("/api/characters")
 async def api_create_character(data: CharacterCardCreate):
-    slug = _slugify(data.name)
-    # Ensure unique ID
-    base_slug = slug
-    counter = 1
-    while await get_character_card(slug):
-        slug = f"{base_slug}-{counter}"
-        counter += 1
-
     card_data = data.model_dump()
-    card_data["id"] = slug
+    card_data["id"] = str(uuid.uuid4())
     card_data["source_format"] = "manual"
     return await create_character_card(card_data)
 
@@ -420,24 +408,24 @@ async def api_import_character(file: Annotated[UploadFile, File(...)]):
     finally:
         os.unlink(tmp_path)
 
+    # Derive a stable UUID from the PNG bytes so that reimporting the same card
+    # produces the same ID and relinks any existing conversation history.
+    card_id = str(uuid.UUID(bytes=hashlib.sha256(content).digest()[:16], version=5))
+
+    # If this card was imported before, return the existing character unchanged.
+    existing = await get_character_card(card_id)
+    if existing:
+        return existing
+
     # Extract avatar from the PNG image itself
     avatar_b64 = base64.b64encode(content).decode("ascii")
     avatar_mime = "image/png"
 
-    # Generate slug
-    slug = _slugify(card_dict["name"]) if card_dict["name"] else "imported-character"
-    base_slug = slug
-    counter = 1
-    while await get_character_card(slug):
-        slug = f"{base_slug}-{counter}"
-        counter += 1
-
-    card_dict["id"] = slug
+    card_dict["id"] = card_id
     card_dict["avatar_b64"] = avatar_b64
     card_dict["avatar_mime"] = avatar_mime
 
-    result = await create_character_card(card_dict)
-    return result
+    return await create_character_card(card_dict)
 
 
 @app.get("/api/characters/{card_id}")

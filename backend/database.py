@@ -338,6 +338,10 @@ async def init_db():
                 "ALTER TABLE director_state ADD COLUMN keywords TEXT NOT NULL DEFAULT '[]'"
             )
 
+        # No migration needed for UUID character IDs: character_cards.id and
+        # conversations.character_card_id are already TEXT columns that accept any
+        # string. Existing slug-based IDs remain valid; only new characters get UUIDs.
+
         # Migration for fragments enabled column
         fragment_cols = {
             row[1] for row in await db.execute_fetchall("PRAGMA table_info(fragments)")
