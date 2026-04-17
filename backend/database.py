@@ -753,6 +753,15 @@ async def set_active_leaf(cid: str, leaf_id: int | None):
     """Update the active_leaf_id for a conversation."""
     db = await get_db()
     try:
+        if leaf_id is not None:
+            rows = await db.execute_fetchall(
+                "SELECT id FROM messages WHERE id = ? AND conversation_id = ?",
+                (leaf_id, cid),
+            )
+            if not rows:
+                raise ValueError(
+                    f"Message {leaf_id} does not exist in conversation {cid}"
+                )
         await db.execute(
             "UPDATE conversations SET active_leaf_id = ? WHERE id = ?", (leaf_id, cid)
         )
@@ -1107,37 +1116,75 @@ async def create_character_card(data: dict) -> dict:
     db = await get_db()
     try:
         now = datetime.now(timezone.utc).isoformat()
-        await db.execute(
-            """INSERT INTO character_cards
-               (id, name, description, personality, scenario, first_mes, mes_example,
-                creator_notes, system_prompt, post_history_instructions, tags, creator,
-                character_version, alternate_greetings, avatar_b64, avatar_mime,
-                source_format, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (
-                data["id"],
-                data["name"],
-                data.get("description", ""),
-                data.get("personality", ""),
-                data.get("scenario", ""),
-                data.get("first_mes", ""),
-                data.get("mes_example", ""),
-                data.get("creator_notes", ""),
-                data.get("system_prompt", ""),
-                data.get("post_history_instructions", ""),
-                json.dumps(data.get("tags", [])),
-                data.get("creator", ""),
-                data.get("character_version", ""),
-                json.dumps(data.get("alternate_greetings", [])),
-                data.get("avatar_b64"),
-                data.get("avatar_mime"),
-                data.get("source_format", "manual"),
-                now,
-                now,
-            ),
-        )
+        try:
+            await db.execute(
+                """INSERT INTO character_cards
+                   (id, name, description, personality, scenario, first_mes, mes_example,
+                    creator_notes, system_prompt, post_history_instructions, tags, creator,
+                    character_version, alternate_greetings, avatar_b64, avatar_mime,
+                    source_format, created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    data["id"],
+                    data["name"],
+                    data.get("description", ""),
+                    data.get("personality", ""),
+                    data.get("scenario", ""),
+                    data.get("first_mes", ""),
+                    data.get("mes_example", ""),
+                    data.get("creator_notes", ""),
+                    data.get("system_prompt", ""),
+                    data.get("post_history_instructions", ""),
+                    json.dumps(data.get("tags", [])),
+                    data.get("creator", ""),
+                    data.get("character_version", ""),
+                    json.dumps(data.get("alternate_greetings", [])),
+                    data.get("avatar_b64"),
+                    data.get("avatar_mime"),
+                    data.get("source_format", "manual"),
+                    now,
+                    now,
+                ),
+            )
+        except aiosqlite.IntegrityError as exc:
+            raise ValueError(
+                f"Character card with id {data['id']} already exists"
+            ) from exc
         await db.commit()
         return await get_character_card(data["id"])
+    finally:
+        await db.close()
+
+
+async def insert_alternate_greeting_swipes(
+    cid: str, alternate_greetings: list[str]
+) -> int:
+    """Insert alternate greeting swipes for a conversation in a single transaction.
+
+    Swipe indices are assigned sequentially (1, 2, …) based on the order of
+    non-empty greetings, skipping blanks. Swipe 0 is reserved for the
+    materialised first_mes message created by the caller.
+
+    Returns the number of swipes inserted.
+    """
+    if not alternate_greetings:
+        return 0
+    db = await get_db()
+    try:
+        now = datetime.now(timezone.utc).isoformat()
+        swipe_index = 0
+        for greeting in alternate_greetings:
+            if greeting and greeting.strip():
+                swipe_index += 1
+                await db.execute(
+                    "INSERT INTO messages "
+                    "(conversation_id, role, content, turn_index, swipe_index, is_active, parent_id, created_at) "
+                    "VALUES (?, ?, ?, ?, ?, 0, NULL, ?)",
+                    (cid, "assistant", greeting.strip(), 0, swipe_index, now),
+                )
+        if swipe_index:
+            await db.commit()
+        return swipe_index
     finally:
         await db.close()
 
@@ -1227,6 +1274,10 @@ async def delete_character_card(
             await db.execute(
                 "DELETE FROM conversations WHERE character_card_id = ?", (card_id,)
             )
+        # When keeping conversations, character_card_id is intentionally left as-is.
+        # The dangling reference acts as a pending-relink marker: re-importing the
+        # same card (which produces the same stable ID) restores the association
+        # automatically. resolve_char_context() handles a missing card gracefully.
         cur = await db.execute("DELETE FROM character_cards WHERE id = ?", (card_id,))
         await db.commit()
         return cur.rowcount > 0

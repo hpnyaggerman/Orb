@@ -6,13 +6,12 @@ import logging
 import base64
 import tempfile
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
 
 from typing import Annotated, Optional
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File
 from fastapi.responses import StreamingResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 import os
 
 from .database import (
@@ -38,13 +37,13 @@ from .database import (
     delete_character_card,
     get_character_avatar,
     sync_conversations_for_card,
+    insert_alternate_greeting_swipes,
     add_message,
     set_active_leaf,
     get_message_by_id,
     switch_to_branch,
     delete_message_with_descendants,
     update_message_content,
-    get_db,
     get_phrase_bank_rows,
     add_phrase_group,
     update_phrase_group,
@@ -134,6 +133,14 @@ class ConversationCreate(BaseModel):
 class CharacterCardCreate(BaseModel):
     name: str
     description: str = ""
+
+    @field_validator("name")
+    @classmethod
+    def name_must_not_be_blank(cls, v: str) -> str:
+        stripped = v.strip()
+        if not stripped:
+            raise ValueError("name must not be empty or whitespace-only")
+        return stripped
     personality: str = ""
     scenario: str = ""
     first_mes: str = ""
@@ -151,6 +158,16 @@ class CharacterCardCreate(BaseModel):
 class CharacterCardUpdate(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
+
+    @field_validator("name")
+    @classmethod
+    def name_must_not_be_blank(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None:
+            stripped = v.strip()
+            if not stripped:
+                raise ValueError("name must not be empty or whitespace-only")
+            return stripped
+        return v
     personality: Optional[str] = None
     scenario: Optional[str] = None
     first_mes: Optional[str] = None
@@ -329,39 +346,16 @@ async def api_create_conversation(data: ConversationCreate):
         msg_id = await add_message(cid, "assistant", first_mes.strip(), 0)
         await set_active_leaf(cid, msg_id)
 
-        # If we have a character card with alternate greetings, create swipe versions for them
+        # If we have a character card with alternate greetings, create swipe versions
         if card_id:
             card = await get_character_card(card_id)
-            if card and "alternate_greetings" in card:
+            if card:
                 alternate_greetings = card.get("alternate_greetings", [])
-                logger.info(
-                    f"Creating {len(alternate_greetings)} alternate greeting swipes for conversation {cid}"
-                )
-                for i, greeting in enumerate(alternate_greetings):
-                    if greeting and greeting.strip():
-                        # Create swipe with increasing swipe_index (starting from 1 since 0 is the first_mes)
-                        swipe_index = i + 1
-                        # Create inactive swipe (is_active=0)
-                        db = await get_db()
-                        try:
-                            now = datetime.now(timezone.utc).isoformat()
-                            await db.execute(
-                                "INSERT INTO messages (conversation_id, role, content, turn_index, swipe_index, is_active, parent_id, created_at) VALUES (?, ?, ?, ?, ?, 0, NULL, ?)",
-                                (
-                                    cid,
-                                    "assistant",
-                                    greeting.strip(),
-                                    0,
-                                    swipe_index,
-                                    now,
-                                ),
-                            )
-                            await db.commit()
-                            logger.info(
-                                f"Created alternate greeting swipe {swipe_index}: {greeting[:50]}..."
-                            )
-                        finally:
-                            await db.close()
+                count = await insert_alternate_greeting_swipes(cid, alternate_greetings)
+                if count:
+                    logger.info(
+                        f"Created {count} alternate greeting swipes for conversation {cid}"
+                    )
 
     return conv
 
@@ -374,7 +368,6 @@ async def api_delete_conversation(cid: str):
 
 
 # Character Cards ──
-
 
 
 @app.get("/api/characters")
@@ -423,9 +416,6 @@ async def api_import_character(file: Annotated[UploadFile, File(...)]):
     else:
         card_id = str(uuid.UUID(bytes=hashlib.sha256(content).digest()[:16], version=5))
 
-    if await get_character_card(card_id):
-        raise HTTPException(409, "This character is already in your library")
-
     # Store the full PNG as the avatar
     avatar_b64 = base64.b64encode(content).decode("ascii")
     avatar_mime = "image/png"
@@ -434,7 +424,10 @@ async def api_import_character(file: Annotated[UploadFile, File(...)]):
     card_dict["avatar_b64"] = avatar_b64
     card_dict["avatar_mime"] = avatar_mime
 
-    return await create_character_card(card_dict)
+    try:
+        return await create_character_card(card_dict)
+    except ValueError:
+        raise HTTPException(409, "This character is already in your library")
 
 
 @app.get("/api/characters/{card_id}")
@@ -479,14 +472,21 @@ async def api_export_character(card_id: str):
 
     avatar_bytes: bytes | None = None
     if card.get("avatar_b64"):
-        avatar_bytes = base64.b64decode(card["avatar_b64"])
+        try:
+            avatar_bytes = base64.b64decode(card["avatar_b64"])
+        except Exception:
+            logger.warning(
+                "Avatar data for card %s is corrupt; exporting without avatar", card_id
+            )
+            avatar_bytes = None
 
     card["id"] = card_id
     png_bytes = tavern_cards.to_png(card, avatar_bytes)
 
     safe_name = (
-        "".join(c for c in card.get("name", "character") if c.isalnum() or c in " _-")
-        .strip()
+        "".join(
+            c for c in card.get("name", "character") if c.isalnum() or c in " _-"
+        ).strip()
         or "character"
     )
     return Response(
