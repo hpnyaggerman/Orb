@@ -248,7 +248,7 @@ async def editor_pass(
     kv_tracker=None,
     reasoning_on: bool = True,
 ) -> AsyncIterator[dict]:
-    """ReAct-style refinement loop with optional audit and/or length guard.
+    """ReAct-style editor loop with optional audit and/or length guard.
 
     Yields:
         {"type": "reasoning", "delta": str}                      — reasoning chunks per iteration

@@ -89,9 +89,9 @@ def run_audit(
 
 def format_report(report: AuditReport) -> str:
     if report.is_clean:
-        return "*** REFINEMENT AUDIT REPORT ***\n\nAll checks passed — no issues found.\n\n*** END OF REPORT ***"
+        return "*** WRITING AUDIT REPORT ***\n\nAll checks passed — no issues found.\n\n*** END OF REPORT ***"
 
-    sections: list[str] = ["*** REFINEMENT AUDIT REPORT ***\n"]
+    sections: list[str] = ["*** WRITING AUDIT REPORT ***\n"]
 
     # 1. Banned phrases
     cr = report.cliche_result
