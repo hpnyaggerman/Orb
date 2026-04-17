@@ -8,7 +8,7 @@ import tempfile
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 
-from typing import Optional
+from typing import Annotated, Optional
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File
 from fastapi.responses import StreamingResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -398,7 +398,7 @@ async def api_create_character(data: CharacterCardCreate):
 
 
 @app.post("/api/characters/import")
-async def api_import_character(file: UploadFile = File(...)):
+async def api_import_character(file: Annotated[UploadFile, File(...)]):
     """Import a SillyTavern-compatible character card PNG."""
     if not file.filename or not file.filename.lower().endswith(".png"):
         raise HTTPException(400, "Only .png character card files are supported")
