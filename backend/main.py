@@ -131,6 +131,12 @@ class ConversationCreate(BaseModel):
 
 
 class CharacterCardCreate(BaseModel):
+    # id and source_format are normally omitted (manual creation). They are
+    # supplied by the import flow: /api/characters/import parses the PNG and
+    # computes a stable deterministic ID (orb_id embedded in the card, or a
+    # SHA-256-derived UUID of the raw bytes), then the frontend passes it back
+    # here on Save. Preserving the original ID means re-importing a card after
+    # deletion relinks its conversation history instead of creating an orphan.
     id: Optional[str] = None
     source_format: Optional[str] = None
     name: str
@@ -380,7 +386,7 @@ async def api_list_characters():
 @app.post("/api/characters")
 async def api_create_character(data: CharacterCardCreate):
     card_data = data.model_dump()
-    card_data["id"] = card_data.get("id") or str(uuid.uuid4())
+    card_data["id"] = card_data.get("id") or str(uuid.uuid4())  # see CharacterCardCreate
     card_data["source_format"] = card_data.get("source_format") or "manual"
     return await create_character_card(card_data)
 
