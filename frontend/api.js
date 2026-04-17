@@ -1,7 +1,12 @@
 export const api = {
   async _req(path, opts = {}) {
     const r = await fetch('/api' + path, opts);
-    if (!r.ok) throw new Error(await r.text());
+    if (!r.ok) {
+      const body = await r.text();
+      const err = new Error(body);
+      err.status = r.status;
+      throw err;
+    }
     return r.json();
   },
   get(p)    { return this._req(p); },

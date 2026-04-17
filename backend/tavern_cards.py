@@ -5,12 +5,13 @@ Tavern Cards, as defined by Character Card Spec V2:
     https://github.com/malfoyslastname/character-card-spec-v2
 """
 
+import io
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Literal, Optional, Union
 import dacite
 from dataclasses_json import dataclass_json, Undefined
-from PIL import Image
+from PIL import Image, PngImagePlugin
 import base64
 import json
 
@@ -199,6 +200,63 @@ def parse(image_path: str) -> Union[TavernCardV2, TavernCardV1]:
             f"An unexpected error occurred while parsing {image_path!r}: {error}"
         )
         raise
+
+
+def read_orb_id(image_path: str) -> str | None:
+    """Return the orb_id tEXt chunk from a PNG produced by to_png, or None."""
+    try:
+        metadata = extract_exif_data(image_path)
+        return metadata.get("orb_id") or None
+    except Exception:
+        return None
+
+
+def to_png(card_dict: dict, avatar_bytes: bytes | None = None) -> bytes:
+    """Serialize card_dict to a SillyTavern V2-compatible PNG.
+
+    The chara tEXt chunk contains only the standard V2 fields.
+    An additional orb_id tEXt chunk carries the card UUID so that
+    re-importing an exported card relinks existing conversation history.
+    """
+    # Build strictly-spec-compliant V2 JSON (no extra fields)
+    v2_payload = {
+        "spec": "chara_card_v2",
+        "spec_version": "2.0",
+        "data": {
+            "name": card_dict.get("name", ""),
+            "description": card_dict.get("description", ""),
+            "personality": card_dict.get("personality", ""),
+            "scenario": card_dict.get("scenario", ""),
+            "first_mes": card_dict.get("first_mes", ""),
+            "mes_example": card_dict.get("mes_example", ""),
+            "creator_notes": card_dict.get("creator_notes", ""),
+            "system_prompt": card_dict.get("system_prompt", ""),
+            "post_history_instructions": card_dict.get("post_history_instructions", ""),
+            "alternate_greetings": card_dict.get("alternate_greetings", []),
+            "tags": card_dict.get("tags", []),
+            "creator": card_dict.get("creator", ""),
+            "character_version": card_dict.get("character_version", ""),
+        },
+    }
+    chara_b64 = base64.b64encode(
+        json.dumps(v2_payload, ensure_ascii=False).encode("utf-8")
+    ).decode("ascii")
+
+    # Load avatar image or create a neutral placeholder
+    if avatar_bytes:
+        img = Image.open(io.BytesIO(avatar_bytes)).convert("RGBA")
+    else:
+        img = Image.new("RGBA", (400, 400), (128, 128, 128, 255))
+
+    # Build PNG metadata: chara (spec) + orb_id (stable round-trip identity)
+    pnginfo = PngImagePlugin.PngInfo()
+    pnginfo.add_text("chara", chara_b64)
+    if card_id := card_dict.get("id"):
+        pnginfo.add_text("orb_id", card_id)
+
+    buf = io.BytesIO()
+    img.save(buf, format="PNG", pnginfo=pnginfo)
+    return buf.getvalue()
 
 
 def card_to_dict(card: Union[TavernCardV2, TavernCardV1]) -> dict:

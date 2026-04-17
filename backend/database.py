@@ -1191,6 +1191,33 @@ async def update_character_card(card_id: str, data: dict) -> dict | None:
         await db.close()
 
 
+async def sync_conversations_for_card(card_id: str, card: dict) -> None:
+    """Propagate mutable card fields to all conversations linked to this card.
+
+    Only syncs fields that are denormalised onto the conversation row and
+    affect prompt-building at runtime. first_mes is excluded because it has
+    already been materialised as a message in the conversation tree.
+    """
+    db = await get_db()
+    try:
+        await db.execute(
+            """UPDATE conversations
+               SET character_name = ?,
+                   character_scenario = ?,
+                   post_history_instructions = ?
+               WHERE character_card_id = ?""",
+            (
+                card.get("name", ""),
+                card.get("scenario", ""),
+                card.get("post_history_instructions", ""),
+                card_id,
+            ),
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
 async def delete_character_card(
     card_id: str, delete_conversations: bool = False
 ) -> bool:

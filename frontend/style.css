@@ -1391,6 +1391,33 @@ body {
   flex-shrink: 0;
 }
 
+/* Crop modal — rendered in #modal-crop-root above the main modal */
+#modal-crop-root {
+  position: fixed;
+  inset: 0;
+  z-index: 150;
+  pointer-events: none;
+}
+#modal-crop-root:not(:empty) {
+  pointer-events: auto;
+}
+#crop-canvas {
+  display: block;
+  cursor: crosshair;
+  touch-action: none;
+  border-radius: var(--radius);
+  max-width: 100%;
+}
+.alt-greeting-row {
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+  margin-bottom: 6px;
+}
+.alt-greeting-row textarea {
+  flex: 1;
+}
+
 /* Tabs */
 .tabs {
   display: flex;

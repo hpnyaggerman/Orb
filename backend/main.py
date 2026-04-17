@@ -37,6 +37,7 @@ from .database import (
     update_character_card,
     delete_character_card,
     get_character_avatar,
+    sync_conversations_for_card,
     add_message,
     set_active_leaf,
     get_message_by_id,
@@ -143,6 +144,8 @@ class CharacterCardCreate(BaseModel):
     tags: list[str] = []
     creator: str = ""
     alternate_greetings: list[str] = []
+    avatar_b64: Optional[str] = None
+    avatar_mime: Optional[str] = None
 
 
 class CharacterCardUpdate(BaseModel):
@@ -158,6 +161,8 @@ class CharacterCardUpdate(BaseModel):
     tags: Optional[list[str]] = None
     creator: Optional[str] = None
     alternate_greetings: Optional[list[str]] = None
+    avatar_b64: Optional[str] = None
+    avatar_mime: Optional[str] = None
 
 
 class SendMessage(BaseModel):
@@ -398,6 +403,9 @@ async def api_import_character(file: Annotated[UploadFile, File(...)]):
         tmp_path = tmp.name
 
     try:
+        # Check for an embedded orb_id (card exported from this app) first so
+        # that re-importing a previously exported card relinks conversation history.
+        orb_id = tavern_cards.read_orb_id(tmp_path)
         card = tavern_cards.parse(tmp_path)
         card_dict = tavern_cards.card_to_dict(card)
     except ValueError as e:
@@ -408,16 +416,17 @@ async def api_import_character(file: Annotated[UploadFile, File(...)]):
     finally:
         os.unlink(tmp_path)
 
-    # Derive a stable UUID from the PNG bytes so that reimporting the same card
-    # produces the same ID and relinks any existing conversation history.
-    card_id = str(uuid.UUID(bytes=hashlib.sha256(content).digest()[:16], version=5))
+    # Determine stable card ID: prefer the embedded orb_id, fall back to SHA-256
+    # of the raw PNG bytes so that reimporting the exact same file is idempotent.
+    if orb_id:
+        card_id = orb_id
+    else:
+        card_id = str(uuid.UUID(bytes=hashlib.sha256(content).digest()[:16], version=5))
 
-    # If this card was imported before, return the existing character unchanged.
-    existing = await get_character_card(card_id)
-    if existing:
-        return existing
+    if await get_character_card(card_id):
+        raise HTTPException(409, "This character is already in your library")
 
-    # Extract avatar from the PNG image itself
+    # Store the full PNG as the avatar
     avatar_b64 = base64.b64encode(content).decode("ascii")
     avatar_mime = "image/png"
 
@@ -441,6 +450,7 @@ async def api_update_character(card_id: str, data: CharacterCardUpdate):
     result = await update_character_card(card_id, data.model_dump(exclude_none=True))
     if not result:
         raise HTTPException(404, "Character card not found")
+    await sync_conversations_for_card(card_id, result)
     return result
 
 
@@ -458,6 +468,32 @@ async def api_get_avatar(card_id: str):
         raise HTTPException(404, "No avatar found")
     image_bytes, mime_type = result
     return Response(content=image_bytes, media_type=mime_type or "image/png")
+
+
+@app.get("/api/characters/{card_id}/export")
+async def api_export_character(card_id: str):
+    """Export a character card as a SillyTavern V2-compatible PNG."""
+    card = await get_character_card(card_id, include_avatar=True)
+    if not card:
+        raise HTTPException(404, "Character not found")
+
+    avatar_bytes: bytes | None = None
+    if card.get("avatar_b64"):
+        avatar_bytes = base64.b64decode(card["avatar_b64"])
+
+    card["id"] = card_id
+    png_bytes = tavern_cards.to_png(card, avatar_bytes)
+
+    safe_name = (
+        "".join(c for c in card.get("name", "character") if c.isalnum() or c in " _-")
+        .strip()
+        or "character"
+    )
+    return Response(
+        content=png_bytes,
+        media_type="image/png",
+        headers={"Content-Disposition": f'attachment; filename="{safe_name}.png"'},
+    )
 
 
 class _CleanupStreamingResponse(StreamingResponse):

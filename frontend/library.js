@@ -1,8 +1,13 @@
 import { S } from './state.js';
 import { $, esc, toast, avatarUrl } from './utils.js';
 import { api } from './api.js';
-import { showModal, closeModal, switchTab, showConfirmModal } from './modal.js';
+import { showModal, closeModal, switchTab, showConfirmModal, showCropModal } from './modal.js';
 import { resetChatUI, loadConversations } from './chat.js';
+
+// Pending avatar for the character create modal (cleared on submit or cancel)
+let _pendingAvatar = null;
+// Per-card cache-bust timestamps so the browser re-fetches updated avatars
+const _avatarBust = new Map();
 
 // ── Fragments
 export async function loadFragments() {
@@ -130,7 +135,8 @@ export function renderCharacters() {
     return;
   }
   $('char-list').innerHTML = S.characters.map(c => {
-    const av      = c.has_avatar ? `<img src="${avatarUrl(c.id)}" onerror="this.parentElement.textContent='👤'">` : '👤';
+    const bust = _avatarBust.has(c.id) ? `?v=${_avatarBust.get(c.id)}` : '';
+    const av   = c.has_avatar ? `<img src="${avatarUrl(c.id)}${bust}" onerror="this.parentElement.textContent='👤'">` : '👤';
     const meta    = esc((c.tags || []).slice(0, 2).join(', ') || c.source_format || '');
     const isActive = S.activeCharId === c.id;
     return `<div class="char-item${isActive ? ' active' : ''}" onclick="selectChar('${c.id}')">
@@ -159,7 +165,10 @@ export async function handleImportFile(inp) {
     await loadCharacters();
     toast(`Imported "${r.name}"`);
     showCharEditModal(r.id);
-  } catch (e) { toast('Import failed: ' + e.message, true); }
+  } catch (e) {
+    if (e.status === 409) toast('Character already in your library', true);
+    else toast('Import failed: ' + e.message, true);
+  }
 }
 
 export async function deleteCharacter(id) {
@@ -190,8 +199,54 @@ async function performDeleteCharacter(id) {
   } catch (e) { toast(e.message, true); }
 }
 
-// Shared tab template for create / edit modals
+// ── Alternate greetings helpers (used by both create and edit modals)
+
+export function addAltGreeting(prefix) {
+  const container = $(`${prefix}-ag-list`);
+  if (!container) return;
+  const row = document.createElement('div');
+  row.className = 'alt-greeting-row';
+  row.innerHTML = `<textarea rows="3"></textarea><button class="btn btn-sm" onclick="this.parentElement.remove()" title="Remove">✕</button>`;
+  container.appendChild(row);
+}
+
+function _readAltGreetings(prefix) {
+  const container = $(`${prefix}-ag-list`);
+  if (!container) return [];
+  return [...container.querySelectorAll('textarea')]
+    .map(t => t.value.trim())
+    .filter(Boolean);
+}
+
+// ── Avatar crop helpers
+
+export function triggerAvatarCrop(prefix) {
+  showCropModal(({ b64, mime }) => {
+    _pendingAvatar = { b64, mime };
+    const el = $(`${prefix}-avatar-preview`);
+    if (el) el.innerHTML = `<img src="data:${mime};base64,${b64}">`;
+  });
+}
+
+// ── Export
+
+export function exportCharacter(id, name) {
+  const a = document.createElement('a');
+  a.href = `/api/characters/${id}/export`;
+  a.download = (name || 'character') + '.png';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+}
+
+// ── Shared tab template for create / edit modals
 function charFormTabs(prefix, d, isEdit) {
+  const agHtml = (d.alternate_greetings || []).map(g => `
+    <div class="alt-greeting-row">
+      <textarea rows="3">${esc(g)}</textarea>
+      <button class="btn btn-sm" onclick="this.parentElement.remove()" title="Remove">✕</button>
+    </div>`).join('');
+
   return `
     <div class="tabs">
       <div class="tab active" onclick="switchTab(this,'${prefix}-tp')">Persona</div>
@@ -209,6 +264,11 @@ function charFormTabs(prefix, d, isEdit) {
     <div id="${prefix}-tm" class="tab-content">
       <div class="field"><label>First Message</label><textarea id="${prefix}-first-mes" rows="5">${esc(d.first_mes || '')}</textarea></div>
       <div class="field"><label>Example Messages</label><textarea id="${prefix}-mes-example" rows="4">${esc(d.mes_example || '')}</textarea></div>
+      <div class="field">
+        <label>Alternate Greetings</label>
+        <div id="${prefix}-ag-list">${agHtml}</div>
+        <button class="btn btn-sm" style="margin-top:4px" onclick="addAltGreeting('${prefix}')">+ Add</button>
+      </div>
     </div>
     ${isEdit ? `
     <div id="${prefix}-ta" class="tab-content">
@@ -219,14 +279,16 @@ function charFormTabs(prefix, d, isEdit) {
 }
 
 export function showCharCreateModal() {
+  _pendingAvatar = null;
   showModal(`
     <div style="display:flex;gap:16px;align-items:flex-start;margin-bottom:16px;">
-      <div class="char-avatar-lg">👤</div>
+      <div id="cc-avatar-preview" class="char-avatar-lg" onclick="triggerAvatarCrop('cc')"
+           title="Click to set avatar" style="cursor:pointer">👤</div>
       <div style="flex:1">
         <div class="field" style="margin-bottom:4px">
           <input id="cc-name" placeholder="Character name…" style="font-size:18px;font-weight:600;width:100%">
         </div>
-        <div style="font-size:12px;color:var(--text-muted);margin-top:6px">New character</div>
+        <div style="font-size:12px;color:var(--text-muted);margin-top:6px">New character · click portrait to set avatar</div>
       </div>
     </div>
     ${charFormTabs('cc', {}, false)}
@@ -241,28 +303,39 @@ export async function createCharacter() {
   const n = $('cc-name').value.trim();
   if (!n) { toast('Name required', true); return; }
   try {
-    await api.post('/characters', {
-      name:        n,
-      description: $('cc-desc').value.trim(),
-      personality: $('cc-personality').value.trim(),
-      scenario:    $('cc-scenario').value.trim(),
-      first_mes:   $('cc-first-mes').value.trim(),
-      mes_example: $('cc-mes-example').value.trim(),
-    });
+    const payload = {
+      name:               n,
+      description:        $('cc-desc').value.trim(),
+      personality:        $('cc-personality').value.trim(),
+      scenario:           $('cc-scenario').value.trim(),
+      first_mes:          $('cc-first-mes').value.trim(),
+      mes_example:        $('cc-mes-example').value.trim(),
+      alternate_greetings: _readAltGreetings('cc'),
+    };
+    if (_pendingAvatar) {
+      payload.avatar_b64  = _pendingAvatar.b64;
+      payload.avatar_mime = _pendingAvatar.mime;
+    }
+    _pendingAvatar = null;
+    const created = await api.post('/characters', payload);
     closeModal();
     await loadCharacters();
     toast('Created');
+    showCharEditModal(created.id);
   } catch (e) { toast(e.message, true); }
 }
 
 export async function showCharEditModal(id) {
+  _pendingAvatar = null;
   const c    = await api.get('/characters/' + id);
-  const av   = c.has_avatar ? `<img src="${avatarUrl(c.id)}">` : '👤';
+  const bust = _avatarBust.has(c.id) ? `?v=${_avatarBust.get(c.id)}` : '';
+  const av   = c.has_avatar ? `<img src="${avatarUrl(c.id)}${bust}">` : '👤';
   const tags = (c.tags || []).map(t => `<span class="char-tag">${esc(t)}</span>`).join('');
 
   showModal(`
     <div style="display:flex;gap:16px;align-items:flex-start;margin-bottom:16px;">
-      <div class="char-avatar-lg">${av}</div>
+      <div id="ce-avatar-preview" class="char-avatar-lg" onclick="triggerAvatarCrop('ce')"
+           title="Click to change avatar" style="cursor:pointer">${av}</div>
       <div style="flex:1">
         <div class="field" style="margin-bottom:4px">
           <input id="ce-name" value="${esc(c.name)}" style="font-size:18px;font-weight:600;width:100%">
@@ -275,6 +348,7 @@ export async function showCharEditModal(id) {
     <div class="modal-actions">
       <button class="btn btn-danger btn-sm" onclick="deleteCharacter('${c.id}')">Delete</button>
       <div style="flex:1"></div>
+      <button class="btn btn-sm" onclick="exportCharacter('${c.id}','${esc(c.name)}')">Export PNG</button>
       <button class="btn" onclick="closeModal()">Cancel</button>
       <button class="btn btn-accent" onclick="saveCharEdit('${c.id}')">Save</button>
     </div>`);
@@ -282,18 +356,32 @@ export async function showCharEditModal(id) {
 
 export async function saveCharEdit(id) {
   const d = {
-    name:                     $('ce-name').value.trim(),
-    description:              $('ce-desc').value.trim(),
-    personality:              $('ce-personality').value.trim(),
-    scenario:                 $('ce-scenario').value.trim(),
-    first_mes:                $('ce-first-mes').value.trim(),
-    mes_example:              $('ce-mes-example').value.trim(),
-    system_prompt:            $('ce-sysprompt').value.trim(),
-    post_history_instructions:$('ce-posthist').value.trim(),
+    name:                      $('ce-name').value.trim(),
+    description:               $('ce-desc').value.trim(),
+    personality:               $('ce-personality').value.trim(),
+    scenario:                  $('ce-scenario').value.trim(),
+    first_mes:                 $('ce-first-mes').value.trim(),
+    mes_example:               $('ce-mes-example').value.trim(),
+    system_prompt:             $('ce-sysprompt').value.trim(),
+    post_history_instructions: $('ce-posthist').value.trim(),
+    alternate_greetings:       _readAltGreetings('ce'),
   };
+  if (_pendingAvatar) {
+    d.avatar_b64  = _pendingAvatar.b64;
+    d.avatar_mime = _pendingAvatar.mime;
+  }
+  const avatarChanged = !!_pendingAvatar;
+  _pendingAvatar = null;
   if (!d.name) { toast('Name required', true); return; }
   try {
     await api.put('/characters/' + id, d);
+    if (avatarChanged) {
+      _avatarBust.set(id, Date.now());
+      if (S.activeCharId === id) {
+        const av = document.getElementById('chat-avatar');
+        if (av) av.innerHTML = `<img src="${avatarUrl(id)}?v=${_avatarBust.get(id)}" onerror="this.parentElement.textContent='📜'">`;
+      }
+    }
     closeModal();
     await loadCharacters();
     toast('Saved');

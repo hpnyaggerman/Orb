@@ -7,13 +7,14 @@ import { initTheme, loadSettings, saveSetting, showUserModal, saveUserProfile, a
 import { loadFragments, showFragmentModal, saveFragment, deleteFragment, toggleFragmentEnabled,
          loadCharacters, renderCharacters, triggerImport, handleImportFile,
          deleteCharacter, showCharCreateModal, createCharacter,
-         showCharEditModal, saveCharEdit } from './library.js';
+         showCharEditModal, saveCharEdit,
+         addAltGreeting, triggerAvatarCrop, exportCharacter } from './library.js';
 import { loadConversations, resetChatUI, selectChar, newConvForChar,
          selectConversation, deleteConversationFromModal, showConvHistoryModal,
          renderMessages, startEdit, cancelEdit, saveEdit, deleteMessage,
          switchBranch, regenerate, sendMessage, stopGeneration,
          toggleInspector, selectReasoningPass, toggleReasoningPass, clearRefineDiff } from './chat.js';
-import { closeModal, switchTab, showConfirmModal, runConfirmCb } from './modal.js';
+import { closeModal, switchTab, showConfirmModal, runConfirmCb, closeCropModal } from './modal.js';
 
 // ── Sidebar toggle
 function toggleSection(header) {
@@ -56,6 +57,9 @@ Object.assign(window, {
   // characters
   selectChar, triggerImport, handleImportFile, deleteCharacter,
   showCharCreateModal, createCharacter, showCharEditModal, saveCharEdit,
+  addAltGreeting, triggerAvatarCrop, exportCharacter,
+  // crop modal
+  closeCropModal,
   // conversations
   newConvForChar, selectConversation, deleteConversationFromModal, showConvHistoryModal,
   // messages

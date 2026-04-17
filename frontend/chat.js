@@ -153,7 +153,7 @@ export async function selectConversation(id) {
   $('chat-title-text').textContent = conv ? (conv.title || conv.character_name) : '';
   const av = $('chat-avatar');
   if (conv?.character_card_id) {
-    av.innerHTML = `<img src="${avatarUrl(conv.character_card_id)}" onerror="this.parentElement.textContent='📜'">`;
+    av.innerHTML = `<img src="${avatarUrl(conv.character_card_id)}?t=${Date.now()}" onerror="this.parentElement.textContent='📜'">`;
   } else { av.textContent = '📜'; }
   $('chat-input').disabled = false;
   $('send-btn').disabled = false;
