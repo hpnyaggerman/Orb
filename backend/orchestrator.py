@@ -115,6 +115,7 @@ async def _run_pipeline(
             director,
             fragments,
             enabled_tools,
+            attachments=attachments,
             kv_tracker=kv_tracker,
             reasoning_on=director_reasoning_on,
         ):

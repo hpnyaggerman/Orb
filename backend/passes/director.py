@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import AsyncIterator
+from typing import AsyncIterator, List, Optional
 
 from ..llm_client import LLMClient, parse_tool_calls, reasoning_cfg
 from ..tool_defs import TOOLS, POST_WRITER_TOOLS, enabled_schemas
@@ -87,6 +87,7 @@ async def _agent_pass(
     director: dict,
     fragments: list[dict],
     enabled_tools: dict | None = None,
+    attachments: Optional[List[dict]] = None,
     kv_tracker=None,
     reasoning_on: bool = True,
 ) -> AsyncIterator[dict]:
@@ -97,6 +98,8 @@ async def _agent_pass(
         {"type": "done", "result": tuple}     — final (moods, raw, calls, latency, ...)
     """
     active_moods = director["active_moods"]
+    if attachments is None:
+        attachments = []
     (
         refined_msg,
         next_event,
@@ -165,14 +168,20 @@ async def _agent_pass(
 
     t0 = time.monotonic()
     for name in tool_names:
-        msgs = prefix + [
-            {
-                "role": "user",
-                "content": build_tool_prompt(
-                    name, user_message, active_moods, fragments
-                ),
-            }
-        ]
+        tail = build_tool_prompt(name, user_message, active_moods, fragments)
+        if attachments:
+            parts = [{"type": "text", "text": tail}]
+            for att in attachments:
+                mime = att.get("mime_type", att.get("mime", "image/jpeg"))
+                b64 = att.get("data_b64", att.get("b64", ""))
+                if not b64:
+                    continue
+                url = f"data:{mime};base64,{b64}"
+                parts.append({"type": "image_url", "image_url": {"url": url}})
+            content = parts
+        else:
+            content = tail
+        msgs = prefix + [{"role": "user", "content": content}]
         logger.info(
             "Agent tool=%s prompt:\n%s",
             name,
