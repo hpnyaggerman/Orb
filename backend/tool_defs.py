@@ -63,7 +63,7 @@ REWRITE_PROMPT_TOOL = {
     "type": "function",
     "function": {
         "name": "rewrite_user_prompt",
-        "description": 'Rewrite the user\'s message into a more detailed action or dialogue. Use ONLY when the input is too short or vague (e.g. "I laugh", "Sure.", "I nod") to generate a compelling response. Write 2 sentences max, be direct and succinct. If the message is already detailed enough, leave empty.',
+        "description": 'Rewrite the user\'s message into a more detailed action or dialogue. Use ONLY when the input is too short or vague (e.g. "I laugh.", "Sure, what is it?", "I nod.") to generate a compelling response. Write 2 sentences max, be succinct. If the message is already detailed enough, leave empty. Do NOT call direct_scene even if it is available!',
         "parameters": {
             "type": "object",
             "properties": {
