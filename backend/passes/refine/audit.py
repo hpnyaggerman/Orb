@@ -69,7 +69,7 @@ def run_audit(
     text: str,
     phrase_bank: list[list[str]],
     cliche_threshold: float = 0.25,
-    opener_n_words: int = 3,
+    opener_n_words: int = 1,
     opener_threshold: float = 0.15,
     template_max_tags: int = 8,
     template_flag_threshold: int = 2,

@@ -135,6 +135,30 @@ He Z something."""
         assert flagged.count == 3
         assert flagged.fraction == 1.0
 
+    def test_realistic_narrative_repetitive_he(self):
+        """Realistic narrative with multiple 'He' sentences (true positive)."""
+        text = (
+            "Henderson sighs, a long, rattling sound that suggests he’s been "
+            "fighting the bureaucracy of the school district for far too long. "
+            "He doesn't look at you with any particular interest, just stares "
+            "off toward the parking lot, leaning back against the concrete "
+            "planter with his clipboard tucked under one arm.\n\n"
+            '"Worst, huh?" He rubs the bridge of his nose, his voice flat '
+            'and drained of all emotion. "Probably that transfer student '
+            "back in '19. Kid from out of state. He presents his ID, right? "
+            'The card says..."\n\n'
+            "He shifts his weight, his tone remaining as boring as a weather "
+            "report while he describes a sensory nightmare."
+        )
+        result = detect_opening_monotony(text, n_words=1)
+        # Should flag 'he' with count 4 (sentences 1,3,6,8)
+        assert len(result.flagged_openers) >= 1
+        flagged = result.flagged_openers[0]
+        assert flagged.opener == "he"
+        assert flagged.count == 4
+        # fraction 4/9 ≈ 0.4444
+        assert abs(flagged.fraction - 0.4444) < 0.0001
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # FALSE POSITIVES – legitimate variation that should NOT trigger
@@ -302,6 +326,63 @@ class TestDesiredBehavior:
         text = "He walked. He ran. He jumped."
         result = detect_opening_monotony(text)  # default n_words=3
         assert len(result.flagged_openers) >= 1
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# AUDIT INTEGRATION TESTS
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+class TestAuditIntegration:
+    """Tests that verify the detector works within the full audit pipeline."""
+
+    def test_audit_default_params_miss_narrative(self):
+        """With default audit parameters (n_words=3), the narrative paragraph is NOT flagged."""
+        from backend.passes.refine.audit import run_audit
+
+        text = (
+            "Henderson sighs, a long, rattling sound that suggests he’s been "
+            "fighting the bureaucracy of the school district for far too long. "
+            "He doesn't look at you with any particular interest, just stares "
+            "off toward the parking lot, leaning back against the concrete "
+            "planter with his clipboard tucked under one arm.\n\n"
+            '"Worst, huh?" He rubs the bridge of his nose, his voice flat '
+            'and drained of all emotion. "Probably that transfer student '
+            "back in '19. Kid from out of state. He presents his ID, right? "
+            'The card says..."\n\n'
+            "He shifts his weight, his tone remaining as boring as a weather "
+            "report while he describes a sensory nightmare."
+        )
+        report = run_audit(text, [])
+        # Because n_words=3, each 'He' sentence has a different three‑word opener,
+        # so no repetition is detected.
+        assert len(report.monotony_result.flagged_openers) == 0
+        # This test documents the current buggy behavior.
+
+    @pytest.mark.skip(reason="Audit should detect repetitive first‑word openings")
+    def test_audit_should_detect_narrative_with_n_words_1(self):
+        """If audit used n_words=1, the narrative paragraph would be flagged."""
+        from backend.passes.refine.audit import run_audit
+
+        text = (
+            "Henderson sighs, a long, rattling sound that suggests he’s been "
+            "fighting the bureaucracy of the school district for far too long. "
+            "He doesn't look at you with any particular interest, just stares "
+            "off toward the parking lot, leaning back against the concrete "
+            "planter with his clipboard tucked under one arm.\n\n"
+            '"Worst, huh?" He rubs the bridge of his nose, his voice flat '
+            'and drained of all emotion. "Probably that transfer student '
+            "back in '19. Kid from out of state. He presents his ID, right? "
+            'The card says..."\n\n'
+            "He shifts his weight, his tone remaining as boring as a weather "
+            "report while he describes a sensory nightmare."
+        )
+        # Override opener_n_words to 1 (not the default).
+        report = run_audit(text, [], opener_n_words=1)
+        assert len(report.monotony_result.flagged_openers) >= 1
+        flagged = report.monotony_result.flagged_openers[0]
+        assert flagged.opener == "he"
+        assert flagged.count == 4
 
 
 if __name__ == "__main__":

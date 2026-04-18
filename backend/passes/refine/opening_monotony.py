@@ -42,7 +42,7 @@ def _get_opener(sentence: str, n_words: int) -> str | None:
 
 def detect_opening_monotony(
     text: str,
-    n_words: int = 3,
+    n_words: int = 1,
     flag_threshold: float = 0.15,
 ) -> MonotonyResult:
     sentences = _split_sentences(text)
