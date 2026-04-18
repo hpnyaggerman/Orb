@@ -8,7 +8,7 @@
 
 - Handle importing characters with the same name => List the chars with that name, ask user whether to make a new one or replace, and which one.
 - Feature: User-defined fields for the director to consider (e.g. physicality).
-- Feature: Implement min_words for length_guard in refine pass.
+- Feature: Implement min_words for length_guard in editor pass.
 
 -- Not yet --
 - Feature: Tags and search for Convos.

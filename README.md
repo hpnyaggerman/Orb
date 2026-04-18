@@ -21,7 +21,7 @@ The system uses a three-pass architecture for each user message:
 
 1. **Director Pass** - Tool-calling phase where the LLM selects moods, plot direction, and potentially rewrites user prompts
 2. **Writer Pass** - Story generation phase where the LLM writes the actual roleplay response
-3. **Refine Pass** - A ReAct loop - Self-audit for slop and length optimization phase. This is surgical, errors will be programmatically detected, 
+3. **Editor Pass** - A ReAct loop - Self-audit for slop and length optimization phase. This is surgical, errors will be programmatically detected, 
 the model only needs to write replacement for targeted sentences
 
 ## KV Cache Reuse Strategy
