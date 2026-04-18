@@ -124,16 +124,18 @@ DEFAULT_SETTINGS = {
 
 SEED_PHRASE_BANK = [
     ["a mix of", "a mixture of"],
-    ["dripped with", "dripping with"],
+    ["dripped with", "dripping with", "drips with"],
     [
-        "the tension in the air",
-        "thick tension in the air",
+        "the air was heavy",
         "the air is heavy",
+        "the air was charged",
         "the air is charged",
+        "the air was thick",
         "the air is thick",
     ],
+    ["tension in the air"],
     ["filling the air", "fills the air", "filled the air"],
-    ["hang in the air", "hung in the air", "hangs in the air", "hanging in the air"],
+    ["hang in the air", "hung in the air", "hangs in the air", "hanging in the air", "the air between them"],
     ["dangerous voice", "dangerous tone"],
     [
         "voice dropping",
@@ -144,7 +146,8 @@ SEED_PHRASE_BANK = [
         "voice is a low",
         "voice is a dangerous",
     ],
-    ["low hiss", "dangerous hiss", "barely a whisper", "barely above a whisper"],
+    ["low hiss", "dangerous hiss"],
+    ["barely a whisper", "barely above a whisper", "barely audible"],
     ["voice cracks", "voice cracking", "voice cracked"],
     ["a low, guttural", "a guttural sound"],
     [
@@ -165,9 +168,9 @@ SEED_PHRASE_BANK = [
         "eyes narrowing",
         "eyes narrowed",
         "mischievous glint",
+        "glint with mischief",
         "gaze sharpen",
         "eyes widen",
-        "glint with mischief",
         "eyes wide",
     ],
     [
@@ -189,8 +192,8 @@ SEED_PHRASE_BANK = [
     ["vulnerability", "vulnerable"],
     ["don't you dare stop"],
     ["electric", "electrifying"],
-    ["the air between them", "thick and suffocating", "thick, suffocating"],
-    ["mind races", "mind racing"],
+    ["thick and suffocating", "thick, suffocating"],
+    ["mind races", "mind racing", "mind raced"],
     ["knuckles whitening", "knuckles whitened", "whitened knuckles"],
     ["stark contrast", "pure, unadulterated"],
 ]
