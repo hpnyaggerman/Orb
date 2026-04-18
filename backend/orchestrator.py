@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import AsyncIterator
+from typing import AsyncIterator, List
 
 from . import database as db
 from .llm_client import LLMClient
@@ -31,6 +31,7 @@ async def _run_pipeline(
     fragments: list[dict],
     prefix: list[dict],
     user_message: str,
+    attachments: List[dict] = [],
     phrase_bank: list[list[str]] | None = None,
 ) -> AsyncIterator[dict]:
     """Three-pass pipeline: director → writer → editor.
@@ -181,6 +182,7 @@ async def _run_pipeline(
         enabled_tools,
         inj_block=inj_block,
         effective_msg=effective_msg,
+        attachments=attachments,
         length_guard_enforce=length_guard_enforce,
         length_guard=length_guard,
         kv_tracker=kv_tracker,
@@ -482,7 +484,10 @@ async def _consume_pipeline(
 
 
 async def handle_turn(
-    conversation_id: str, user_message: str, skip_user_persist: bool = False
+    conversation_id: str,
+    user_message: str,
+    skip_user_persist: bool = False,
+    attachments: List[dict] = [],
 ) -> AsyncIterator[dict]:
     try:
         ctx = await _load_pipeline_context(conversation_id)
@@ -503,12 +508,22 @@ async def handle_turn(
 
         # Save user message BEFORE pipeline
         if not skip_user_persist:
+            # Convert frontend attachment format to database format
+            db_attachments = []
+            for att in attachments:
+                db_attachments.append({
+                    "mime_type": att.get("mime", att.get("mime_type", "image/jpeg")),
+                    "data_b64": att.get("b64", att.get("data_b64", "")),
+                    "filename": att.get("filename"),
+                    "size": att.get("size"),
+                })
             user_msg_id = await db.add_message(
                 conversation_id,
                 "user",
                 user_message,
                 next_turn,
                 parent_id=user_parent_id,
+                attachments=db_attachments,
             )
             await db.set_active_leaf(conversation_id, user_msg_id)
 
@@ -533,7 +548,8 @@ async def handle_turn(
             ctx["fragments"],
             prefix,
             user_message,
-            ctx["phrase_bank"],
+            attachments=attachments,
+            phrase_bank=ctx["phrase_bank"],
         )
         async for event in _consume_pipeline(
             pipeline,
@@ -582,6 +598,7 @@ async def handle_regenerate(
         )
         prefix = _build_prefix_from_ctx(ctx, history)
 
+        attachments = await db.get_attachments_for_message(user_msg_id) if user_msg_id else []
         pipeline = _run_pipeline(
             ctx["client"],
             settings,
@@ -589,6 +606,7 @@ async def handle_regenerate(
             ctx["fragments"],
             prefix,
             user_msg["content"],
+            attachments,
             ctx["phrase_bank"],
         )
         async for event in _consume_pipeline(

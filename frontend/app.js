@@ -25,10 +25,86 @@ function toggleSection(header) {
 // ── Burger menu
 function toggleBurger() { $('burger-dropdown').classList.toggle('open'); }
 function closeBurger()  { $('burger-dropdown').classList.remove('open'); }
+function triggerAttachImage() {
+  $('attach-image-input').click();
+}
 
 document.addEventListener('click', e => {
   if (!e.target.closest('#burger-btn') && !e.target.closest('#burger-dropdown')) closeBurger();
 });
+
+// Attachments handling
+function handleAttachmentSelect(e) {
+  const files = Array.from(e.target.files);
+  if (files.length === 0) return;
+  for (const file of files) {
+    if (!file.type.startsWith('image/')) {
+      alert('Only image files are allowed.');
+      continue;
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      alert('File size exceeds 10 MB limit.');
+      continue;
+    }
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      const b64 = event.target.result.split(',')[1]; // strip data:image/...;base64,
+      S.attachments.push({
+        b64,
+        mime: file.type,
+        filename: file.name,
+        size: file.size,
+      });
+      updateAttachmentPreview();
+    };
+    reader.readAsDataURL(file);
+  }
+  e.target.value = ''; // allow re-selecting same file
+}
+
+function updateAttachmentPreview() {
+  const container = $('attachment-preview');
+  container.innerHTML = '';
+  S.attachments.forEach((att, idx) => {
+    const item = document.createElement('div');
+    item.className = 'attachment-item';
+    const img = document.createElement('img');
+    img.src = `data:${att.mime};base64,${att.b64}`;
+    const info = document.createElement('div');
+    info.className = 'attachment-info';
+    const name = document.createElement('div');
+    name.className = 'attachment-name';
+    name.textContent = att.filename || 'image';
+    const size = document.createElement('div');
+    size.className = 'attachment-size';
+    size.textContent = formatBytes(att.size);
+    info.appendChild(name);
+    info.appendChild(size);
+    const removeBtn = document.createElement('button');
+    removeBtn.className = 'attachment-remove';
+    removeBtn.innerHTML = '×';
+    removeBtn.title = 'Remove';
+    removeBtn.onclick = () => {
+      S.attachments.splice(idx, 1);
+      updateAttachmentPreview();
+    };
+    item.appendChild(img);
+    item.appendChild(info);
+    item.appendChild(removeBtn);
+    container.appendChild(item);
+  });
+}
+
+function formatBytes(bytes) {
+  if (bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
+// File input change listener
+$('attach-image-input').addEventListener('change', handleAttachmentSelect);
 
 // ── Input events
 $('chat-input').addEventListener('input', function () {
@@ -68,7 +144,7 @@ Object.assign(window, {
   // inspector
   toggleInspector, selectReasoningPass, toggleReasoningPass, clearRefineDiff,
   // ui
-  toggleSection, toggleBurger, closeBurger,
+  toggleSection, toggleBurger, closeBurger, triggerAttachImage, updateAttachmentPreview,
   // state
   S,
 });

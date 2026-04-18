@@ -25,6 +25,34 @@ def replace_placeholders(text: str, user_name: str, char_name: str) -> str:
     return result
 
 
+def format_message_with_attachments(message: dict, user_name: str, char_name: str) -> dict:
+    """Convert a message dict with optional attachments to OpenAI vision format.
+    
+    Input message dict expects keys: 'role', 'content' (str), 'attachments' (list of dicts).
+    Each attachment dict must have 'mime_type' and 'data_b64'.
+    Returns a dict with 'role' and 'content' (string or list of parts).
+    """
+    role = message["role"]
+    text = replace_placeholders(message.get("content", ""), user_name, char_name)
+    attachments = message.get("attachments") or []
+    
+    if not attachments:
+        # Simple text message
+        return {"role": role, "content": text}
+    
+    # Build multimodal content array
+    parts = []
+    if text:
+        parts.append({"type": "text", "text": text})
+    for att in attachments:
+        mime = att["mime_type"]
+        b64 = att["data_b64"]
+        # Ensure proper data URL format
+        url = f"data:{mime};base64,{b64}"
+        parts.append({"type": "image_url", "image_url": {"url": url}})
+    return {"role": role, "content": parts}
+
+
 # ── System-prompt prefix
 
 
@@ -65,10 +93,7 @@ def build_prefix(
         parts.append(f"\n\n## User: {user_name or 'User'}\n{resolved['user_desc']}")
 
     processed_messages = [
-        {
-            "role": m["role"],
-            "content": replace_placeholders(m["content"], user_name, char_name),
-        }
+        format_message_with_attachments(m, user_name, char_name)
         for m in (messages or [])
     ]
 

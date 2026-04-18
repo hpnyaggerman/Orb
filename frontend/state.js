@@ -21,6 +21,7 @@ export const S = {
   abortController: null,
   streamingContent: null,
   pendingUserMsg: null,
+  attachments: [],
   wasAborted: false,
   _selectCharLock: false,
   generationPhase: null,

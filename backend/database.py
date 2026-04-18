@@ -1,4 +1,5 @@
 from __future__ import annotations
+from typing import List
 import asyncio
 import aiosqlite
 import json
@@ -306,6 +307,16 @@ async def init_db():
             CREATE TABLE IF NOT EXISTS phrase_bank (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 variants TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS message_attachments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+                mime_type TEXT NOT NULL,
+                data_b64 TEXT NOT NULL,
+                filename TEXT,
+                size INTEGER,
+                created_at TEXT NOT NULL
             );
         """
         )
@@ -654,7 +665,11 @@ async def get_messages(cid: str) -> list[dict]:
     leaf_id = conv.get("active_leaf_id")
     if not leaf_id:
         return []
-    return await _get_path_to_leaf(cid, leaf_id)
+    messages = await _get_path_to_leaf(cid, leaf_id)
+    # Add attachments to each message
+    for msg in messages:
+        msg["attachments"] = await get_attachments_for_message(msg["id"])
+    return messages
 
 
 async def get_messages_with_branch_info(cid: str) -> list[dict]:
@@ -684,6 +699,9 @@ async def get_messages_with_branch_info(cid: str) -> list[dict]:
             msg["next_branch_id"] = (
                 sibling_ids[idx + 1] if idx < len(sibling_ids) - 1 else None
             )
+        # Add attachments
+        for msg in messages:
+            msg["attachments"] = await get_attachments_for_message(msg["id"])
         return messages
     finally:
         await db.close()
@@ -714,8 +732,15 @@ async def add_message(
     turn_index: int,
     swipe_index: int = 0,
     parent_id: int | None = None,
+    attachments: Optional[List[dict]] = None,
 ) -> int:
-    """Add a message. Returns the new message id."""
+    """Add a message. Returns the new message id.
+    If attachments is provided, each dict must have keys:
+    - mime_type (str)
+    - data_b64 (str)
+    - filename (optional str)
+    - size (optional int)
+    """
     db = await get_db()
     try:
         now = datetime.now(timezone.utc).isoformat()
@@ -723,11 +748,47 @@ async def add_message(
             "INSERT INTO messages (conversation_id, role, content, turn_index, swipe_index, is_active, parent_id, created_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?)",
             (cid, role, content, turn_index, swipe_index, parent_id, now),
         )
+        message_id = cur.lastrowid
+        if attachments:
+            for att in attachments:
+                await db.execute(
+                    'INSERT INTO message_attachments (message_id, mime_type, data_b64, filename, size, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+                    (message_id, att['mime_type'], att['data_b64'], att.get('filename'), att.get('size'), now),
+                )
         await db.execute(
             "UPDATE conversations SET updated_at = ? WHERE id = ?", (now, cid)
         )
         await db.commit()
-        return cur.lastrowid
+        return message_id
+    finally:
+        await db.close()
+
+
+async def add_attachments(message_id: int, attachments: List[dict]) -> None:
+    '''Insert multiple attachments for a given message.'''
+    if not attachments:
+        return
+    db = await get_db()
+    try:
+        now = datetime.now(timezone.utc).isoformat()
+        for att in attachments:
+            await db.execute(
+                'INSERT INTO message_attachments (message_id, mime_type, data_b64, filename, size, created_at) VALUES (?, ?, ?, ?, ?, ?)',
+                (message_id, att['mime_type'], att['data_b64'], att.get('filename'), att.get('size'), now),
+            )
+        await db.commit()
+    finally:
+        await db.close()
+
+async def get_attachments_for_message(message_id: int) -> List[dict]:
+    '''Retrieve all attachments for a message.'''
+    db = await get_db()
+    try:
+        rows = await db.execute_fetchall(
+            'SELECT id, mime_type, data_b64, filename, size, created_at FROM message_attachments WHERE message_id = ? ORDER BY id',
+            (message_id,),
+        )
+        return [dict(r) for r in rows]
     finally:
         await db.close()
 

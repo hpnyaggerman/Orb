@@ -4,6 +4,34 @@ import { api } from './api.js';
 import { showModal, closeModal, showConfirmModal } from './modal.js';
 import { renderCharacters, loadCharacters } from './library.js';
 
+// ── Attachments rendering
+function formatBytes(bytes) {
+  if (bytes === 0) return '0 B';
+  const k = 1024;
+  const sizes = ['B', 'KB', 'MB', 'GB'];
+  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+}
+
+function renderAttachments(attachments) {
+  if (!attachments || attachments.length === 0) return '';
+  const items = attachments.map(att => {
+    const b64 = att.b64 || att.data_b64 || '';
+    const mime = att.mime || att.mime_type || 'image/jpeg';
+    const filename = att.filename || 'image';
+    const size = att.size || 0;
+    return `
+    <div class="attachment-item">
+      <img src="data:${mime};base64,${b64}" alt="${esc(filename)}">
+      <div class="attachment-info">
+        <div class="attachment-name">${esc(filename)}</div>
+        <div class="attachment-size">${formatBytes(size)}</div>
+      </div>
+    </div>
+  `}).join('');
+  return `<div class="attachments">${items}</div>`;
+}
+
 // ── Generation Phase
 const PHASE_ORDER  = { pending: 0, directing: 0, generating: 1, refining: 2 };
 const PHASE_LABELS = {
@@ -288,9 +316,10 @@ export function renderMessages() {
             ? formatProseWithDiff(S.pendingRefineDiff.ops)
             : formatProse(resolvePlaceholders(m.content))
         }</div>`;
+      const attachmentsHtml = renderAttachments(m.attachments);
       return `<div class="message ${m.role}" data-msg-id="${m.id}">
         <div class="msg-role">${m.role === 'user' ? 'You' : esc(getCharName())} ${branchHtml}</div>
-        ${body}${toolbar}
+        ${body}${attachmentsHtml}${toolbar}
       </div>`;
     }).join('');
   }
@@ -697,7 +726,10 @@ export async function sendMessage() {
   inp.value = ''; inp.style.height = 'auto';
   $('send-btn').disabled = true;
 
-  const userMsg = { role: 'user', content, id: null, branch_count: 1, branch_index: 0, prev_branch_id: null, next_branch_id: null };
+  const attachments = [...S.attachments];
+  S.attachments.length = 0;
+  updateAttachmentPreview();
+  const userMsg = { role: 'user', content, id: null, branch_count: 1, branch_index: 0, prev_branch_id: null, next_branch_id: null, attachments };
   S.messages.push(userMsg);
   S.pendingUserMsg = userMsg;
   renderMessages(); scrollToBottom();
@@ -710,7 +742,7 @@ export async function sendMessage() {
     const resp = await fetch('/api' + convUrl(S.activeConvId, 'send'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content, ...agentPayload() }),
+      body: JSON.stringify({ content, attachments, ...agentPayload() }),
       signal: S.abortController.signal,
     });
     await processSSEStream(resp, ct, msgDiv, S.abortController.signal);

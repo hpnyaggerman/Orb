@@ -1,5 +1,9 @@
 - [Post-process] Implement phrase repetition detection as well, not just anti-slop detection. Tell the model to write about something else entirely for this sentence.
 
+- Improvement: Character management UI
+  + Button to show a searchable modal that displays all characters under Create and Import.
+  + Current characte list only shows most recent ones.
+
 - Feature: Multiple user personas.
 - Feature: Image attachments => Save b64 encoded images as is in DB, render them in chat always.
 - Feature: User-defined fields for the director to consider (e.g. physicality).

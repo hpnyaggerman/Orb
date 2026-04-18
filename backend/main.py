@@ -7,7 +7,7 @@ import base64
 import tempfile
 from contextlib import asynccontextmanager
 
-from typing import Annotated, Optional
+from typing import Annotated, Optional, List
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File
 from fastapi.responses import StreamingResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
@@ -39,6 +39,7 @@ from .database import (
     sync_conversations_for_card,
     insert_alternate_greeting_swipes,
     add_message,
+    get_attachments_for_message,
     set_active_leaf,
     get_message_by_id,
     switch_to_branch,
@@ -192,16 +193,43 @@ class CharacterCardUpdate(BaseModel):
     avatar_mime: Optional[str] = None
 
 
+class AttachmentIn(BaseModel):
+    b64: str
+    mime: str
+    filename: Optional[str] = None
+    size: Optional[int] = None
+
+    @field_validator('size')
+    @classmethod
+    def validate_size(cls, v):
+        if v is not None and v > 10 * 1024 * 1024:  # 10 MB
+            raise ValueError('Attachment size exceeds 10 MB limit')
+        return v
+
+    @field_validator('b64')
+    @classmethod
+    def validate_b64(cls, v):
+        # Ensure it's valid base64 (optional)
+        import base64
+        try:
+            base64.b64decode(v, validate=True)
+        except Exception:
+            raise ValueError('Invalid base64 string')
+        return v
+
+
 class SendMessage(BaseModel):
     content: str
     enable_agent: bool = True
     turn_index: Optional[int] = None
+    attachments: List[AttachmentIn] = []
 
 
 class EditMessage(BaseModel):
     content: str
     regenerate: bool = True
     enable_agent: bool = True
+    attachments: List[AttachmentIn] = []
 
 
 class SwitchSwipe(BaseModel):
@@ -353,7 +381,7 @@ async def api_create_conversation(data: ConversationCreate):
 
     # If there's a first message, auto-add it as the first assistant turn
     if first_mes.strip():
-        msg_id = await add_message(cid, "assistant", first_mes.strip(), 0)
+        msg_id = await add_message(cid, "assistant", first_mes.strip(), 0, attachments=None)
         await set_active_leaf(cid, msg_id)
 
         # If we have a character card with alternate greetings, create swipe versions
@@ -594,6 +622,17 @@ async def api_edit_message(cid: str, msg_id: int, data: EditMessage, request: Re
         await update_message_content(msg_id, data.content)
         return {"ok": True}
 
+    # Copy attachments from original message (if any)
+    original_attachments = await get_attachments_for_message(msg_id)
+    attachments = []
+    for att in original_attachments:
+        attachments.append({
+            "mime_type": att["mime_type"],
+            "data_b64": att["data_b64"],
+            "filename": att["filename"],
+            "size": att["size"],
+        })
+
     # Create sibling (same parent_id as original)
     new_msg_id = await add_message(
         cid,
@@ -601,6 +640,7 @@ async def api_edit_message(cid: str, msg_id: int, data: EditMessage, request: Re
         data.content,
         original["turn_index"],
         parent_id=original.get("parent_id"),
+        attachments=attachments if attachments else None,
     )
     await set_active_leaf(cid, new_msg_id)
 
@@ -609,7 +649,7 @@ async def api_edit_message(cid: str, msg_id: int, data: EditMessage, request: Re
     if should_stream_regen:
         return _CleanupStreamingResponse(
             _sse_stream(
-                handle_turn(cid, data.content, skip_user_persist=True), request
+                handle_turn(cid, data.content, skip_user_persist=True, attachments=attachments), request
             ),
             media_type="text/event-stream",
         )
@@ -680,8 +720,9 @@ async def api_send_message(cid: str, data: SendMessage, request: Request):
     if not conv:
         raise HTTPException(404, "Conversation not found")
 
+    attachments = [a.dict() for a in data.attachments]
     return _CleanupStreamingResponse(
-        _sse_stream(handle_turn(cid, data.content), request),
+        _sse_stream(handle_turn(cid, data.content, attachments=attachments), request),
         media_type="text/event-stream",
     )
 

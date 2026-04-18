@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import AsyncIterator
+from typing import AsyncIterator, List
 
 from ..llm_client import LLMClient, reasoning_cfg
 from ..tool_defs import enabled_schemas
@@ -22,6 +22,7 @@ async def _writer_pass(
     *,
     inj_block: str = "",
     effective_msg: str,
+    attachments: List[dict] = [],
     length_guard_enforce: bool = False,
     length_guard: dict | None = None,
     kv_tracker=None,
@@ -39,7 +40,21 @@ async def _writer_pass(
         tail += f"**Keep your response under {max_words} words and {max_paragraphs} paragraphs.**\n\n"
     tail += "___\n\n" + effective_msg + "\n\n"
 
-    msgs = prefix + [{"role": "user", "content": tail}]
+    # Build user message content, possibly multimodal
+    if attachments:
+        parts = [{"type": "text", "text": tail}]
+        for att in attachments:
+            mime = att.get("mime_type", att.get("mime", "image/jpeg"))
+            b64 = att.get("data_b64", att.get("b64", ""))
+            if not b64:
+                continue
+            url = f"data:{mime};base64,{b64}"
+            parts.append({"type": "image_url", "image_url": {"url": url}})
+        content = parts
+    else:
+        content = tail
+
+    msgs = prefix + [{"role": "user", "content": content}]
 
     params = {
         k: v
