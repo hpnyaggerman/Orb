@@ -14,10 +14,12 @@ Internals rewritten:
 
 from __future__ import annotations
 
+import os
 import re
+import sys
 from dataclasses import dataclass, field
 
-
+DEBUG = "DEBUG_OPENING_MONOTONY" in os.environ
 # ---------- public dataclasses (unchanged) ----------
 
 @dataclass
@@ -74,15 +76,22 @@ def _extract_narration(paragraph: str) -> str:
 
 def _split_sentences(text: str) -> list[str]:
     """Paragraph-aware sentence splitter that strips dialogue in the process."""
+    if DEBUG:
+        sys.stderr.write(f"[opening_monotony] splitting text: {repr(text)}\n")
     sentences: list[str] = []
     for para in _PARA_SPLIT.split(text.strip()):
         narration = _extract_narration(para).strip()
+        if DEBUG:
+            sys.stderr.write(f"[opening_monotony] para: {repr(para)}\n")
+            sys.stderr.write(f"[opening_monotony] narration: {repr(narration)}\n")
         if not narration:
             continue
         for raw in _SENT_SPLIT.split(narration):
             s = raw.strip()
             if s:
                 sentences.append(s)
+    if DEBUG:
+        sys.stderr.write(f"[opening_monotony] extracted sentences: {sentences}\n")
     return sentences
 
 
@@ -108,11 +117,15 @@ def detect_opening_monotony(
     min_consecutive: int = 3,
 ) -> MonotonyResult:
     sentences = _split_sentences(text)
+    if DEBUG:
+        sys.stderr.write(f"[opening_monotony] sentences: {sentences}\n")
     total = len(sentences)
     if total == 0:
         return MonotonyResult([], {}, 0, 0.0)
 
     openers: list[str | None] = [_get_opener(s, n_words) for s in sentences]
+    if DEBUG:
+        sys.stderr.write(f"[opening_monotony] openers: {openers}\n")
 
     counts: dict[str, int] = {}
     for opener in openers:
