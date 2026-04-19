@@ -53,3 +53,7 @@ For optimal KV cache reuse, the following will remain consistent across passes:
 
 1. **Speed**: Multiple passes will obviously have a longer time to final response
 2. **Cost**: Neligible cost increase, which comes naturally with multiple passes, somewhat alleviated by KV cache reuse strategy
+
+## Requirements
+1. A model with solid tool/function calling capabilities (recommended: Gemma 4)
+2. OpenAI-compatible LLM inference backend API that supports prompt-caching
