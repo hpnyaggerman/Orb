@@ -93,7 +93,7 @@ function finalizeStreamingDiv(lastMsg) {
     tb.className = 'msg-toolbar';
     tb.innerHTML = `<button onclick="startEdit(${lastMsg.id})" title="Edit">✏️ Edit</button>
       <button onclick="regenerate(${lastMsg.id})" title="Regenerate">🔄 Regen</button>
-      <button onclick="deleteMessage(${lastMsg.id})" title="Delete message and all children" style="color:var(--red)">✕ Del</button>`;
+      <button onclick="deleteMessage(${lastMsg.id})" title="Delete message, siblings, and all children" style="color:var(--red)">✕ Del</button>`;
     div.appendChild(tb);
   }
 
@@ -299,7 +299,7 @@ export function renderMessages() {
         <div class="msg-toolbar">
           ${m.id ? `<button onclick="startEdit(${m.id})" title="Edit">✏️ Edit</button>` : ''}
           ${m.role === 'assistant' && m.id ? `<button onclick="regenerate(${m.id})" title="Regenerate">🔄 Regen</button>` : ''}
-          ${m.id ? `<button onclick="deleteMessage(${m.id})" title="Delete message and all children" style="color:var(--red)">✕ Del</button>` : ''}
+          ${m.id ? `<button onclick="deleteMessage(${m.id})" title="Delete message, siblings, and all children" style="color:var(--red)">✕ Del</button>` : ''}
           ${S.pendingRefineDiff?.msgId && m.id === S.pendingRefineDiff.msgId ? `<button onclick="clearRefineDiff()" title="Clear diff highlights" class="btn-clear-diff">✕ Diff</button>` : ''}
         </div>`;
       const body = isEditing ? `
@@ -360,7 +360,7 @@ export async function deleteMessage(msgId) {
   if (S.isStreaming) return;
   showConfirmModal({
     title: 'Delete Message',
-    message: 'Delete this message and all its children?',
+    message: 'Delete this message, all its siblings, and all their children?',
     confirmText: 'Delete',
   }, async () => {
     try {

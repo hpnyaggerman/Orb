@@ -1483,7 +1483,7 @@ async def delete_character_card(
 
 
 async def delete_message_with_descendants(cid: str, msg_id: int) -> bool:
-    """Delete a message and all its descendants. Updates active_leaf_id if the active branch is affected."""
+    """Delete a message, all its siblings, and all their descendants. Updates active_leaf_id if the active branch is affected."""
     db = await get_db()
     try:
         rows = await db.execute_fetchall(
@@ -1494,11 +1494,19 @@ async def delete_message_with_descendants(cid: str, msg_id: int) -> bool:
             return False
         parent_id = rows[0]["parent_id"]
 
-        # Collect the full subtree to delete via recursive CTE
+        # Collect all siblings (messages with the same parent_id) and their descendants via recursive CTE
+        # For root messages (parent_id IS NULL), match other root messages
+        if parent_id is not None:
+            sibling_cond = "parent_id = ?"
+            sibling_params = (parent_id,)
+        else:
+            sibling_cond = "parent_id IS NULL"
+            sibling_params = ()
+
         desc_rows = await db.execute_fetchall(
-            """
+            f"""
             WITH RECURSIVE subtree(id) AS (
-                SELECT id FROM messages WHERE id = ? AND conversation_id = ?
+                SELECT id FROM messages WHERE conversation_id = ? AND {sibling_cond}
                 UNION ALL
                 SELECT m.id FROM messages m
                 INNER JOIN subtree s ON m.parent_id = s.id
@@ -1506,7 +1514,7 @@ async def delete_message_with_descendants(cid: str, msg_id: int) -> bool:
             )
             SELECT id FROM subtree
         """,
-            (msg_id, cid, cid),
+            (cid, *sibling_params, cid),
         )
         deleted_ids = {r["id"] for r in desc_rows}
 
@@ -1514,34 +1522,12 @@ async def delete_message_with_descendants(cid: str, msg_id: int) -> bool:
             return False
 
         # If the active leaf is inside the deleted subtree, find a new active leaf
+        # Since all siblings are deleted, the new active leaf will be the parent (or NULL for root)
         conv_rows = await db.execute_fetchall(
             "SELECT active_leaf_id FROM conversations WHERE id = ?", (cid,)
         )
         if conv_rows and conv_rows[0]["active_leaf_id"] in deleted_ids:
-            new_leaf = parent_id
-            # Prefer a surviving sibling branch over stopping at the bare parent
-            # Handle both cases: parent_id is None (root messages) and parent_id is not None
-            if parent_id is not None:
-                sibling_query = "SELECT id FROM messages WHERE conversation_id = ? AND parent_id = ? AND id != ? ORDER BY id ASC LIMIT 1"
-                sibling_params = (cid, parent_id, msg_id)
-            else:
-                # For root messages, look for other root messages (parent_id IS NULL)
-                sibling_query = "SELECT id FROM messages WHERE conversation_id = ? AND parent_id IS NULL AND id != ? ORDER BY id ASC LIMIT 1"
-                sibling_params = (cid, msg_id)
-
-            sibling_rows = await db.execute_fetchall(sibling_query, sibling_params)
-            if sibling_rows:
-                # Walk to the deepest descendant of that sibling
-                candidate = sibling_rows[0]["id"]
-                while True:
-                    child_rows = await db.execute_fetchall(
-                        "SELECT id FROM messages WHERE conversation_id = ? AND parent_id = ? ORDER BY id DESC LIMIT 1",
-                        (cid, candidate),
-                    )
-                    if not child_rows:
-                        break
-                    candidate = child_rows[0]["id"]
-                new_leaf = candidate
+            new_leaf = parent_id  # parent_id is None for root messages, which is valid
 
             await db.execute(
                 "UPDATE conversations SET active_leaf_id = ? WHERE id = ?",
