@@ -159,7 +159,7 @@ Object.assign(window, {
 function initAutoscroll() {
   const ct = $('chat-messages');
   if (!ct) return;
-  const THRESHOLD = 5; // pixels from bottom to be considered "at the bottom"
+  const THRESHOLD = 20; // pixels from bottom to be considered "at the bottom" (increased from 5 to prevent false negatives)
   ct.addEventListener('scroll', () => {
     if (!S.isStreaming) return;
     const atBottom = ct.scrollHeight - ct.scrollTop - ct.clientHeight <= THRESHOLD;

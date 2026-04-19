@@ -482,6 +482,8 @@ function setStreaming(active) {
   S.isStreaming = active;
   $('send-btn').style.display = active ? 'none' : 'flex';
   $('stop-btn').style.display = active ? 'flex' : 'none';
+  const cm = $('chat-messages');
+  if (cm) cm.classList.toggle('streaming', active);
 }
 
 export function stopGeneration() {
