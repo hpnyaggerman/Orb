@@ -740,6 +740,9 @@ function renderCharBrowserListItem(c) {
 }
 
 function renderCharacterBrowser() {
-  // Initial render happens after modal is shown
-  setTimeout(() => renderCharBrowserItems(), 0);
+  setTimeout(() => {
+    renderCharBrowserItems();
+    const container = $('char-browser-content');
+    if (container) container.style.minHeight = container.offsetHeight + 'px';
+  }, 0);
 }
