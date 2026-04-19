@@ -9,6 +9,7 @@ let _pendingAvatar = null;
 // Stable ID and source format carried over from an imported card (cleared on submit)
 let _pendingImportId = null;
 let _pendingImportSourceFormat = null;
+let _pendingTags = null;
 // Per-card cache-bust timestamps so the browser re-fetches updated avatars
 const _avatarBust = new Map();
 
@@ -399,6 +400,14 @@ export async function showCharEditModal(idOrData) {
     av = c.has_avatar ? `<img src="${avatarUrl(c.id)}${bust}">` : '👤';
   }
 
+  if (isNew) {
+    _pendingTags = c.tags || [];
+    console.log('showCharEditModal import tags:', c.tags, 'pending:', _pendingTags);
+  } else {
+    _pendingTags = null;
+    console.log('showCharEditModal edit tags:', c.tags, 'pending:', _pendingTags);
+  }
+
   const tags = (c.tags || []).map(t => `<span class="char-tag">${esc(t)}</span>`).join('');
 
   showModal(`
@@ -435,8 +444,13 @@ export async function saveCharEdit(id) {
     mes_example:               $('ce-mes-example').value.trim(),
     system_prompt:             $('ce-sysprompt').value.trim(),
     post_history_instructions: $('ce-posthist').value.trim(),
+    tags:                      _pendingTags || [],
     alternate_greetings:       _readAltGreetings('ce'),
   };
+  if (_pendingTags === null) {
+    delete d.tags;
+  }
+  console.log('saveCharEdit payload:', d);
   if (_pendingAvatar) {
     d.avatar_b64  = _pendingAvatar.b64;
     d.avatar_mime = _pendingAvatar.mime;
@@ -460,6 +474,7 @@ export async function saveCharEdit(id) {
 }
 
 export async function saveImportedChar() {
+  console.log('saveImportedChar pendingTags:', _pendingTags);
   const d = {
     name:                      $('ce-name').value.trim(),
     description:               $('ce-desc').value.trim(),
@@ -469,6 +484,7 @@ export async function saveImportedChar() {
     mes_example:               $('ce-mes-example').value.trim(),
     system_prompt:             $('ce-sysprompt').value.trim(),
     post_history_instructions: $('ce-posthist').value.trim(),
+    tags:                      _pendingTags || [],
     alternate_greetings:       _readAltGreetings('ce'),
   };
   if (_pendingAvatar) {
@@ -480,6 +496,7 @@ export async function saveImportedChar() {
   _pendingAvatar = null;
   _pendingImportId = null;
   _pendingImportSourceFormat = null;
+  _pendingTags = null;
   if (!d.name) { toast('Name required', true); return; }
   try {
     const created = await api.post('/characters', d);
