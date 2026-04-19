@@ -268,10 +268,20 @@ const TOOL_DEFS = [
 
 export function toggleToolsPanel() {
   const panel = $('tools-panel');
-  const open  = panel.classList.toggle('open');
-  $('tools-panel-btn').style.background  = open ? 'var(--accent-glow)' : '';
-  $('tools-panel-btn').style.borderColor = open ? 'var(--accent-dim)'  : '';
-  if (open) renderToolsPanel();
+  const inspector = $('inspector');
+  const wasOpen = panel.classList.contains('open');
+  
+  if (wasOpen) {
+    panel.classList.remove('open');
+    $('tools-panel-btn').style.background  = '';
+    $('tools-panel-btn').style.borderColor = '';
+  } else {
+    inspector.classList.remove('open');
+    panel.classList.add('open');
+    $('tools-panel-btn').style.background  = 'var(--accent-glow)';
+    $('tools-panel-btn').style.borderColor = 'var(--accent-dim)';
+    renderToolsPanel();
+  }
 }
 
 export async function setAgentEnabled(on) {

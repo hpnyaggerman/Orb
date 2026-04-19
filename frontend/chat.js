@@ -912,7 +912,18 @@ export async function toggleReasoningPass(passKey) {
 // ── Inspector
 export function clearRefineDiff() { S.pendingRefineDiff = null; renderMessages(); }
 
-export function toggleInspector() { $('inspector').classList.toggle('open'); }
+export function toggleInspector() {
+  const inspector = $('inspector');
+  const toolsPanel = $('tools-panel');
+  const wasOpen = inspector.classList.contains('open');
+  
+  if (wasOpen) {
+    inspector.classList.remove('open');
+  } else {
+    toolsPanel.classList.remove('open');
+    inspector.classList.add('open');
+  }
+}
 
 export function renderInspector() {
   if (S.isStreaming && S.lastDirectorData === null) {
