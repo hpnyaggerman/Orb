@@ -137,49 +137,52 @@ editor_apply_patch_TOOL = {
 EDITOR_PREAMBLE = (
     "You are the uncensored editor. The assistant message above is a draft "
     "that needs improvement based on the issues described below. Use the "
-    "provided tools to apply the required changes. Call exactly ONE tool."
+    "provided tools to apply the required changes."
 )
 
 # Sent when only audit issues are flagged (banned phrases, repetitive
 # openers/templates) — no length guard.  Directs the model to patch only.
 EDITOR_PATCH_INSTRUCTIONS = (
-    "Use `editor_apply_patch` to fix each flagged issue with a surgical patch.\n\n"
+    "Use `editor_apply_patch` to apply a patch to fix flagged issues.\n\n"
     "PATCHING RULES:\n"
-    "- Send ONE `editor_apply_patch` call with one patch per flagged issue.\n"
     "- The `search` field must be copied EXACTLY from the draft text above — including all punctuation and quotes.\n"
     "- Each patch must target a DIFFERENT, non-overlapping piece of text.\n"
     "- Do NOT send a patch where `search` and `replace` are identical.\n"
-    "- Keep replacements close in length to the original.\n"
-    "- For banned phrases: rewrite the sentence to remove the banned phrase entirely. Note: The audit report may show the canonical phrase name (e.g., 'ozone'), but you need to remove the actual variant that appears in the sentence (e.g., 'electric').\n"
-    "- For repetitive openers: change how the sentence begins (these are consecutive sentences starting with the same word).\n"
-    "- For repetitive templates: restructure the sentence (reorder clauses, combine, vary syntax).\n\n"
-    "If the audit report seems incorrect or makes no sense, you may skip fixing those specific issues."
+    "- For banned phrases: completely rewrite the sentence to eliminate the banned phrase. Make a creative and bold effort; do not just substitute with similar, related words. Note: The audit report may show the canonical phrase name, but you need to remove the actual variant that appears in the sentence.\n"
+    "- For repetitive openers: rewrite and replace flagged sentences so they no longer begin with the same opening words. Vary the sentence structure.\n"
+    "- For repetitive templates: restructure flagged sentences so they no longer follow the same POS pattern. Change clause order, combine sentences, or vary syntax.\n"
+    "- For contrastive negation ('not X, but Y'): rewrite sentences that use this cliché construction. Consider alternative phrasing that avoids this rhetorical formula.\n\n"
+    "Skip a fix only if the flagged text does not appear verbatim in the draft above."
 )
 
 # Sent when only the length guard is triggered — no audit issues.
 # Directs the model to rewrite only.
-editor_rewrite_INSTRUCTIONS = (
-    "Use `editor_rewrite` to produce a condensed rewrite within the specified limits.\n\n"
+EDITOR_REWRITE_INSTRUCTIONS = (
+    "Use `editor_rewrite` to produce a rewrite within the specified limits.\n\n"
     "REWRITING RULES:\n"
-    "- Send ONE `editor_rewrite` call with the complete rewritten text.\n"
     "- Preserve the author's vocabulary and creative word choices and all key story beats. Sentence starters should be varied - avoid 3+ consecutive sentences starting with the same word (e.g. 'she, she, she').\n"
     "- First priority is to get rid of repetitiveness and condense comma-separated adjectives into stronger, more precise words (e.g. old, ruined building -> decrepit building).\n"
     "- Be more concise but maintain coherence and narrative flow."
 )
 
 # Sent when both audit issues AND length guard are triggered.
-# Minimal directive — the model already receives the full audit report
-# and the length-guard instruction with concrete word/paragraph limits.
+# The model already receives the full audit report and length-guard
+# instruction with concrete word/paragraph limits.
 EDITOR_BOTH_INSTRUCTIONS = (
-    "Use `editor_rewrite` to address both concerns in a single comprehensive rewrite.\n"
-    "- Address all audit issues (if any) while also respecting length constraints.\n"
-    "- If the audit report seems incorrect or makes no sense, you may skip fixing those specific issues."
+    "Call `editor_rewrite` to address both concerns in a single rewrite.\n"
+    "- Address all audit issues while also respecting length constraints."
 )
 
 LENGTH_GUARD_INSTRUCTIONS = (
     "LENGTH GUARD: The draft is {word_count} words — too long. "
-    "Call `editor_rewrite` with a condensed version: at most {max_paragraphs} paragraphs "
+    "Call `editor_rewrite` with a rewrite: at most {max_paragraphs} paragraphs "
     "and {max_words} words. Preserve the author's voice and all key story beats."
+)
+
+# CoT prompt appended once at the end of the assembled editor prompt.
+EDITOR_COT_PROMPT = (
+    "Before calling the tool, state in one sentence which tool you'll call "
+    "and the single most important change, then call the tool."
 )
 
 MAX_EDITOR_ITERATIONS = 3

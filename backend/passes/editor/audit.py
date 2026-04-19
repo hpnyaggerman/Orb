@@ -98,10 +98,7 @@ def format_report(report: AuditReport) -> str:
     # 1. Banned phrases
     cr = report.cliche_result
     if cr.flagged_count > 0:
-        lines = [
-            "1. Banned Phrases — Completely rewrite and replace each flagged sentence to eliminate the "
-            "banned phrases entirely. Make a creative and bold effort, do not just substitute with similar, related words."
-        ]
+        lines = ["Banned Phrases"]
         for fs in cr.flagged_sentences:
             for hit in fs.cliches:
                 if hit.canonical != hit.variant:
@@ -111,45 +108,30 @@ def format_report(report: AuditReport) -> str:
                 else:
                     lines.append(f'   - "{hit.canonical}" in sentence: {fs.sentence}')
         sections.append("\n".join(lines))
-    else:
-        sections.append("1. Banned Phrases — CLEAN")
 
     # 2. Repetitive openers
     mr = report.monotony_result
     if mr.flagged_openers:
-        lines = [
-            "2. Repetitive Openers — Rewrite and replace flagged sentences so they no longer "
-            "begin with the same opening words. Vary the sentence structure."
-        ]
+        lines = ["Repetitive Openers"]
         for fo in mr.flagged_openers:
             lines.append(f'   - "{fo.opener}" ({fo.max_run} consecutive sentences):')
             for s in fo.sentences[:4]:
                 lines.append(f"     • {s}")
         sections.append("\n".join(lines))
-    else:
-        sections.append("2. Repetitive Openers — CLEAN")
 
     # 3. Repetitive templates
     tr = report.template_result
     if tr.flagged_templates:
-        lines = [
-            "3. Repetitive Templates — Restructure flagged sentences so they no "
-            "longer follow the same POS pattern. Change clause order, combine sentences, or vary syntax."
-        ]
+        lines = ["Repetitive Templates"]
         for ft in tr.flagged_templates:
             lines.append(f'   - "{ft.template}" ({ft.count} sentences):')
             for s in ft.sentences[:4]:
                 lines.append(f"     • {s}")
         sections.append("\n".join(lines))
-    else:
-        sections.append("3. Repetitive Templates — CLEAN")
 
     # 4. Not-but patterns
     if report.not_but_result:
-        lines = [
-            "4. Contrastive Negation Patterns — Rewrite sentences that use the cliché 'not X, but Y' construction. "
-            "Consider alternative phrasing that avoids this rhetorical formula."
-        ]
+        lines = ["Contrastive Negation Patterns"]
         for nb in report.not_but_result:
             sentence = nb.get("sentence", "")
             x_template = nb.get("x_template", "")
@@ -158,10 +140,8 @@ def format_report(report: AuditReport) -> str:
             parallel_note = " (parallel structure)" if is_parallel else ""
             lines.append(f'   - Sentence: "{sentence}"{parallel_note}')
             if x_template and y_template:
-                lines.append(f"     X: {x_template} → Y: {y_template}")
+                lines.append(f"     X: {x_template} -> Y: {y_template}")
         sections.append("\n".join(lines))
-    else:
-        sections.append("4. 'Not X, but Y' Patterns — CLEAN")
 
     sections.append("\n*** END OF REPORT ***")
     return "\n\n".join(sections)

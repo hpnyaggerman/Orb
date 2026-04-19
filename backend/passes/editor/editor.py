@@ -21,9 +21,10 @@ from ...tool_defs import (
     editor_rewrite_TOOL,
     EDITOR_PREAMBLE,
     EDITOR_PATCH_INSTRUCTIONS,
-    editor_rewrite_INSTRUCTIONS,
+    EDITOR_REWRITE_INSTRUCTIONS,
     EDITOR_BOTH_INSTRUCTIONS,
     LENGTH_GUARD_INSTRUCTIONS,
+    EDITOR_COT_PROMPT,
     MAX_EDITOR_ITERATIONS,
     enabled_schemas,
 )
@@ -250,7 +251,7 @@ async def editor_pass(
     length_guard: dict | None = None,
     enabled_tools: dict | None = None,
     kv_tracker=None,
-    reasoning_on: bool = True,
+    reasoning_on: bool = True,  # Always True by default — brief CoT improves tool-calling correctness
 ) -> AsyncIterator[dict]:
     """ReAct-style editor loop with optional audit and/or length guard.
 
@@ -589,18 +590,21 @@ def _build_editor_prompt(
     The preamble is *always* included so the model knows it is the
     Editor Agent and that the assistant message above is the draft.
     Audit rules and/or length-guard instructions are appended as needed.
+    The CoT prompt is appended once at the very end.
     """
     parts = [EDITOR_PREAMBLE]
     if has_audit_issues and length_guard_triggered:
-        parts.append(EDITOR_BOTH_INSTRUCTIONS)
+        parts.append(EDITOR_REWRITE_INSTRUCTIONS)
         parts.append(report_text)
         parts.append(length_guard_instruction)
+        parts.append(EDITOR_BOTH_INSTRUCTIONS)
     elif has_audit_issues:
         parts.append(EDITOR_PATCH_INSTRUCTIONS)
         parts.append(report_text)
     elif length_guard_triggered:
-        parts.append(editor_rewrite_INSTRUCTIONS)
+        parts.append(EDITOR_REWRITE_INSTRUCTIONS)
         parts.append(length_guard_instruction)
+    parts.append(EDITOR_COT_PROMPT)
     return "\n\n".join(parts)
 
 
@@ -608,10 +612,10 @@ def _pick_tool_choice(
     length_guard_triggered: bool, report: AuditReport, audit_enabled: bool
 ):
     """Determine the tool_choice parameter for the editor LLM call."""
-    if length_guard_triggered and report.is_clean:
-        return {"type": "function", "function": {"name": "editor_rewrite"}}
     if length_guard_triggered:
-        return "auto"
+        # Length guard always requires editor_rewrite, whether or not
+        # audit issues are also present (the both-case).
+        return {"type": "function", "function": {"name": "editor_rewrite"}}
     if audit_enabled:
         return TOOLS["editor_apply_patch"]["choice"]
     return "auto"
