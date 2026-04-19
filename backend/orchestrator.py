@@ -364,15 +364,25 @@ async def _persist_result(
     if res.get("rewritten_msg") and user_msg_id:
         await db.update_message_content(user_msg_id, res["effective_msg"])
 
-    asst_id = await db.add_message(
-        conversation_id,
-        "assistant",
-        res["resp_text"],
-        turn_index,
-        parent_id=user_msg_id,
-    )
-    await db.set_active_leaf(conversation_id, asst_id)
-    return asst_id
+    # Only create a message if there's actual content.
+    # The writer pass can produce empty resp_text if the LLM completes
+    # without generating any non‑reasoning tokens (e.g., reasoning‑only mode).
+    resp_text = res.get("resp_text", "")
+    if resp_text.strip():
+        asst_id = await db.add_message(
+            conversation_id,
+            "assistant",
+            resp_text,
+            turn_index,
+            parent_id=user_msg_id,
+        )
+        await db.set_active_leaf(conversation_id, asst_id)
+        return asst_id
+    else:
+        logger.info(
+            "Skipping assistant message persistence: resp_text is empty (reasoning‑only output)"
+        )
+        return None
 
 
 async def _fallback_persist(
@@ -383,7 +393,13 @@ async def _fallback_persist(
     turn_index: int,
     accumulated_text: str,
 ):
-    """Best-effort save when the pipeline aborted before _result was consumed."""
+    """Best-effort save when the pipeline aborted before _result was consumed.
+
+    Only saves if there's actual writer output (token events). Reasoning-only
+    content (director/writer/editor reasoning) does NOT create a message node,
+    because reasoning deltas are yielded as 'reasoning' SSE events and are NOT
+    included in accumulated_text.
+    """
     try:
         if res.get("active_moods") and settings.get("enable_agent", 1):
             await db.update_director_state(
@@ -391,19 +407,24 @@ async def _fallback_persist(
             )
         if res.get("rewritten_msg") and user_msg_id:
             await db.update_message_content(user_msg_id, res["effective_msg"])
-        resp_text = res.get("resp_text", "") or accumulated_text
-        if resp_text.strip():
+
+        # Only save if there's actual writer output (token events).
+        # accumulated_text only contains streamed tokens from the writer pass;
+        # reasoning deltas are yielded as separate 'reasoning' events and are
+        # NOT included here. This prevents creating message nodes when the
+        # user stops generation during the reasoning phase (no writer output).
+        if accumulated_text.strip():
             asst_id = await db.add_message(
                 conversation_id,
                 "assistant",
-                resp_text,
+                accumulated_text,
                 turn_index,
                 parent_id=user_msg_id,
             )
             await db.set_active_leaf(conversation_id, asst_id)
             logger.info(
                 "Fallback persistence saved incomplete assistant message (%d chars)",
-                len(resp_text),
+                len(accumulated_text),
             )
     except Exception:
         logger.exception("Fallback persistence failed")
