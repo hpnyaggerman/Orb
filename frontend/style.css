@@ -1957,11 +1957,11 @@ label {
 
 .char-browser-search {
   position: relative;
-  flex: 1 1 60%;
+  flex: 1 1 65%;
 }
 
 .char-browser-sort {
-  flex: 1 1 40%;
+  flex: 1 1 35%;
   padding: 8px 12px;
   font-size: 13px;
   background: var(--bg-deep);
