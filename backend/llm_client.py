@@ -1,4 +1,5 @@
 from __future__ import annotations
+import asyncio
 import httpx
 import json
 import logging
@@ -32,6 +33,12 @@ class LLMClient:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.timeout = timeout
+        self._abort: asyncio.Event = asyncio.Event()
+
+    def abort(self) -> None:
+        """Signal all ongoing complete() calls to stop and close their connections."""
+        logger.info("Stop Generation button clicked — abort signal sent to LLM client")
+        self._abort.set()
 
     def _headers(self) -> dict:
         if self.api_key:
@@ -84,52 +91,91 @@ class LLMClient:
                 "POST", self._url(), json=body, headers=self._headers()
             ) as resp:
                 resp.raise_for_status()
-                async for line in resp.aiter_lines():
-                    if not line.startswith("data: "):
-                        continue
-                    payload = line[6:].strip()
-                    if payload == "[DONE]":
-                        break
+                # Race each line read against the abort signal so that client.abort()
+                # breaks out of this loop immediately, letting the async-with block
+                # exit *normally* and cleanly close the TCP connection to the LLM
+                # server. (Using asyncio task cancellation instead would leave the
+                # connection open under Python 3.11+ strict cancellation semantics.)
+                aiter = resp.aiter_lines().__aiter__()
+                abort_wait = asyncio.create_task(self._abort.wait())
+                try:
+                    while True:
+                        line_task = asyncio.create_task(aiter.__anext__())
+                        try:
+                            done, _ = await asyncio.wait(
+                                {line_task, abort_wait},
+                                return_when=asyncio.FIRST_COMPLETED,
+                            )
+                        except BaseException:
+                            line_task.cancel()
+                            raise
+
+                        if abort_wait in done:
+                            line_task.cancel()
+                            try:
+                                await line_task
+                            except (asyncio.CancelledError, StopAsyncIteration):
+                                pass
+                            break  # exit loop → async-with closes connection cleanly
+
+                        try:
+                            line = line_task.result()
+                        except StopAsyncIteration:
+                            break
+
+                        if not line.startswith("data: "):
+                            continue
+                        payload = line[6:].strip()
+                        if payload == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(payload)
+                            choice = chunk["choices"][0]
+                            delta = choice.get("delta", {})
+
+                            # Reasoning delta (field name varies by server)
+                            rc = delta.get("reasoning_content") or delta.get(
+                                "reasoning"
+                            )
+                            if rc:
+                                reasoning_parts.append(rc)
+                                yield {"type": "reasoning", "delta": rc}
+
+                            # Content delta
+                            c = delta.get("content")
+                            if c:
+                                content_parts.append(c)
+                                yield {"type": "content", "delta": c}
+
+                            # Tool call argument deltas — accumulate by index
+                            for tc_delta in delta.get("tool_calls") or []:
+                                idx = tc_delta.get("index", 0)
+                                if idx not in tool_calls_acc:
+                                    tool_calls_acc[idx] = {
+                                        "id": "",
+                                        "type": "function",
+                                        "function": {"name": "", "arguments": ""},
+                                    }
+                                entry = tool_calls_acc[idx]
+                                if tc_delta.get("id"):
+                                    entry["id"] = tc_delta["id"]
+                                fn = tc_delta.get("function", {})
+                                if fn.get("name"):
+                                    entry["function"]["name"] += fn["name"]
+                                if fn.get("arguments"):
+                                    entry["function"]["arguments"] += fn["arguments"]
+
+                            if choice.get("finish_reason"):
+                                finish_reason = choice["finish_reason"]
+
+                        except (json.JSONDecodeError, KeyError, IndexError):
+                            continue
+                finally:
+                    abort_wait.cancel()
                     try:
-                        chunk = json.loads(payload)
-                        choice = chunk["choices"][0]
-                        delta = choice.get("delta", {})
-
-                        # Reasoning delta (field name varies by server)
-                        rc = delta.get("reasoning_content") or delta.get("reasoning")
-                        if rc:
-                            reasoning_parts.append(rc)
-                            yield {"type": "reasoning", "delta": rc}
-
-                        # Content delta
-                        c = delta.get("content")
-                        if c:
-                            content_parts.append(c)
-                            yield {"type": "content", "delta": c}
-
-                        # Tool call argument deltas — accumulate by index
-                        for tc_delta in delta.get("tool_calls") or []:
-                            idx = tc_delta.get("index", 0)
-                            if idx not in tool_calls_acc:
-                                tool_calls_acc[idx] = {
-                                    "id": "",
-                                    "type": "function",
-                                    "function": {"name": "", "arguments": ""},
-                                }
-                            entry = tool_calls_acc[idx]
-                            if tc_delta.get("id"):
-                                entry["id"] = tc_delta["id"]
-                            fn = tc_delta.get("function", {})
-                            if fn.get("name"):
-                                entry["function"]["name"] += fn["name"]
-                            if fn.get("arguments"):
-                                entry["function"]["arguments"] += fn["arguments"]
-
-                        if choice.get("finish_reason"):
-                            finish_reason = choice["finish_reason"]
-
-                    except (json.JSONDecodeError, KeyError, IndexError):
-                        continue
+                        await abort_wait
+                    except asyncio.CancelledError:
+                        pass
 
         # Assemble the final message dict (mirrors the non-streaming message format)
         message: dict = {}

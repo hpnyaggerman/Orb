@@ -473,6 +473,9 @@ function setStreaming(active) {
 
 export function stopGeneration() {
   if (S.abortController) S.abortController.abort();
+  if (S.activeConvId) {
+    fetch('/api' + convUrl(S.activeConvId, 'stop'), { method: 'POST' }).catch(() => {});
+  }
 }
 
 function createStreamingDiv() {

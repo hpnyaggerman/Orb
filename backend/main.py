@@ -75,6 +75,10 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Orb", lifespan=lifespan)
 
+# Active LLM generations keyed by conversation ID.
+# Populated when streaming starts; cleared when it ends or is aborted.
+_active_clients: dict[str, object] = {}
+
 
 @app.middleware("http")
 async def no_cache_middleware(request: Request, call_next):
@@ -610,21 +614,42 @@ class _CleanupStreamingResponse(StreamingResponse):
                         pass
 
 
-async def _sse_stream(gen, request: Request):
+async def _sse_stream(
+    gen, request: Request, *, client_ref: list | None = None, cid: str | None = None
+):
     """Wrap an event-dict async generator as SSE, stopping cleanly on client disconnect.
 
-    When the client disconnects, aclose() propagates GeneratorExit through the
-    entire async-generator chain (orchestrator → llm_client → httpx), which
-    closes the upstream LLM connection rather than leaving it running.
+    The primary stop path is the explicit POST /stop endpoint, which calls
+    LLMClient.abort() directly. That in turn breaks out of the asyncio.wait()
+    loop in complete() and lets the async-with block close the TCP connection
+    to the LLM server normally — no task cancellation needed.
 
-    The aclose() is shielded from cancellation so that the orchestrator's
-    finally block (which saves incomplete messages on abort) can always complete
-    its database writes even if the asyncio task is being cancelled.
+    A background watcher also polls request.is_disconnected() as a fallback
+    for cases like the user closing the browser tab without clicking Stop.
     """
+    if cid and client_ref:
+        # Will be populated after the first __anext__() drives handle_turn past
+        # _load_pipeline_context; register as soon as it appears.
+        pass  # registration happens inside the loop below
+
+    async def _watch_disconnect() -> None:
+        try:
+            while True:
+                if await request.is_disconnected():
+                    if client_ref:
+                        client_ref[0].abort()
+                    return
+                await asyncio.sleep(0.5)
+        except asyncio.CancelledError:
+            pass
+
+    watcher = asyncio.create_task(_watch_disconnect())
     try:
         async for event in gen:
-            if await request.is_disconnected():
-                break
+            # Register client in _active_clients on the first event (by which
+            # point handle_turn has already populated client_ref).
+            if cid and client_ref and cid not in _active_clients:
+                _active_clients[cid] = client_ref[0]
             evt_type = event["event"]
             evt_data = event.get("data", "")
             if isinstance(evt_data, dict):
@@ -633,17 +658,28 @@ async def _sse_stream(gen, request: Request):
                 evt_data = evt_data.replace("\n", "\\n")
             yield f"event: {evt_type}\ndata: {evt_data}\n\n"
     finally:
+        if cid:
+            _active_clients.pop(cid, None)
+        watcher.cancel()
         # Shield aclose() from CancelledError so the orchestrator's finally
         # block (fallback persistence of incomplete messages) always runs.
         try:
             await asyncio.shield(gen.aclose())
         except asyncio.CancelledError:
-            # If shield itself is cancelled (extremely rare), still wait
-            # for the close to finish synchronously
             try:
                 await gen.aclose()
             except Exception:
                 pass
+
+
+@app.post("/api/conversations/{cid}/stop")
+async def api_stop_generation(cid: str):
+    """Abort the active LLM generation for this conversation, if any."""
+    client = _active_clients.get(cid)
+    if client:
+        client.abort()
+        logger.info("Stop requested for conversation %s — aborted", cid)
+    return {"ok": True}
 
 
 @app.get("/api/conversations/{cid}/messages")
@@ -698,12 +734,19 @@ async def api_edit_message(cid: str, msg_id: int, data: EditMessage, request: Re
     should_stream_regen = original["role"] == "user" and data.regenerate
 
     if should_stream_regen:
+        client_ref: list = []
         return _CleanupStreamingResponse(
             _sse_stream(
                 handle_turn(
-                    cid, data.content, skip_user_persist=True, attachments=attachments
+                    cid,
+                    data.content,
+                    skip_user_persist=True,
+                    attachments=attachments,
+                    client_ref=client_ref,
                 ),
                 request,
+                client_ref=client_ref,
+                cid=cid,
             ),
             media_type="text/event-stream",
         )
@@ -743,8 +786,14 @@ async def api_regenerate_msg(
     if not conv:
         raise HTTPException(404, "Conversation not found")
 
+    client_ref: list = []
     return _CleanupStreamingResponse(
-        _sse_stream(handle_regenerate(cid, msg_id), request),
+        _sse_stream(
+            handle_regenerate(cid, msg_id, client_ref=client_ref),
+            request,
+            client_ref=client_ref,
+            cid=cid,
+        ),
         media_type="text/event-stream",
     )
 
@@ -775,8 +824,16 @@ async def api_send_message(cid: str, data: SendMessage, request: Request):
         raise HTTPException(404, "Conversation not found")
 
     attachments = [a.dict() for a in data.attachments]
+    client_ref: list = []
     return _CleanupStreamingResponse(
-        _sse_stream(handle_turn(cid, data.content, attachments=attachments), request),
+        _sse_stream(
+            handle_turn(
+                cid, data.content, attachments=attachments, client_ref=client_ref
+            ),
+            request,
+            client_ref=client_ref,
+            cid=cid,
+        ),
         media_type="text/event-stream",
     )
 

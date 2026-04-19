@@ -507,6 +507,7 @@ async def handle_turn(
     user_message: str,
     skip_user_persist: bool = False,
     attachments: Optional[List[dict]] = None,
+    client_ref: list | None = None,
 ) -> AsyncIterator[dict]:
     try:
         if attachments is None:
@@ -515,6 +516,9 @@ async def handle_turn(
         if ctx is None:
             yield {"event": "error", "data": "Conversation not found"}
             return
+
+        if client_ref is not None:
+            client_ref.append(ctx["client"])
 
         settings = ctx["settings"]
         messages = await db.get_messages(conversation_id)
@@ -592,13 +596,18 @@ async def handle_turn(
 
 
 async def handle_regenerate(
-    conversation_id: str, assistant_msg_id: int
+    conversation_id: str,
+    assistant_msg_id: int,
+    client_ref: list | None = None,
 ) -> AsyncIterator[dict]:
     try:
         ctx = await _load_pipeline_context(conversation_id)
         if ctx is None:
             yield {"event": "error", "data": "Conversation not found"}
             return
+
+        if client_ref is not None:
+            client_ref.append(ctx["client"])
 
         settings = ctx["settings"]
         target = await db.get_message_by_id(assistant_msg_id)
