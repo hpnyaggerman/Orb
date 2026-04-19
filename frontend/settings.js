@@ -379,7 +379,6 @@ export async function showPhraseBankModal() {
         <p class="modal-subtitle">Manage banned/overused phrase groups. Each group contains variants that are considered equivalent. Click a group to edit it.</p>
       </div>
       <div class="modal-title-actions">
-        <button class="btn" onclick="closeModal()">Close</button>
         <button class="btn btn-accent" onclick="showAddPhraseGroupModal()">+ Add Group</button>
       </div>
     </div>
