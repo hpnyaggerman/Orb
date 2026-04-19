@@ -296,6 +296,12 @@ body {
   color: var(--text-secondary);
 }
 
+.char-tag.active {
+  background: var(--accent-glow);
+  border-color: var(--accent-dim);
+  color: var(--accent);
+}
+
 /* Avatar popup */
 #sidebar {
   position: relative;
@@ -2015,6 +2021,10 @@ label {
   gap: 8px;
   margin-bottom: 16px;
   align-items: stretch;
+}
+
+.char-browser-tags-row {
+  margin-bottom: 12px;
 }
 
 .char-browser-search {

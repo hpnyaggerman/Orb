@@ -19,6 +19,8 @@ let _browserSearchQuery = '';
 let _browserCharacters = [];
 let _browserSortBy = 'time-added'; // 'name', 'time-added', 'most-recent-chat', 'most-chats'
 let _browserConversations = [];
+let _browserSelectedTags = new Set();
+let _browserTopTags = []; // top 15 most popular tags
 
 // ── Fragments
 export async function loadFragments() {
@@ -525,6 +527,8 @@ export async function showCharacterBrowserModal() {
     _browserConversations = [];
     console.error('Failed to load conversations for browser:', e);
   }
+  computeTopTags();
+  _browserSelectedTags.clear();
   _browserSortBy = S.characterBrowserSort || 'time-added';
   _browserViewMode = S.characterBrowserView || 'grid';
   _browserSearchQuery = '';
@@ -554,6 +558,11 @@ export async function showCharacterBrowserModal() {
         <option value="most-chats" ${_browserSortBy === 'most-chats' ? 'selected' : ''}>Most Chats</option>
       </select>
     </div>
+    <div class="char-browser-tags-row">
+      <div class="char-tags">
+        ${_browserTopTags.map(tag => `<button class="char-tag ${_browserSelectedTags.has(tag) ? 'active' : ''}" data-tag="${tag}" onclick="toggleTagSelection('${tag.replace(/'/g, "\\'")}')">${tag}</button>`).join('')}
+      </div>
+    </div>
     <div id="char-browser-content"></div>`);
 }
 
@@ -581,6 +590,36 @@ export function setCharBrowserSort(sortBy) {
   const select = document.getElementById('char-browser-sort');
   if (select) select.value = sortBy;
   renderCharBrowserItems();
+}
+
+export function toggleTagSelection(tag) {
+  if (_browserSelectedTags.has(tag)) {
+    _browserSelectedTags.delete(tag);
+  } else {
+    _browserSelectedTags.add(tag);
+  }
+  // Update button visual via data-tag attribute
+  const button = document.querySelector(`.char-tag[data-tag="${tag}"]`);
+  if (button) {
+    button.classList.toggle('active', _browserSelectedTags.has(tag));
+  }
+  renderCharBrowserItems();
+}
+
+function computeTopTags() {
+  const counts = new Map();
+  for (const c of _browserCharacters) {
+    const tags = c.tags || [];
+    for (const tag of tags) {
+      counts.set(tag, (counts.get(tag) || 0) + 1);
+    }
+  }
+  // sort by count descending, then alphabetically
+  const sorted = Array.from(counts.entries()).sort((a, b) => {
+    if (b[1] !== a[1]) return b[1] - a[1];
+    return a[0].localeCompare(b[0]);
+  });
+  _browserTopTags = sorted.slice(0, 15).map(entry => entry[0]);
 }
 
 function computeConversationStats() {
@@ -629,10 +668,25 @@ function applySort(characters) {
 }
 
 function getFilteredCharacters() {
-  if (!_browserSearchQuery) return _browserCharacters;
-  return _browserCharacters.filter(c =>
-    c.name.toLowerCase().includes(_browserSearchQuery)
-  );
+  let filtered = _browserCharacters;
+  // Apply tag filter
+  if (_browserSelectedTags.size > 0) {
+    filtered = filtered.filter(c => {
+      const tags = c.tags || [];
+      // Check that character has every selected tag
+      for (const tag of _browserSelectedTags) {
+        if (!tags.includes(tag)) return false;
+      }
+      return true;
+    });
+  }
+  // Apply search query
+  if (_browserSearchQuery) {
+    filtered = filtered.filter(c =>
+      c.name.toLowerCase().includes(_browserSearchQuery)
+    );
+  }
+  return filtered;
 }
 
 function renderCharBrowserItems() {
@@ -643,7 +697,8 @@ function renderCharBrowserItems() {
   const sorted = applySort(filtered);
   
   if (sorted.length === 0) {
-    container.innerHTML = `<div class="char-browser-empty">${_browserSearchQuery ? 'No characters match your search' : 'No characters available'}</div>`;
+    const hasFilters = _browserSearchQuery || _browserSelectedTags.size > 0;
+    container.innerHTML = `<div class="char-browser-empty">${hasFilters ? 'No characters match your filters' : 'No characters available'}</div>`;
     return;
   }
   
