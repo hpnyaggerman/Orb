@@ -573,7 +573,10 @@ export function setCharBrowserView(mode) {
   document.querySelectorAll('#char-browser-view-toggle .view-toggle-btn').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.view === mode);
   });
+  const container = $('char-browser-content');
+  if (container) container.style.minHeight = '';
   renderCharBrowserItems();
+  if (container) container.style.minHeight = container.offsetHeight + 'px';
 }
 
 export function onCharBrowserSearch() {
