@@ -155,8 +155,21 @@ Object.assign(window, {
   S,
 });
 
+// ── Smart autoscroll: only autoscroll during streaming if user is at the bottom
+function initAutoscroll() {
+  const ct = $('chat-messages');
+  if (!ct) return;
+  const THRESHOLD = 5; // pixels from bottom to be considered "at the bottom"
+  ct.addEventListener('scroll', () => {
+    if (!S.isStreaming) return;
+    const atBottom = ct.scrollHeight - ct.scrollTop - ct.clientHeight <= THRESHOLD;
+    S.autoscrollEnabled = atBottom;
+  });
+}
+
 // ── Init
 initTheme();
+initAutoscroll();
 
 // Load data independently to prevent failures from blocking other loads
 async function initAll() {
