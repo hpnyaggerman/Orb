@@ -216,7 +216,13 @@ export function replacePlaceholders(text, userName, charName) {
  * @returns {string} Resolved text
  */
 export function resolvePlaceholders(text) {
-  const userName = S.settings?.user_name || 'User';
+  let userName = S.settings?.user_name || 'User';
+  if (S.activePersonaId) {
+    const activePersona = S.personas.find(p => p.id === S.activePersonaId);
+    if (activePersona && activePersona.name) {
+      userName = activePersona.name;
+    }
+  }
   const conv = S.conversations?.find(c => c.id === S.activeConvId);
   const charName = conv?.character_name || '';
   return replacePlaceholders(text, userName, charName);
