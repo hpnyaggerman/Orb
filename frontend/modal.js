@@ -1,27 +1,32 @@
-import { $ } from './utils.js';
+import { $ } from "./utils.js";
 
 // ── Crop modal state
 let _cs = null; // { img, scale, onConfirm, aspect, cx, cy, cw, ch, drag }
 
 export function showModal(html) {
-  $('modal-root').innerHTML =
-    `<div class="modal-overlay" onclick="if(event.target===this)closeModal()">
+  $("modal-root").innerHTML = `<div class="modal-overlay" onclick="if(event.target===this)closeModal()">
        <div class="modal">${html}</div>
      </div>`;
 }
 
 export function closeModal() {
-  $('modal-root').innerHTML = '';
+  $("modal-root").innerHTML = "";
 }
 
 export function switchTab(tab, contentId) {
-  tab.parentElement.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
-  tab.classList.add('active');
-  tab.closest('.modal').querySelectorAll('.tab-content').forEach(x => x.classList.remove('active'));
-  $(contentId).classList.add('active');
+  tab.parentElement.querySelectorAll(".tab").forEach((x) => x.classList.remove("active"));
+  tab.classList.add("active");
+  tab
+    .closest(".modal")
+    .querySelectorAll(".tab-content")
+    .forEach((x) => x.classList.remove("active"));
+  $(contentId).classList.add("active");
 }
 
-export function showConfirmModal({ title, message, confirmText = 'Confirm', confirmClass = 'btn-danger', extraHtml = '' }, onConfirm) {
+export function showConfirmModal(
+  { title, message, confirmText = "Confirm", confirmClass = "btn-danger", extraHtml = "" },
+  onConfirm,
+) {
   window._confirmCb = onConfirm;
   showModal(`
     <h2>${title}</h2>
@@ -47,21 +52,21 @@ export function runConfirmCb() {
 // matching the SillyTavern character card standard).
 
 export function showCropModal(onConfirm, aspect = 2 / 3) {
-  const input = document.createElement('input');
-  input.type = 'file';
-  input.accept = 'image/*';
+  const input = document.createElement("input");
+  input.type = "file";
+  input.accept = "image/*";
   input.onchange = () => {
     const file = input.files[0];
     if (!file) return;
     const reader = new FileReader();
-    reader.onload = ev => _openCropEditor(ev.target.result, onConfirm, aspect);
+    reader.onload = (ev) => _openCropEditor(ev.target.result, onConfirm, aspect);
     reader.readAsDataURL(file);
   };
   input.click();
 }
 
 function _openCropEditor(dataUrl, onConfirm, aspect) {
-  const root = $('modal-crop-root');
+  const root = $("modal-crop-root");
   root.innerHTML = `
     <div class="modal-overlay">
       <div class="modal" style="align-items:center;gap:12px">
@@ -79,8 +84,8 @@ function _openCropEditor(dataUrl, onConfirm, aspect) {
   img.onload = () => {
     const MAX = 480;
     const scale = Math.min(MAX / img.naturalWidth, MAX / img.naturalHeight, 1);
-    const canvas = $('crop-canvas');
-    canvas.width  = Math.round(img.naturalWidth  * scale);
+    const canvas = $("crop-canvas");
+    canvas.width = Math.round(img.naturalWidth * scale);
     canvas.height = Math.round(img.naturalHeight * scale);
 
     // Initial crop box: largest 2:3 portrait box that fits, centred
@@ -93,10 +98,14 @@ function _openCropEditor(dataUrl, onConfirm, aspect) {
       cw = Math.round(ch * aspect);
     }
     _cs = {
-      img, scale, onConfirm, aspect,
-      cx: Math.round((canvas.width  - cw) / 2),
+      img,
+      scale,
+      onConfirm,
+      aspect,
+      cx: Math.round((canvas.width - cw) / 2),
       cy: Math.round((canvas.height - ch) / 2),
-      cw, ch,
+      cw,
+      ch,
       drag: null,
     };
     _drawCrop(canvas);
@@ -104,55 +113,67 @@ function _openCropEditor(dataUrl, onConfirm, aspect) {
   };
   img.src = dataUrl;
 
-  window.confirmCrop = () => _confirmCrop($('crop-canvas'));
+  window.confirmCrop = () => _confirmCrop($("crop-canvas"));
 }
 
 function _drawCrop(canvas) {
   if (!_cs) return;
   const { img, cx, cy, cw, ch } = _cs;
-  const W = canvas.width, H = canvas.height;
-  const ctx = canvas.getContext('2d');
+  const W = canvas.width,
+    H = canvas.height;
+  const ctx = canvas.getContext("2d");
 
   ctx.drawImage(img, 0, 0, W, H);
 
   // Dark vignette outside the crop box (four rectangles around it)
-  ctx.fillStyle = 'rgba(0,0,0,0.6)';
+  ctx.fillStyle = "rgba(0,0,0,0.6)";
   ctx.fillRect(0, 0, W, cy);
   ctx.fillRect(0, cy + ch, W, H - cy - ch);
   ctx.fillRect(0, cy, cx, ch);
   ctx.fillRect(cx + cw, cy, W - cx - cw, ch);
 
   // Rule-of-thirds lines
-  ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+  ctx.strokeStyle = "rgba(255,255,255,0.25)";
   ctx.lineWidth = 0.5;
   for (let i = 1; i < 3; i++) {
     const gx = cx + (cw * i) / 3;
     const gy = cy + (ch * i) / 3;
-    ctx.beginPath(); ctx.moveTo(gx, cy); ctx.lineTo(gx, cy + ch); ctx.stroke();
-    ctx.beginPath(); ctx.moveTo(cx, gy); ctx.lineTo(cx + cw, gy); ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(gx, cy);
+    ctx.lineTo(gx, cy + ch);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(cx, gy);
+    ctx.lineTo(cx + cw, gy);
+    ctx.stroke();
   }
 
   // Crop border
-  ctx.strokeStyle = 'rgba(255,255,255,0.9)';
+  ctx.strokeStyle = "rgba(255,255,255,0.9)";
   ctx.lineWidth = 1.5;
   ctx.strokeRect(cx + 0.75, cy + 0.75, cw - 1.5, ch - 1.5);
 
   // Corner handles
   const hs = 8;
-  ctx.fillStyle = 'white';
-  [[cx, cy], [cx + cw, cy], [cx, cy + ch], [cx + cw, cy + ch]].forEach(([hx, hy]) => {
+  ctx.fillStyle = "white";
+  [
+    [cx, cy],
+    [cx + cw, cy],
+    [cx, cy + ch],
+    [cx + cw, cy + ch],
+  ].forEach(([hx, hy]) => {
     ctx.fillRect(hx - hs / 2, hy - hs / 2, hs, hs);
   });
 }
 
 function _attachCropEvents(canvas) {
-  const toLocal = e => {
+  const toLocal = (e) => {
     const r = canvas.getBoundingClientRect();
     const src = e.touches ? e.touches[0] : e;
     return { x: src.clientX - r.left, y: src.clientY - r.top };
   };
 
-  const onStart = e => {
+  const onStart = (e) => {
     e.preventDefault();
     if (!_cs) return;
     const { x, y } = toLocal(e);
@@ -161,31 +182,32 @@ function _attachCropEvents(canvas) {
 
     // Corner order: TL, TR, BL, BR — anchor = opposite corner
     const corners = [
-      [cx,      cy,      cx + cw, cy + ch],
-      [cx + cw, cy,      cx,      cy + ch],
-      [cx,      cy + ch, cx + cw, cy     ],
-      [cx + cw, cy + ch, cx,      cy     ],
+      [cx, cy, cx + cw, cy + ch],
+      [cx + cw, cy, cx, cy + ch],
+      [cx, cy + ch, cx + cw, cy],
+      [cx + cw, cy + ch, cx, cy],
     ];
     for (const [hx, hy, ax, ay] of corners) {
       if (Math.abs(x - hx) < hs && Math.abs(y - hy) < hs) {
-        _cs.drag = { mode: 'corner', ax, ay };
+        _cs.drag = { mode: "corner", ax, ay };
         return;
       }
     }
     if (x >= cx && x <= cx + cw && y >= cy && y <= cy + ch) {
-      _cs.drag = { mode: 'move', ox: x - cx, oy: y - cy };
+      _cs.drag = { mode: "move", ox: x - cx, oy: y - cy };
     }
   };
 
-  const onMove = e => {
+  const onMove = (e) => {
     e.preventDefault();
     if (!_cs?.drag) return;
     const { x, y } = toLocal(e);
     const { drag } = _cs;
-    const W = canvas.width, H = canvas.height;
+    const W = canvas.width,
+      H = canvas.height;
     const A = _cs.aspect; // width / height
 
-    if (drag.mode === 'move') {
+    if (drag.mode === "move") {
       _cs.cx = Math.max(0, Math.min(W - _cs.cw, x - drag.ox));
       _cs.cy = Math.max(0, Math.min(H - _cs.ch, y - drag.oy));
     } else {
@@ -205,8 +227,11 @@ function _attachCropEvents(canvas) {
       ny = Math.max(0, ny);
       cw = Math.min(cw, W - nx);
       ch = Math.min(ch, H - ny);
-      if (cw / ch > A) { cw = Math.round(ch * A); }
-      else              { ch = Math.round(cw / A); }
+      if (cw / ch > A) {
+        cw = Math.round(ch * A);
+      } else {
+        ch = Math.round(cw / A);
+      }
 
       _cs.cw = Math.max(40, cw);
       _cs.ch = Math.max(Math.round(40 / A), ch);
@@ -216,14 +241,16 @@ function _attachCropEvents(canvas) {
     _drawCrop(canvas);
   };
 
-  const onEnd = () => { if (_cs) _cs.drag = null; };
+  const onEnd = () => {
+    if (_cs) _cs.drag = null;
+  };
 
-  canvas.addEventListener('mousedown',  onStart);
-  canvas.addEventListener('mousemove',  onMove);
-  canvas.addEventListener('mouseup',    onEnd);
-  canvas.addEventListener('touchstart', onStart, { passive: false });
-  canvas.addEventListener('touchmove',  onMove,  { passive: false });
-  canvas.addEventListener('touchend',   onEnd);
+  canvas.addEventListener("mousedown", onStart);
+  canvas.addEventListener("mousemove", onMove);
+  canvas.addEventListener("mouseup", onEnd);
+  canvas.addEventListener("touchstart", onStart, { passive: false });
+  canvas.addEventListener("touchmove", onMove, { passive: false });
+  canvas.addEventListener("touchend", onEnd);
 }
 
 function _confirmCrop(canvas) {
@@ -231,17 +258,18 @@ function _confirmCrop(canvas) {
   const { img, cx, cy, cw, ch, scale, onConfirm, aspect } = _cs;
   const OUT_W = 400;
   const OUT_H = Math.round(OUT_W / aspect); // 600 for standard 2:3 portrait
-  const out = document.createElement('canvas');
-  out.width = OUT_W; out.height = OUT_H;
+  const out = document.createElement("canvas");
+  out.width = OUT_W;
+  out.height = OUT_H;
   // Map display-space crop back to image-space source region
-  out.getContext('2d').drawImage(img, cx / scale, cy / scale, cw / scale, ch / scale, 0, 0, OUT_W, OUT_H);
-  const b64 = out.toDataURL('image/png').split(',')[1];
+  out.getContext("2d").drawImage(img, cx / scale, cy / scale, cw / scale, ch / scale, 0, 0, OUT_W, OUT_H);
+  const b64 = out.toDataURL("image/png").split(",")[1];
   closeCropModal();
-  onConfirm({ b64, mime: 'image/png' });
+  onConfirm({ b64, mime: "image/png" });
 }
 
 export function closeCropModal() {
-  const root = $('modal-crop-root');
-  if (root) root.innerHTML = '';
+  const root = $("modal-crop-root");
+  if (root) root.innerHTML = "";
   _cs = null;
 }
