@@ -481,7 +481,10 @@ async def api_create_character(data: CharacterCardCreate):
         uuid.uuid4()
     )  # see CharacterCardCreate
     card_data["source_format"] = card_data.get("source_format") or "manual"
-    return await create_character_card(card_data)
+    try:
+        return await create_character_card(card_data)
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
 
 
 @app.post("/api/characters/import")
