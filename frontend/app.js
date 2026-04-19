@@ -10,7 +10,7 @@ import { loadFragments, showFragmentModal, saveFragment, deleteFragment, toggleF
          deleteCharacter, showCharCreateModal, createCharacter,
          showCharEditModal, saveCharEdit, saveImportedChar,
          addAltGreeting, triggerAvatarCrop, exportCharacter,
-         showCharacterBrowserModal, setCharBrowserView, onCharBrowserSearch,
+         showCharacterBrowserModal, setCharBrowserView, onCharBrowserSearch, setCharBrowserSort,
          refreshCharacters } from './library.js';
 import { loadConversations, resetChatUI, selectChar, newConvForChar,
          selectConversation, deleteConversationFromModal, showConvHistoryModal,
@@ -138,7 +138,7 @@ Object.assign(window, {
   selectChar, triggerImport, handleImportFile, deleteCharacter,
   showCharCreateModal, createCharacter, showCharEditModal, saveCharEdit, saveImportedChar,
   addAltGreeting, triggerAvatarCrop, exportCharacter,
-  showCharacterBrowserModal, setCharBrowserView, onCharBrowserSearch,
+  showCharacterBrowserModal, setCharBrowserView, onCharBrowserSearch, setCharBrowserSort,
   refreshCharacters,
   // crop modal
   closeCropModal,

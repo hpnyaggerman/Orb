@@ -1948,9 +1948,33 @@ label {
    10. Character Browser Modal
    ═══════════════════════════════════════════ */
 
+.char-browser-search-row {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 16px;
+  align-items: stretch;
+}
+
 .char-browser-search {
   position: relative;
-  margin-bottom: 16px;
+  flex: 1 1 60%;
+}
+
+.char-browser-sort {
+  flex: 1 1 40%;
+  padding: 8px 12px;
+  font-size: 13px;
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-primary);
+  outline: none;
+  transition: border-color .15s;
+  cursor: pointer;
+}
+
+.char-browser-sort:focus {
+  border-color: var(--accent-dim);
 }
 
 .char-browser-search input {

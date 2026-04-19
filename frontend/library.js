@@ -16,6 +16,8 @@ const _avatarBust = new Map();
 let _browserViewMode = 'grid'; // 'grid' or 'list'
 let _browserSearchQuery = '';
 let _browserCharacters = [];
+let _browserSortBy = 'time-added'; // 'name', 'time-added', 'most-recent-chat', 'most-chats'
+let _browserConversations = [];
 
 // ── Fragments
 export async function loadFragments() {
@@ -499,6 +501,14 @@ export async function showCharacterBrowserModal() {
     _browserCharacters = S.characters || [];
     console.error('Failed to load characters for browser:', e);
   }
+  // Load conversations for sorting
+  try {
+    _browserConversations = await api.get('/conversations');
+  } catch (e) {
+    _browserConversations = [];
+    console.error('Failed to load conversations for browser:', e);
+  }
+  _browserSortBy = 'time-added';
   _browserViewMode = S.characterBrowserView || 'grid';
   _browserSearchQuery = '';
   renderCharacterBrowser();
@@ -513,18 +523,21 @@ export async function showCharacterBrowserModal() {
           <button class="view-toggle-btn active" data-view="grid" onclick="setCharBrowserView('grid')">⊞ Grid</button>
           <button class="view-toggle-btn" data-view="list" onclick="setCharBrowserView('list')">☰ List</button>
         </div>
-        <button class="btn btn-sm" onclick="closeModal()">✕</button>
       </div>
     </div>
-    <div class="char-browser-search">
-      <input type="text" id="char-browser-search" placeholder="Search characters by name..." oninput="onCharBrowserSearch()">
-      <span class="search-icon">🔍</span>
+    <div class="char-browser-search-row">
+      <div class="char-browser-search">
+        <input type="text" id="char-browser-search" placeholder="Search characters by name..." oninput="onCharBrowserSearch()">
+        <span class="search-icon">🔍</span>
+      </div>
+      <select id="char-browser-sort" class="char-browser-sort" onchange="setCharBrowserSort(this.value)">
+        <option value="name" ${_browserSortBy === 'name' ? 'selected' : ''}>Name</option>
+        <option value="time-added" ${_browserSortBy === 'time-added' ? 'selected' : ''}>Date Added</option>
+        <option value="most-recent-chat" ${_browserSortBy === 'most-recent-chat' ? 'selected' : ''}>Most Recent Chat</option>
+        <option value="most-chats" ${_browserSortBy === 'most-chats' ? 'selected' : ''}>Most Chats</option>
+      </select>
     </div>
-    <div id="char-browser-content"></div>
-    <div class="modal-actions">
-      <div style="flex:1"></div>
-      <button class="btn" onclick="closeModal()">Close</button>
-    </div>`);
+    <div id="char-browser-content"></div>`);
 }
 
 export function setCharBrowserView(mode) {
@@ -542,6 +555,59 @@ export function onCharBrowserSearch() {
   renderCharBrowserItems();
 }
 
+export function setCharBrowserSort(sortBy) {
+  _browserSortBy = sortBy;
+  // Update dropdown UI
+  const select = document.getElementById('char-browser-sort');
+  if (select) select.value = sortBy;
+  renderCharBrowserItems();
+}
+
+function computeConversationStats() {
+  const map = new Map();
+  for (const conv of _browserConversations) {
+    const cardId = conv.character_card_id;
+    if (!cardId) continue;
+    const entry = map.get(cardId) || { count: 0, recentTimestamp: '' };
+    entry.count += 1;
+    const ts = conv.updated_at || conv.created_at;
+    if (ts && (!entry.recentTimestamp || ts > entry.recentTimestamp)) {
+      entry.recentTimestamp = ts;
+    }
+    map.set(cardId, entry);
+  }
+  return map;
+}
+
+function applySort(characters) {
+  const stats = computeConversationStats();
+  const sortBy = _browserSortBy;
+  const collator = new Intl.Collator(undefined, { sensitivity: 'base' });
+  return [...characters].sort((a, b) => {
+    switch (sortBy) {
+      case 'name':
+        return collator.compare(a.name, b.name);
+      case 'time-added':
+        // Use created_at descending (newest first)
+        const aTime = a.created_at || '';
+        const bTime = b.created_at || '';
+        return bTime.localeCompare(aTime);
+      case 'most-recent-chat':
+        const aStat = stats.get(a.id);
+        const bStat = stats.get(b.id);
+        const aTs = aStat?.recentTimestamp || a.updated_at || a.created_at || '';
+        const bTs = bStat?.recentTimestamp || b.updated_at || b.created_at || '';
+        return bTs.localeCompare(aTs);
+      case 'most-chats':
+        const aCount = stats.get(a.id)?.count || 0;
+        const bCount = stats.get(b.id)?.count || 0;
+        return bCount - aCount;
+      default:
+        return 0;
+    }
+  });
+}
+
 function getFilteredCharacters() {
   if (!_browserSearchQuery) return _browserCharacters;
   return _browserCharacters.filter(c =>
@@ -554,16 +620,17 @@ function renderCharBrowserItems() {
   if (!container) return;
   
   const filtered = getFilteredCharacters();
+  const sorted = applySort(filtered);
   
-  if (filtered.length === 0) {
+  if (sorted.length === 0) {
     container.innerHTML = `<div class="char-browser-empty">${_browserSearchQuery ? 'No characters match your search' : 'No characters available'}</div>`;
     return;
   }
   
   if (_browserViewMode === 'grid') {
-    container.innerHTML = `<div class="char-browser-grid">${filtered.map(c => renderCharBrowserCard(c)).join('')}</div>`;
+    container.innerHTML = `<div class="char-browser-grid">${sorted.map(c => renderCharBrowserCard(c)).join('')}</div>`;
   } else {
-    container.innerHTML = `<div class="char-browser-list">${filtered.map(c => renderCharBrowserListItem(c)).join('')}</div>`;
+    container.innerHTML = `<div class="char-browser-list">${sorted.map(c => renderCharBrowserListItem(c)).join('')}</div>`;
   }
 }
 
