@@ -575,8 +575,16 @@ export function setCharBrowserView(mode) {
   });
   const container = $('char-browser-content');
   if (container) container.style.minHeight = '';
+  // Measure natural height with no filters so minHeight reflects the full character set
+  const prevSearch = _browserSearchQuery;
+  const prevTags = _browserSelectedTags;
+  _browserSearchQuery = '';
+  _browserSelectedTags = new Set();
   renderCharBrowserItems();
   if (container) container.style.minHeight = container.offsetHeight + 'px';
+  _browserSearchQuery = prevSearch;
+  _browserSelectedTags = prevTags;
+  renderCharBrowserItems();
 }
 
 export function onCharBrowserSearch() {
