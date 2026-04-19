@@ -2,7 +2,7 @@ import { S } from './state.js';
 import { $, esc, formatProse, formatProseWithDiff, sentenceDiff, toast, scrollToBottom, scrollToMessage, avatarUrl, convUrl, formatRelativeDate, resolvePlaceholders } from './utils.js';
 import { api } from './api.js';
 import { showModal, closeModal, showConfirmModal } from './modal.js';
-import { renderCharacters, loadCharacters } from './library.js';
+import { renderCharacters, loadCharacters, refreshCharacters } from './library.js';
 
 // ── Attachments rendering
 function formatBytes(bytes) {
@@ -514,6 +514,12 @@ async function afterStream() {
   try {
     S.messages      = await api.get(convUrl(S.activeConvId, 'messages'));
     S.directorState = await api.get(convUrl(S.activeConvId, 'director'));
+    // Update the conversation's updated_at timestamp so refreshCharacters() can
+    // correctly place the active character at the top of the recent list.
+    if (S.activeConvId) {
+      const conv = S.conversations?.find(c => c.id === S.activeConvId);
+      if (conv) conv.updated_at = new Date().toISOString();
+    }
   } catch (e) {}
 
   if (pendingUserMsg) {
@@ -553,6 +559,8 @@ async function afterStream() {
   renderMessages();
   renderInspector();
   scrollToBottom();
+  // Efficiently refresh the character list (re-filter from cached data, no API call)
+  refreshCharacters();
 }
 
 async function processSSEStream(resp, container, msgDiv, signal) {

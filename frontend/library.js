@@ -171,7 +171,21 @@ export async function loadCharacters() {
     api.get('/characters'),
     S.conversations || api.get('/conversations'),
   ]);
+  // Store full list for efficient refreshes
+  S.allCharacters = characters;
   S.characters = filterRecentCharacters(characters, conversations || []);
+  renderCharacters();
+}
+
+/**
+ * Efficiently refresh the character list by re-filtering from the full character
+ * set using already-loaded conversations (no API calls). Called after sending a
+ * message to promote the active character to the top of the recent list.
+ */
+export function refreshCharacters() {
+  const source = S.allCharacters || S.characters;
+  if (!source || source.length === 0) return;
+  S.characters = filterRecentCharacters(source, S.conversations || []);
   renderCharacters();
 }
 
