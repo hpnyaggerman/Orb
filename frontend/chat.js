@@ -746,6 +746,9 @@ async function processSSEStream(resp, container, msgDiv, signal) {
       }
     }
   }
+  // reader.cancel() resolves read() with done:true rather than throwing, so
+  // re-throw here so callers can set S.wasAborted and wait for the backend.
+  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
 }
 
 function handleSSEEvent(event, data, container, msgDiv, onToken, onRewrite) {
