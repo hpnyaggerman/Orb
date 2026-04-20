@@ -3,7 +3,7 @@ export const S = {
   activeConvId: null,
   activeCharId: null,
   messages: [],
-  fragments: [],
+  moodFragments: [],
   directorFragments: [],
   characters: [],
   personas: [],

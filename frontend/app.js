@@ -22,11 +22,11 @@ import {
   activatePersona,
 } from "./settings.js";
 import {
-  loadFragments,
-  showFragmentModal,
-  saveFragment,
-  deleteFragment,
-  toggleFragmentEnabled,
+  loadMoodFragments,
+  showMoodFragmentModal,
+  saveMoodFragment,
+  deleteMoodFragment,
+  toggleMoodFragmentEnabled,
   loadDirectorFragments,
   showDirectorFragmentModal,
   saveDirectorFragment,
@@ -212,11 +212,11 @@ Object.assign(window, {
   // phrase bank
   showPhraseBankModal,
   showAddPhraseGroupModal,
-  // fragments
-  showFragmentModal,
-  saveFragment,
-  deleteFragment,
-  toggleFragmentEnabled,
+  // mood fragments
+  showMoodFragmentModal,
+  saveMoodFragment,
+  deleteMoodFragment,
+  toggleMoodFragmentEnabled,
   // director fragments
   showDirectorFragmentModal,
   saveDirectorFragment,
@@ -305,12 +305,12 @@ async function initAll() {
   }
 
   try {
-    await loadFragments();
+    await loadMoodFragments();
   } catch (e) {
-    console.error("Failed to load fragments:", e);
+    console.error("Failed to load mood fragments:", e);
     // Show empty state but don't crash
     $("frag-list").innerHTML =
-      '<div style="color:var(--text-muted);font-size:12px;padding:4px 0;">Failed to load fragments</div>';
+      '<div style="color:var(--text-muted);font-size:12px;padding:4px 0;">Failed to load mood fragments</div>';
   }
 
   // Load conversations before characters so we can filter by recent activity

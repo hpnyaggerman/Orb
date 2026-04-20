@@ -58,7 +58,7 @@ async def _director_pass(
     user_message: str,
     settings: dict,
     director: dict,
-    fragments: list[dict],
+    mood_fragments: list[dict],
     director_fragments: list[dict],
     enabled_tools: dict | None = None,
     attachments: Optional[List[dict]] = None,
@@ -124,7 +124,7 @@ async def _director_pass(
 
     t0 = time.monotonic()
     for name in tool_names:
-        tail = build_tool_prompt(name, user_message, active_moods, fragments)
+        tail = build_tool_prompt(name, user_message, active_moods, mood_fragments)
         if attachments:
             parts = [{"type": "text", "text": tail}]
             for att in attachments:

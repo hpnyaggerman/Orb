@@ -11,7 +11,7 @@ from backend.migrations import run_pending as _run_migrations
 
 DB_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "data", "app.db")
 
-SEED_FRAGMENTS = [
+SEED_MOOD_FRAGMENTS = [
     {
         "id": "talkative",
         "label": "Talkative",
@@ -336,7 +336,7 @@ async def init_db():
                 character_library_sort TEXT NOT NULL DEFAULT 'time-added'
             );
 
-            CREATE TABLE IF NOT EXISTS fragments (
+            CREATE TABLE IF NOT EXISTS mood_fragments (
                 id TEXT PRIMARY KEY,
                 label TEXT NOT NULL,
                 description TEXT NOT NULL,
@@ -495,13 +495,13 @@ async def init_db():
         # conversations.character_card_id are already TEXT columns that accept any
         # string. Existing slug-based IDs remain valid; only new characters get UUIDs.
 
-        # Migration for fragments enabled column
+        # Migration for mood fragments enabled column
         fragment_cols = {
-            row[1] for row in await db.execute_fetchall("PRAGMA table_info(fragments)")
+            row[1] for row in await db.execute_fetchall("PRAGMA table_info(mood_fragments)")
         }
         if "enabled" not in fragment_cols:
             await db.execute(
-                "ALTER TABLE fragments ADD COLUMN enabled BOOLEAN NOT NULL DEFAULT 1"
+                "ALTER TABLE mood_fragments ADD COLUMN enabled BOOLEAN NOT NULL DEFAULT 1"
             )
 
         # Seed settings if empty
@@ -523,12 +523,12 @@ async def init_db():
                 ),
             )
 
-        # Seed fragments if empty
-        row = await db.execute_fetchall("SELECT COUNT(*) as c FROM fragments")
+        # Seed mood fragments if empty
+        row = await db.execute_fetchall("SELECT COUNT(*) as c FROM mood_fragments")
         if row[0]["c"] == 0:
-            for f in SEED_FRAGMENTS:
+            for f in SEED_MOOD_FRAGMENTS:
                 await db.execute(
-                    "INSERT INTO fragments (id, label, description, prompt_text, negative_prompt) VALUES (?, ?, ?, ?, ?)",
+                    "INSERT INTO mood_fragments (id, label, description, prompt_text, negative_prompt) VALUES (?, ?, ?, ?, ?)",
                     (
                         f["id"],
                         f["label"],
@@ -636,33 +636,33 @@ async def update_settings(data: dict) -> dict:
         await db.close()
 
 
-# --- Fragments ---
+# --- Mood Fragments ---
 
 
-async def get_fragments() -> list[dict]:
+async def get_mood_fragments() -> list[dict]:
     db = await get_db()
     try:
-        rows = await db.execute_fetchall("SELECT * FROM fragments ORDER BY label ASC")
+        rows = await db.execute_fetchall("SELECT * FROM mood_fragments ORDER BY label ASC")
         return [dict(r) for r in rows]
     finally:
         await db.close()
 
 
-async def get_fragment(fid: str) -> dict | None:
+async def get_mood_fragment(fid: str) -> dict | None:
     db = await get_db()
     try:
-        rows = await db.execute_fetchall("SELECT * FROM fragments WHERE id = ?", (fid,))
+        rows = await db.execute_fetchall("SELECT * FROM mood_fragments WHERE id = ?", (fid,))
         return dict(rows[0]) if rows else None
     finally:
         await db.close()
 
 
-async def create_fragment(data: dict) -> dict:
+async def create_mood_fragment(data: dict) -> dict:
     db = await get_db()
     try:
         enabled = data.get("enabled", 1)
         await db.execute(
-            "INSERT INTO fragments (id, label, description, prompt_text, negative_prompt, enabled) VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO mood_fragments (id, label, description, prompt_text, negative_prompt, enabled) VALUES (?, ?, ?, ?, ?, ?)",
             (
                 data["id"],
                 data["label"],
@@ -673,12 +673,12 @@ async def create_fragment(data: dict) -> dict:
             ),
         )
         await db.commit()
-        return await get_fragment(data["id"])
+        return await get_mood_fragment(data["id"])
     finally:
         await db.close()
 
 
-async def update_fragment(fid: str, data: dict) -> dict | None:
+async def update_mood_fragment(fid: str, data: dict) -> dict | None:
     db = await get_db()
     try:
         allowed = ["label", "description", "prompt_text", "negative_prompt", "enabled"]
@@ -691,19 +691,19 @@ async def update_fragment(fid: str, data: dict) -> dict | None:
         if sets:
             vals.append(fid)
             await db.execute(
-                f"UPDATE fragments SET {', '.join(sets)} WHERE id = ?",
+                f"UPDATE mood_fragments SET {', '.join(sets)} WHERE id = ?",
                 vals,  # nosec B608 — cols from hardcoded allowlist, values parameterised
             )
             await db.commit()
-        return await get_fragment(fid)
+        return await get_mood_fragment(fid)
     finally:
         await db.close()
 
 
-async def delete_fragment(fid: str) -> bool:
+async def delete_mood_fragment(fid: str) -> bool:
     db = await get_db()
     try:
-        cur = await db.execute("DELETE FROM fragments WHERE id = ?", (fid,))
+        cur = await db.execute("DELETE FROM mood_fragments WHERE id = ?", (fid,))
         await db.commit()
         return cur.rowcount > 0
     finally:

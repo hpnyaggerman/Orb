@@ -28,7 +28,7 @@ async def _run_pipeline(
     client: LLMClient,
     settings: dict,
     director: dict,
-    fragments: list[dict],
+    mood_fragments: list[dict],
     director_fragments: list[dict],
     prefix: list[dict],
     user_message: str,
@@ -107,7 +107,7 @@ async def _run_pipeline(
             user_message,
             settings,
             director,
-            fragments,
+            mood_fragments,
             director_fragments,
             enabled_tools,
             attachments=attachments,
@@ -140,7 +140,7 @@ async def _run_pipeline(
     inj_block = compute_style_injection_block(
         active_moods,
         director["active_moods"],
-        fragments,
+        mood_fragments,
         director_fragments,
         direct_scene_enabled,
         extra_fields,
@@ -254,7 +254,7 @@ async def _run_pipeline(
 
 async def _load_pipeline_context(conversation_id: str) -> dict | None:
     """Load everything the pipeline needs: settings, conversation, director,
-    fragments, phrase_bank, and an LLMClient.
+    mood_fragments, phrase_bank, and an LLMClient.
 
     Returns a dict of resolved objects, or None if the conversation was not found.
     """
@@ -264,12 +264,12 @@ async def _load_pipeline_context(conversation_id: str) -> dict | None:
         return None
 
     director = await db.get_director_state(conversation_id)
-    fragments = await db.get_fragments()
-    # Filter out disabled fragments
-    fragments = [f for f in fragments if f.get("enabled", True)]
-    # Remove disabled fragments from active moods
+    mood_fragments = await db.get_mood_fragments()
+    # Filter out disabled mood fragments
+    mood_fragments = [f for f in mood_fragments if f.get("enabled", True)]
+    # Remove disabled mood fragments from active moods
     if director and director.get("active_moods"):
-        enabled_ids = {f["id"] for f in fragments}
+        enabled_ids = {f["id"] for f in mood_fragments}
         director["active_moods"] = [
             mood for mood in director["active_moods"] if mood in enabled_ids
         ]
@@ -292,7 +292,7 @@ async def _load_pipeline_context(conversation_id: str) -> dict | None:
         "settings": settings,
         "conv": conv,
         "director": director,
-        "fragments": fragments,
+        "mood_fragments": mood_fragments,
         "director_fragments": director_fragments,
         "phrase_bank": phrase_bank,
         "client": client,
@@ -575,7 +575,7 @@ async def handle_turn(
             ctx["client"],
             settings,
             ctx["director"],
-            ctx["fragments"],
+            ctx["mood_fragments"],
             ctx["director_fragments"],
             prefix,
             user_message,
@@ -641,7 +641,7 @@ async def handle_regenerate(
             ctx["client"],
             settings,
             ctx["director"],
-            ctx["fragments"],
+            ctx["mood_fragments"],
             ctx["director_fragments"],
             prefix,
             user_msg["content"],

@@ -1071,7 +1071,7 @@ export function renderInspector() {
   const ds = S.directorState || {};
   const ld = S.lastDirectorData || {};
   const activeIds = ld.active_moods || ds.active_moods || [];
-  const stylesHtml = S.fragments
+  const stylesHtml = S.moodFragments
     .map((f) => `<span class="style-tag ${activeIds.includes(f.id) ? "active" : ""}">${f.id}</span>`)
     .join("");
   const lat = ld.agent_latency_ms || 0;

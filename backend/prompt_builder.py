@@ -113,7 +113,7 @@ def build_prefix(
 
 
 def build_tool_prompt(
-    tool_name: str, user_message: str, active_moods: list[str], fragments: list[dict]
+    tool_name: str, user_message: str, active_moods: list[str], mood_fragments: list[dict]
 ) -> str:
     tool = TOOLS.get(tool_name)
     if not tool:
@@ -126,7 +126,7 @@ def build_tool_prompt(
     if tool_name == "direct_scene":
         moods = ", ".join(active_moods) or "none"
         frags = "\n".join(
-            f"- [{f['id']}] - use in case: {f['description']}" for f in fragments
+            f"- [{f['id']}] - use in case: {f['description']}" for f in mood_fragments
         )
         parts.append(
             f"Currently active moods: {moods}\n\nAvailable writing moods:\n{frags}"
@@ -145,7 +145,7 @@ def build_tool_prompt(
 def compute_style_injection_block(
     active_moods: list[str],
     prior_moods: list[str],
-    fragments: list[dict],
+    mood_fragments: list[dict],
     director_fragments: list[dict],
     direct_scene_enabled: bool,
     extra_fields: dict | None = None,
@@ -168,11 +168,11 @@ def compute_style_injection_block(
         inj_extra = {}
 
     deactivated = (
-        [f for f in fragments if f["id"] in (set(prior_moods) - set(inj_active_moods))]
+        [f for f in mood_fragments if f["id"] in (set(prior_moods) - set(inj_active_moods))]
         if direct_scene_enabled and inj_active_moods
         else []
     )
-    active = [f for f in fragments if f["id"] in inj_active_moods]
+    active = [f for f in mood_fragments if f["id"] in inj_active_moods]
 
     if not (active or deactivated or inj_extra):
         return ""

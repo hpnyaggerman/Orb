@@ -18,11 +18,11 @@ from .database import (
     init_db,
     get_settings,
     update_settings,
-    get_fragments,
-    get_fragment,
-    create_fragment,
-    update_fragment,
-    delete_fragment,
+    get_mood_fragments,
+    get_mood_fragment,
+    create_mood_fragment,
+    update_mood_fragment,
+    delete_mood_fragment,
     list_conversations,
     get_conversation,
     create_conversation,
@@ -122,7 +122,7 @@ class SettingsUpdate(BaseModel):
     character_library_sort: Optional[str] = None
 
 
-class FragmentCreate(BaseModel):
+class MoodFragmentCreate(BaseModel):
     id: str
     label: str
     description: str
@@ -131,7 +131,7 @@ class FragmentCreate(BaseModel):
     enabled: bool = True
 
 
-class FragmentUpdate(BaseModel):
+class MoodFragmentUpdate(BaseModel):
     label: Optional[str] = None
     description: Optional[str] = None
     prompt_text: Optional[str] = None
@@ -312,34 +312,34 @@ async def api_update_settings(data: SettingsUpdate):
     return await update_settings(data.model_dump(exclude_unset=True))
 
 
-# Fragments ──
+# Mood Fragments ──
 
 
 @app.get("/api/fragments")
-async def api_list_fragments():
-    return await get_fragments()
+async def api_list_mood_fragments():
+    return await get_mood_fragments()
 
 
 @app.post("/api/fragments")
-async def api_create_fragment(data: FragmentCreate):
-    existing = await get_fragment(data.id)
+async def api_create_mood_fragment(data: MoodFragmentCreate):
+    existing = await get_mood_fragment(data.id)
     if existing:
-        raise HTTPException(400, "Fragment with this ID already exists")
-    return await create_fragment(data.model_dump())
+        raise HTTPException(400, "Mood fragment with this ID already exists")
+    return await create_mood_fragment(data.model_dump())
 
 
 @app.put("/api/fragments/{fid}")
-async def api_update_fragment(fid: str, data: FragmentUpdate):
-    result = await update_fragment(fid, data.model_dump(exclude_none=True))
+async def api_update_mood_fragment(fid: str, data: MoodFragmentUpdate):
+    result = await update_mood_fragment(fid, data.model_dump(exclude_none=True))
     if not result:
-        raise HTTPException(404, "Fragment not found")
+        raise HTTPException(404, "Mood fragment not found")
     return result
 
 
 @app.delete("/api/fragments/{fid}")
-async def api_delete_fragment(fid: str):
-    if not await delete_fragment(fid):
-        raise HTTPException(404, "Fragment not found or is built-in")
+async def api_delete_mood_fragment(fid: str):
+    if not await delete_mood_fragment(fid):
+        raise HTTPException(404, "Mood fragment not found or is built-in")
     return {"ok": True}
 
 

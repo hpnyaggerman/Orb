@@ -22,30 +22,30 @@ let _browserConversations = [];
 let _browserSelectedTags = new Set();
 let _browserTopTags = []; // top 15 most popular tags
 
-// ── Fragments
-export async function loadFragments() {
+// ── Mood Fragments
+export async function loadMoodFragments() {
   try {
-    S.fragments = await api.get("/fragments");
-    renderFragments();
+    S.moodFragments = await api.get("/fragments");
+    renderMoodFragments();
   } catch (error) {
-    console.error("Failed to load fragments:", error);
+    console.error("Failed to load mood fragments:", error);
     throw error;
   }
 }
 
-export function renderFragments() {
-  if (!S.fragments || S.fragments.length === 0) {
-    $("frag-list").innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:4px 0;">No fragments</div>';
+export function renderMoodFragments() {
+  if (!S.moodFragments || S.moodFragments.length === 0) {
+    $("frag-list").innerHTML = '<div style="color:var(--text-muted);font-size:12px;padding:4px 0;">No mood fragments</div>';
     return;
   }
 
-  const html = S.fragments
+  const html = S.moodFragments
     .map((f) => {
       // Handle both boolean and numeric (0/1) enabled values from backend
       const enabled = f.enabled === true || f.enabled === 1;
       const toggleId = `frag-toggle-${f.id}`;
       return `
-    <div class="fragment-item" style="cursor:pointer" title="${esc(f.description)}" onclick="showFragmentModal('${f.id}')">
+    <div class="fragment-item" style="cursor:pointer" title="${esc(f.description)}" onclick="showMoodFragmentModal('${f.id}')">
       <div style="flex:1; min-width:0;">
         <span class="frag-label">${esc(f.label)}</span>
         <span class="frag-id">${esc(f.id)}</span>
@@ -53,7 +53,7 @@ export function renderFragments() {
       <div class="frag-toggle-wrapper" onclick="event.stopPropagation()">
         <label class="frag-toggle" for="${toggleId}">
           <input type="checkbox" id="${toggleId}" ${enabled ? "checked" : ""}
-                 onchange="toggleFragmentEnabled('${f.id}', this.checked)">
+                 onchange="toggleMoodFragmentEnabled('${f.id}', this.checked)">
           <span class="frag-toggle-slider"></span>
         </label>
       </div>
@@ -64,8 +64,8 @@ export function renderFragments() {
   $("frag-list").innerHTML = html;
 }
 
-export function showFragmentModal(fragId = null) {
-  const f = fragId ? S.fragments.find((x) => x.id === fragId) : null;
+export function showMoodFragmentModal(fragId = null) {
+  const f = fragId ? S.moodFragments.find((x) => x.id === fragId) : null;
   const isEdit = !!f;
   const d = f || { id: "", label: "", description: "", prompt_text: "", negative_prompt: "" };
 
@@ -86,14 +86,14 @@ export function showFragmentModal(fragId = null) {
       <textarea id="frag-neg" rows="3">${esc(d.negative_prompt || "")}</textarea>
     </div>
     <div class="modal-actions">
-      ${isEdit ? `<button class="btn btn-danger btn-sm" onclick="deleteFragment('${esc(d.id)}')">Delete</button>` : ""}
+      ${isEdit ? `<button class="btn btn-danger btn-sm" onclick="deleteMoodFragment('${esc(d.id)}')">Delete</button>` : ""}
       <div style="flex:1"></div>
       <button class="btn" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-accent" onclick="saveFragment(${isEdit})">${isEdit ? "Save" : "Create"}</button>
+      <button class="btn btn-accent" onclick="saveMoodFragment(${isEdit})">${isEdit ? "Save" : "Create"}</button>
     </div>`);
 }
 
-export async function saveFragment(isEdit) {
+export async function saveMoodFragment(isEdit) {
   const d = {
     id: $("frag-id").value.trim(),
     label: $("frag-label").value.trim(),
@@ -109,25 +109,25 @@ export async function saveFragment(isEdit) {
     if (isEdit) await api.put("/fragments/" + d.id, d);
     else await api.post("/fragments", d);
     closeModal();
-    await loadFragments();
-    toast("Fragment saved");
+    await loadMoodFragments();
+    toast("Mood fragment saved");
   } catch (e) {
     toast(e.message, true);
   }
 }
 
-export async function deleteFragment(id) {
+export async function deleteMoodFragment(id) {
   showConfirmModal(
     {
-      title: "Delete Fragment",
-      message: "Are you sure you want to delete this fragment?",
+      title: "Delete Mood Fragment",
+      message: "Are you sure you want to delete this mood fragment?",
       confirmText: "Delete",
     },
     async () => {
       try {
         await api.del("/fragments/" + id);
-        await loadFragments();
-        toast("Fragment deleted");
+        await loadMoodFragments();
+        toast("Mood fragment deleted");
       } catch (e) {
         toast(e.message, true);
       }
@@ -135,20 +135,20 @@ export async function deleteFragment(id) {
   );
 }
 
-export async function toggleFragmentEnabled(id, newEnabled) {
+export async function toggleMoodFragmentEnabled(id, newEnabled) {
   try {
     await api.put("/fragments/" + id, { enabled: newEnabled });
     // Update local state optimistically
-    const frag = S.fragments.find((f) => f.id === id);
+    const frag = S.moodFragments.find((f) => f.id === id);
     if (frag) frag.enabled = newEnabled;
-    renderFragments();
-    toast(newEnabled ? "Fragment enabled" : "Fragment disabled");
+    renderMoodFragments();
+    toast(newEnabled ? "Mood fragment enabled" : "Mood fragment disabled");
   } catch (e) {
     toast(e.message, true);
   }
 }
 
-// ── Director Fragments
+// ── Director Fragments (unchanged)
 export async function loadDirectorFragments() {
   try {
     S.directorFragments = await api.get("/director-fragments");
