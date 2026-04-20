@@ -9,7 +9,7 @@ export PYTHONNOUSERSITE=1
 unset PYTHONPATH
 unset PYTHONHOME
 
-cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" || exit 1
 
 if [[ "$(pwd)" =~ " " ]]; then
     echo "This script relies on Miniforge which cannot be silently installed under a path with spaces."
@@ -66,6 +66,7 @@ if [ ! -e "$INSTALL_ENV_DIR/bin/python" ]; then
 fi
 
 # activate
+# shellcheck source=/dev/null
 source "$CONDA_ROOT_PREFIX/etc/profile.d/conda.sh"
 conda activate "$INSTALL_ENV_DIR"
 
