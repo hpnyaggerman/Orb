@@ -74,7 +74,7 @@ export function showFragmentModal(fragId = null) {
     <div class="field-row">
       <div class="field"><label>ID</label>
         <input id="frag-id" value="${esc(d.id)}" ${isEdit ? "disabled" : ""} placeholder="e.g. dramatic"></div>
-      <div class="field"><label>Label</label>
+      <div class="field"><label>Label <span style="font-size:10px;color:var(--text-muted)">(For display only)</span></label>
         <input id="frag-label" value="${esc(d.label)}"></div>
     </div>
     <div class="field"><label>Description</label>
@@ -289,7 +289,7 @@ export function showDirectorFragmentModal(fragId = null) {
     <div class="field-row">
       <div class="field"><label>ID</label>
         <input id="dir-frag-id" value="${esc(d.id)}" ${isEdit ? "disabled" : ""} placeholder="e.g. pacing"></div>
-      <div class="field"><label>Label</label>
+      <div class="field"><label>Label <span style="font-size:10px;color:var(--text-muted)">(For display only)</span></label>
         <input id="dir-frag-label" value="${esc(d.label)}"></div>
     </div>
     <div class="field-row">
