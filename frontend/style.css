@@ -545,7 +545,7 @@ body {
 
 /* ── Messages ── */
 .message {
-  margin-bottom: 20px;
+  margin-bottom: 10px;
   max-width: 85%;
   animation: msgIn .2s ease;
   position: relative;

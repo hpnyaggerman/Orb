@@ -112,13 +112,11 @@ function finalizeStreamingDiv(lastMsg) {
     : formatProse(resolvePlaceholders(lastMsg.content));
   smoothUpdateBody(body, bodyHtml);
 
-  if (!div.querySelector(".msg-toolbar")) {
-    const tb = document.createElement("div");
-    tb.className = "msg-toolbar";
+  const tb = div.querySelector(".msg-toolbar");
+  if (tb) {
     tb.innerHTML = `<button onclick="startEdit(${lastMsg.id})" title="Edit">✏️ Edit</button>
       <button onclick="regenerate(${lastMsg.id})" title="Regenerate">🔄 Regen</button>
       <button onclick="deleteMessage(${lastMsg.id})" title="Delete message, siblings, and all children" style="color:var(--red)">✕ Del</button>`;
-    div.appendChild(tb);
   }
 
   const bc = lastMsg.branch_count || 1;
@@ -375,9 +373,9 @@ export function renderMessages() {
           ? ""
           : `
         <div class="msg-toolbar">
-          ${m.id ? `<button onclick="startEdit(${m.id})" title="Edit">✏️ Edit</button>` : ""}
-          ${m.role === "assistant" && m.id ? `<button onclick="regenerate(${m.id})" title="Regenerate">🔄 Regen</button>` : ""}
-          ${m.id ? `<button onclick="deleteMessage(${m.id})" title="Delete message, siblings, and all children" style="color:var(--red)">✕ Del</button>` : ""}
+          ${m.id ? `<button onclick="startEdit(${m.id})" title="Edit">✏️ Edit</button>` : `<button disabled>✏️ Edit</button>`}
+          ${m.role === "assistant" ? (m.id ? `<button onclick="regenerate(${m.id})" title="Regenerate">🔄 Regen</button>` : `<button disabled>🔄 Regen</button>`) : ""}
+          ${m.id ? `<button onclick="deleteMessage(${m.id})" title="Delete message, siblings, and all children" style="color:var(--red)">✕ Del</button>` : `<button disabled style="color:var(--red)">✕ Del</button>`}
           ${S.pendingRefineDiff?.msgId && m.id === S.pendingRefineDiff.msgId ? `<button onclick="clearRefineDiff()" title="Clear diff highlights" class="btn-clear-diff">✕ Diff</button>` : ""}
         </div>`;
         const body = isEditing
@@ -595,9 +593,27 @@ function createStreamingDiv() {
   div.innerHTML = `<div class="msg-role">${esc(getCharName())}</div>
     <div class="msg-body" id="streaming-body">
       <span class="typing-indicator"><span></span><span></span><span></span></span>
+    </div>
+    <div class="msg-toolbar">
+      <button disabled>✏️ Edit</button>
+      <button disabled>🔄 Regen</button>
+      <button disabled style="color:var(--red)">✕ Del</button>
     </div>`;
   S.streamingBodyEl = div.querySelector(".msg-body");
   return div;
+}
+
+function patchPendingUserMessage(pendingMsg) {
+  const freshMsg = S.messages.find((m) => m.role === "user" && m.id && m.content === pendingMsg.content);
+  if (!freshMsg) return;
+  const div = document.querySelector('.message.user[data-msg-id="null"]');
+  if (!div) return;
+  div.setAttribute("data-msg-id", freshMsg.id);
+  const tb = div.querySelector(".msg-toolbar");
+  if (tb) {
+    tb.innerHTML = `<button onclick="startEdit(${freshMsg.id})" title="Edit">✏️ Edit</button>
+      <button onclick="deleteMessage(${freshMsg.id})" title="Delete message, siblings, and all children" style="color:var(--red)">✕ Del</button>`;
+  }
 }
 
 async function afterStream() {
@@ -673,12 +689,15 @@ async function afterStream() {
   const finalized = finalizeStreamingDiv(lastMsg);
   S.streamingBodyEl = null;
 
-  // Always render messages to ensure user messages have proper IDs and buttons
-  // This is necessary because finalizeStreamingDiv only updates the assistant message
-  renderMessages();
+  if (finalized) {
+    // Avoid a full re-render: only patch user messages that were rendered without an ID
+    // (happens during sendMessage when pendingUserMsg has id=null).
+    if (pendingUserMsg) patchPendingUserMessage(pendingUserMsg);
+  } else {
+    renderMessages();
+  }
   renderInspector();
-  scrollToBottom();
-  // Efficiently refresh the character list (re-filter from cached data, no API call)
+  scrollToBottom(true);
   refreshCharacters();
 }
 

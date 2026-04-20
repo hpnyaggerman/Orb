@@ -19,13 +19,18 @@ export function toast(msg, isError = false) {
   setTimeout(() => el.classList.add("hidden"), 3000);
 }
 
-export function scrollToBottom() {
+export function scrollToBottom(smooth = false) {
   const ct = $("chat-messages");
   if (!ct || !S.autoscrollEnabled) return;
   S._programmaticScroll = true;
   requestAnimationFrame(() => {
-    ct.scrollTop = ct.scrollHeight;
-    S._programmaticScroll = false;
+    if (smooth) {
+      ct.scrollTo({ top: ct.scrollHeight, behavior: "smooth" });
+      setTimeout(() => { S._programmaticScroll = false; }, 400);
+    } else {
+      ct.scrollTop = ct.scrollHeight;
+      S._programmaticScroll = false;
+    }
   });
 }
 
