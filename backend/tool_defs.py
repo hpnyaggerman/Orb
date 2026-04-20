@@ -226,12 +226,6 @@ LENGTH_GUARD_INSTRUCTIONS = (
     "and {max_words} words. Preserve the author's voice and all key story beats."
 )
 
-# CoT prompt appended once at the end of the assembled editor prompt.
-EDITOR_COT_PROMPT = (
-    "Before calling the tool, state in one sentence which tool you'll call "
-    "and the single most important change, then call the tool."
-)
-
 MAX_EDITOR_ITERATIONS = 3
 
 

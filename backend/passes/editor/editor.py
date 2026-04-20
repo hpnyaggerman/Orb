@@ -24,7 +24,6 @@ from ...tool_defs import (
     EDITOR_REWRITE_INSTRUCTIONS,
     EDITOR_BOTH_INSTRUCTIONS,
     LENGTH_GUARD_INSTRUCTIONS,
-    EDITOR_COT_PROMPT,
     MAX_EDITOR_ITERATIONS,
     enabled_schemas,
 )
@@ -604,7 +603,6 @@ def _build_editor_prompt(
     elif length_guard_triggered:
         parts.append(EDITOR_REWRITE_INSTRUCTIONS)
         parts.append(length_guard_instruction)
-    parts.append(EDITOR_COT_PROMPT)
     return "\n\n".join(parts)
 
 
