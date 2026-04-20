@@ -1,3 +1,4 @@
 .venv
+installer_files
 backend/data
 __pycache__
