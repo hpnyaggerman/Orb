@@ -126,7 +126,7 @@ def build_tool_prompt(
     if tool_name == "direct_scene":
         moods = ", ".join(active_moods) or "none"
         frags = "\n".join(
-            f"- [{f['id']}] - use in case: {f['description']}" for f in mood_fragments
+            f"* [{f['id']}] - use in case: {f['description']}" for f in mood_fragments
         )
         parts.append(
             f"Currently active moods: {moods}\n\nAvailable writing moods:\n{frags}"

@@ -29,7 +29,7 @@ SEED_MOOD_FRAGMENTS = [
     {
         "id": "inner-thoughts",
         "label": "Inner Thoughts",
-        "description": "Foreground the character's inner thoughts. To be used SPARINGLY!",
+        "description": "Foreground the character's inner thoughts. Use when the user is acting strange.",
         "prompt_text": (
             "Foreground the character's inner thoughts. Show the gap between what they think "
             "and what they say. Stream of consciousness is acceptable. The reader should feel "
@@ -44,7 +44,7 @@ SEED_MOOD_FRAGMENTS = [
     {
         "id": "terse",
         "label": "Terse",
-        "description": "Short, punchy prose with no filler, like a haiku.",
+        "description": "Short, punchy prose with no filler, like a haiku. Use to conclude a chapter/scene.",
         "prompt_text": (
             "Your mood has NOW shifted — use short, clipped prose. Cut adjectives. "
             "Cut adverbs. Every sentence earns its place or gets deleted. Paragraphs are 1-3 "

@@ -21,7 +21,7 @@ _DIRECT_SCENE_FIXED_REQUIRED: list[str] = []
 
 _DIRECT_SCENE_DESCRIPTION = (
     "Call this to direct the scene. Deduce what the user wants to see and show them. "
-    "Be very specific and intentional with the direction."
+    "Be very specific and intentional with the direction. Aim to keep things fresh."
 )
 
 
