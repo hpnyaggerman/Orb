@@ -217,8 +217,7 @@ EDITOR_REWRITE_INSTRUCTIONS = (
 # The model already receives the full audit report and length-guard
 # instruction with concrete word/paragraph limits.
 EDITOR_BOTH_INSTRUCTIONS = (
-    "Call `editor_rewrite` to address both concerns in a single rewrite.\n"
-    "- Address all audit issues while also respecting length constraints."
+    "Call `editor_rewrite` to address both concerns in a single rewrite. Address all audit issues while also respecting length constraints."
 )
 
 LENGTH_GUARD_INSTRUCTIONS = (
