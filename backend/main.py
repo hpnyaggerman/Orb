@@ -121,6 +121,7 @@ class SettingsUpdate(BaseModel):
     active_persona_id: Optional[int] = None
     character_library_view: Optional[str] = None
     character_library_sort: Optional[str] = None
+    show_editor_diff: Optional[bool] = None
 
 
 class MoodFragmentCreate(BaseModel):

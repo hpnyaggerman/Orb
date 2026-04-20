@@ -823,10 +823,12 @@ function handleSSEEvent(event, data, container, msgDiv, onToken, onRewrite) {
       _advanceReasoningPass(2); // writer done, editor starting → move to Editor dot
       try {
         const refined = JSON.parse(data).refined_text;
-        // S.streamingContent still holds the writer's unrefined text at this point
-        const original = resolvePlaceholders(S.streamingContent || "");
-        const refinedResolved = resolvePlaceholders(refined);
-        S.pendingRefineDiff = { original, ops: sentenceDiff(original, refinedResolved) };
+        if (S.showEditorDiff) {
+          // S.streamingContent still holds the writer's unrefined text at this point
+          const original = resolvePlaceholders(S.streamingContent || "");
+          const refinedResolved = resolvePlaceholders(refined);
+          S.pendingRefineDiff = { original, ops: sentenceDiff(original, refinedResolved) };
+        }
         onRewrite(refined);
       } catch (_) {}
       break;

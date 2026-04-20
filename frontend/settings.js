@@ -67,6 +67,9 @@ export async function loadSettings() {
   if (S.settings.reasoning_enabled_passes)
     S.reasoningEnabled = { ...S.reasoningEnabled, ...S.settings.reasoning_enabled_passes };
 
+  if (typeof S.settings.show_editor_diff === "number") S.showEditorDiff = S.settings.show_editor_diff !== 0;
+  else if (typeof S.settings.show_editor_diff === "boolean") S.showEditorDiff = S.settings.show_editor_diff;
+
   // Expand Settings section if endpoint_url is empty
   const settingsSection = $("settings-section");
   if (settingsSection && (!S.settings.endpoint_url || S.settings.endpoint_url.trim() === "")) {
@@ -363,6 +366,16 @@ export async function toggleLengthGuard(on) {
   }
 }
 
+export async function toggleShowEditorDiff(on) {
+  S.showEditorDiff = on;
+  renderToolsPanel();
+  try {
+    S.settings = await api.put("/settings", { show_editor_diff: on });
+  } catch (e) {
+    toast("Failed to save diff display state", true);
+  }
+}
+
 export async function toggleLengthGuardEnforce(on) {
   S.lengthGuardEnforce = on;
   S.enabledTools.length_guard_enforce = on;
@@ -402,6 +415,15 @@ export function renderToolsPanel() {
   $("tools-panel-btn").style.opacity = S.agentEnabled ? "1" : "0.5";
   const toolCards = TOOL_DEFS.map((t) => {
     const on = !!S.enabledTools[t.id];
+    const extras =
+      t.id === "editor_apply_patch" && on
+        ? `<div class="lg-config">
+             <label class="lg-enforce-label" title="Highlight edited sentences with green/red diff strikethrough. Turn off for clean output.">
+               <input type="checkbox" ${S.showEditorDiff ? "checked" : ""} onchange="toggleShowEditorDiff(this.checked)">
+               Show diff highlights
+             </label>
+           </div>`
+        : "";
     return `<div class="tool-card ${on ? "tool-on" : ""}">
       <div class="tool-card-header">
         <span class="tool-card-name">${t.name}</span>
@@ -411,6 +433,7 @@ export function renderToolsPanel() {
         </label>
       </div>
       <div class="tool-card-desc">${t.desc}</div>
+      ${extras}
     </div>`;
   }).join("");
 

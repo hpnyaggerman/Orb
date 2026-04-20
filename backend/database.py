@@ -220,6 +220,7 @@ DEFAULT_SETTINGS = {
     "length_guard_max_paragraphs": 4,
     "character_library_view": "grid",
     "character_library_sort": "time-added",
+    "show_editor_diff": 1,
 }
 
 SEED_PHRASE_BANK = [
@@ -340,7 +341,8 @@ async def init_db():
                 reasoning_enabled_passes TEXT NOT NULL DEFAULT '{"director":true,"writer":false,"editor":false}',
                 active_persona_id INTEGER REFERENCES user_personas(id) ON DELETE SET NULL,
                 character_library_view TEXT NOT NULL DEFAULT 'grid',
-                character_library_sort TEXT NOT NULL DEFAULT 'time-added'
+                character_library_sort TEXT NOT NULL DEFAULT 'time-added',
+                show_editor_diff INTEGER NOT NULL DEFAULT 1
             );
 
             CREATE TABLE IF NOT EXISTS mood_fragments (
@@ -487,6 +489,10 @@ async def init_db():
             await db.execute(
                 "ALTER TABLE settings ADD COLUMN character_library_sort TEXT NOT NULL DEFAULT 'time-added'"
             )
+        if "show_editor_diff" not in existing_cols:
+            await db.execute(
+                "ALTER TABLE settings ADD COLUMN show_editor_diff INTEGER NOT NULL DEFAULT 1"
+            )
 
         # Migration for director_state keywords column
         director_cols = {
@@ -625,6 +631,7 @@ async def update_settings(data: dict) -> dict:
             "active_persona_id",
             "character_library_view",
             "character_library_sort",
+            "show_editor_diff",
         ]
         json_fields = {"enabled_tools", "reasoning_enabled_passes"}
         sets = []
