@@ -30,7 +30,7 @@ const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10 MB
 const MAX_AVATAR_SIZE = 5 * 1024 * 1024; // 5 MB
 const MIN_AVATAR_DIMENSION = 200;
 const ALLOWED_IMAGE_MIMES = ["image/png", "image/jpeg", "image/webp", "image/gif"];
-const FRAGMENT_ID_REGEX = /^[a-z0-9][a-z0-9-]*$/;
+const FRAGMENT_ID_REGEX = /^[a-z0-9][a-z0-9_-]*$/;
 const VALID_URL_REGEX = /^https?:\/\/.+$/;
 
 // ── Generic Validators ──
@@ -327,7 +327,7 @@ export function validateMoodFragment(data) {
     id,
     FRAGMENT_ID_REGEX,
     "ID",
-    "lowercase letters, numbers, and hyphens (must start with letter or number)",
+    "lowercase letters, numbers, hyphens, and underscores (must start with letter or number)",
   );
   if (!idCheck.valid) return idCheck;
 
@@ -368,7 +368,7 @@ export function validateDirectorFragment(data) {
     id,
     FRAGMENT_ID_REGEX,
     "ID",
-    "lowercase letters, numbers, and hyphens (must start with letter or number)",
+    "lowercase letters, numbers, hyphens, and underscores (must start with letter or number)",
   );
   if (!idCheck.valid) return idCheck;
 
