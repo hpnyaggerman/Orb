@@ -818,9 +818,41 @@ function agentPayload() {
 
 // ── Send Message
 export async function sendMessage() {
+  if (!S.activeConvId || S.isStreaming) return;
+
   const inp = $("chat-input");
   let content = inp.value.trim();
-  if (!content || !S.activeConvId || S.isStreaming) return;
+
+  // Guard against double user turns: if the last message is already from the user,
+  // ask the backend to generate a response for it without creating a new message.
+  const lastMsg = S.messages[S.messages.length - 1];
+  if (lastMsg?.role === "user" && lastMsg.id) {
+    inp.value = "";
+    inp.style.height = "auto";
+    setStreaming(true);
+    setGenerationPhase("pending");
+    $("send-btn").disabled = true;
+    renderMessages();
+    const ct = $("chat-messages");
+    const msgDiv = createStreamingDiv();
+    S.abortController = new AbortController();
+    try {
+      const resp = await fetch("/api" + convUrl(S.activeConvId, "continue"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(agentPayload()),
+        signal: S.abortController.signal,
+      });
+      await processSSEStream(resp, ct, msgDiv, S.abortController.signal);
+    } catch (e) {
+      if (e.name === "AbortError") S.wasAborted = true;
+      else toast("Connection error: " + e.message, true);
+    }
+    await afterStream();
+    return;
+  }
+
+  if (!content) return;
 
   // Resolve {{user}} and {{char}} placeholders before sending
   content = resolvePlaceholders(content);

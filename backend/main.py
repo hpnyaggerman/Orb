@@ -68,6 +68,7 @@ from .database import (
     update_director_fragment,
     delete_director_fragment,
     reset_to_defaults,
+    get_messages,
 )
 import asyncio
 from .orchestrator import handle_turn, handle_regenerate
@@ -1024,6 +1025,28 @@ async def api_send_message(cid: str, data: SendMessage, request: Request):
             handle_turn(
                 cid, data.content, attachments=attachments, client_ref=client_ref
             ),
+            request,
+            client_ref=client_ref,
+            cid=cid,
+        ),
+        media_type="text/event-stream",
+    )
+
+
+@app.post("/api/conversations/{cid}/continue")
+async def api_continue_from_user(cid: str, request: Request, data: Optional[RegenerateMsg] = None):
+    """Generate an assistant response for the current user turn without creating a new message."""
+    conv = await get_conversation(cid)
+    if not conv:
+        raise HTTPException(404, "Conversation not found")
+    messages = await get_messages(cid)
+    if not messages or messages[-1]["role"] != "user":
+        raise HTTPException(400, "Last message is not a user message")
+    user_content = messages[-1]["content"]
+    client_ref: list = []
+    return _CleanupStreamingResponse(
+        _sse_stream(
+            handle_turn(cid, user_content, skip_user_persist=True, client_ref=client_ref),
             request,
             client_ref=client_ref,
             cid=cid,
