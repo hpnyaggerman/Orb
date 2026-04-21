@@ -2305,22 +2305,40 @@ label {
 
 .cb-option.active { background: var(--bg-hover); }
 
-.cb-create-row {
+.cb-option {
   display: flex;
   align-items: center;
-  gap: 5px;
-  padding: 6px 8px;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 12px;
-  color: var(--accent);
-  font-weight: 500;
-  border-top: 1px solid var(--border);
-  margin-top: 2px;
-  transition: background 80ms;
+  justify-content: space-between;
 }
 
-.cb-create-row.active { background: var(--accent-glow); }
+.cb-option-text {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.cb-delete-btn {
+  opacity: 0.5;
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 0 4px;
+  border-radius: 2px;
+  transition: opacity 80ms, color 80ms;
+}
+
+.cb-delete-btn:hover {
+  opacity: 1;
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
+.cb-option:hover .cb-delete-btn {
+  opacity: 1;
+}
 
 .cb-empty {
   padding: 14px;

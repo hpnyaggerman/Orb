@@ -197,12 +197,73 @@ function initComboboxes() {
   _comboboxCleanups.forEach((fn) => fn());
   _comboboxCleanups = [];
   const epRoot = document.querySelector('[data-combobox="endpoint_url"]');
-  if (epRoot) initCombobox(epRoot, () => S.endpoints.map((e) => e.url));
+  if (epRoot) initCombobox(epRoot, () => S.endpoints.map(e => ({ value: e.url, id: e.id, type: 'endpoint' })));
   const mdRoot = document.querySelector('[data-combobox="model_name"]');
-  if (mdRoot) initCombobox(mdRoot, () => S.modelConfigs.map((m) => m.model_name));
+  if (mdRoot) initCombobox(mdRoot, () => S.modelConfigs.map(m => ({ value: m.model_name, id: m.id, type: 'model' })));
 }
 
-function initCombobox(rootEl, getOptions) {
+// Global delete function for combobox items
+window.deleteComboboxItem = function(btn, type, id) {
+  const typeName = type === 'endpoint' ? 'endpoint' : 'model configuration';
+  showConfirmModal(
+    {
+      title: `Delete ${typeName}?`,
+      message: `Are you sure you want to delete this ${typeName}? This action cannot be undone.`,
+      confirmText: "Delete",
+      confirmClass: "btn-danger"
+    },
+    async () => {
+      try {
+        let wasActive = false;
+        if (type === 'endpoint') {
+          await api.del(`/endpoints/${id}`);
+          // Remove from S.endpoints
+          const index = S.endpoints.findIndex(e => e.id === id);
+          if (index > -1) S.endpoints.splice(index, 1);
+          // If this was the active endpoint, clear active
+          if (S.activeEndpointId === id) {
+            S.activeEndpointId = null;
+            S.activeModelConfigId = null;
+            S.modelConfigs = [];
+            wasActive = true;
+          }
+        } else if (type === 'model') {
+          await api.del(`/models/${id}`);
+          // Remove from S.modelConfigs
+          const index = S.modelConfigs.findIndex(m => m.id === id);
+          if (index > -1) S.modelConfigs.splice(index, 1);
+          // If this was the active model config, clear active
+          if (S.activeModelConfigId === id) {
+            S.activeModelConfigId = null;
+            wasActive = true;
+          }
+        }
+        
+        // If the deleted item was active, clear the corresponding combobox input
+        if (wasActive) {
+          const inputSelector = type === 'endpoint' ? '[data-key="endpoint_url"]' : '[data-key="model_name"]';
+          const input = document.querySelector(inputSelector);
+          if (input) {
+            input.value = '';
+            // Trigger change event to save empty value
+            input.dispatchEvent(new Event('change', { bubbles: true }));
+          }
+        }
+        
+        // Re-render both comboboxes
+        initComboboxes();
+        // Update datalists
+        populateEndpointDatalist();
+        populateModelDatalist();
+        toast("Deleted");
+      } catch (e) {
+        toast("Failed to delete: " + e.message, true);
+      }
+    }
+  );
+};
+
+function initCombobox(rootEl, getItems) {
   const input = rootEl.querySelector(".cb-input");
   const control = rootEl.querySelector(".cb-control");
   const dropdown = rootEl.querySelector(".cb-dropdown");
@@ -211,32 +272,39 @@ function initCombobox(rootEl, getOptions) {
   let isOpen = false;
 
   function getFiltered() {
-    // Always return all options, no filtering (for creating new records)
-    return getOptions();
-  }
-
-  function needsCreate() {
-    // Create button removed - clicking outside/create on blur handles record creation
-    return false;
+    // Always return all items, no filtering (for creating new records)
+    return getItems();
   }
 
   function render() {
-    const filtered = getFiltered();
-    const total = filtered.length;
+    const items = getFiltered();
+    const total = items.length;
     activeIdx = Math.max(-1, Math.min(activeIdx, total - 1));
     const q = input.value.trim();
     if (!total) {
       list.innerHTML = '<div class="cb-empty">No saved options</div>';
     } else {
-      list.innerHTML = filtered
+      list.innerHTML = items
         .map(
-          (opt, i) =>
-            `<div class="cb-option${i === activeIdx ? " active" : ""}" data-value="${esc(opt)}">${highlightMatch(opt, q)}</div>`,
+          (item, i) => {
+            const value = item.value;
+            const id = item.id;
+            const type = item.type;
+            return `
+              <div class="cb-option${i === activeIdx ? " active" : ""}" data-value="${esc(value)}" data-id="${id}" data-type="${type}">
+                <span class="cb-option-text">${highlightMatch(value, q)}</span>
+                <button class="cb-delete-btn" title="Delete" onclick="event.stopPropagation(); deleteComboboxItem(this, '${type}', ${id})">×</button>
+              </div>`;
+          }
         )
         .join("");
     }
     list.querySelectorAll(".cb-option").forEach((el, i) => {
-      el.onmousedown = (e) => { e.preventDefault(); selectVal(el.dataset.value); };
+      el.onmousedown = (e) => {
+        if (e.target.classList.contains('cb-delete-btn')) return;
+        e.preventDefault();
+        selectVal(el.dataset.value);
+      };
       el.onmouseenter = () => { activeIdx = i; render(); };
     });
   }
