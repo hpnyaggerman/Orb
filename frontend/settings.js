@@ -106,7 +106,7 @@ export function renderSettings() {
               </div>`;
     }
     if (f.k === "endpoint_url" || f.k === "model_name") {
-      const ph = f.k === "endpoint_url" ? "URL or select saved…" : "Model or select saved…";
+      const ph = f.k === "endpoint_url" ? "http://localhost:5000/v1" : "google/gemma-4-31b-it";
       return `<div class="field"><label>${f.l}</label>
         <div class="cb-root" data-combobox="${f.k}">
           <div class="cb-control">
