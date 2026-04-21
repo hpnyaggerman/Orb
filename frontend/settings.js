@@ -209,6 +209,7 @@ function initCombobox(rootEl, getOptions) {
   const list = rootEl.querySelector(".cb-list");
   let activeIdx = -1;
   let isOpen = false;
+  let ignoreNextFocus = false;
 
   function getFiltered() {
     // Always return all options, no filtering (for creating new records)
@@ -284,7 +285,10 @@ function initCombobox(rootEl, getOptions) {
     input.dispatchEvent(new Event("change", { bubbles: true }));
   }
 
-  input.addEventListener("focus", openDropdown);
+  input.addEventListener("focus", () => {
+    if (!ignoreNextFocus) openDropdown();
+    ignoreNextFocus = false;
+  });
   input.addEventListener("input", () => { if (!isOpen) openDropdown(); else render(); });
   input.addEventListener("keydown", (e) => {
     const filtered = getFiltered();
@@ -303,8 +307,12 @@ function initCombobox(rootEl, getOptions) {
   control.addEventListener("mousedown", (e) => {
     if (e.target === input) return;
     e.preventDefault();
-    input.focus();
+    // Set flag to ignore the focus event that will be triggered by input.focus()
+    ignoreNextFocus = true;
+    // Toggle dropdown
     if (isOpen) closeDropdown(); else openDropdown();
+    // Focus input after a tiny delay to ensure ignoreNextFocus is respected
+    setTimeout(() => input.focus(), 0);
   });
   const onDocDown = (e) => { if (!rootEl.contains(e.target)) closeDropdown(); };
   document.addEventListener("mousedown", onDocDown);
@@ -332,13 +340,16 @@ export async function loadModelConfigs(endpointId) {
   if (!endpointId) {
     S.modelConfigs = [];
     populateModelDatalist();
+    initComboboxes(); // Re-initialize comboboxes
     return;
   }
   try {
     S.modelConfigs = await api.get(`/endpoints/${endpointId}/models`);
     populateModelDatalist();
+    initComboboxes(); // Re-initialize comboboxes with loaded model configs
   } catch (e) {
     S.modelConfigs = [];
+    initComboboxes(); // Re-initialize comboboxes even on error
   }
 }
 

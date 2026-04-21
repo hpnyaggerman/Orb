@@ -2214,7 +2214,7 @@ label {
   border-radius: var(--radius);
   padding: 0 8px;
   min-height: 34px;
-  cursor: text;
+  cursor: default;
   transition: border-color .15s, box-shadow .15s;
 }
 
@@ -2241,6 +2241,7 @@ label {
   color: var(--text-primary);
   outline: none;
   transition: none;
+  cursor: text;
 }
 
 .cb-root .cb-input:hover,
@@ -2250,12 +2251,16 @@ label {
 
 .cb-arrow {
   color: var(--text-secondary);
-  pointer-events: none;
-  transition: transform 140ms cubic-bezier(.2,0,0,1);
+  transition: transform 140ms cubic-bezier(.2,0,0,1), color 140ms;
   display: flex;
   align-items: center;
   margin-left: 4px;
   flex-shrink: 0;
+  cursor: pointer;
+}
+
+.cb-control:hover .cb-arrow {
+  color: var(--text-primary);
 }
 
 .cb-control.open .cb-arrow { transform: rotate(180deg); }
