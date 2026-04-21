@@ -3,6 +3,7 @@ import { $, esc, toast } from "./utils.js";
 import { api } from "./api.js";
 import { showModal, closeModal, showConfirmModal } from "./modal.js";
 import { validate } from "./validate.js";
+import { renderMessages } from "./chat.js";
 
 // ── Theme
 const THEMES = [
@@ -368,6 +369,7 @@ export async function toggleLengthGuard(on) {
 
 export async function toggleShowEditorDiff(on) {
   S.showEditorDiff = on;
+  renderMessages();
   renderToolsPanel();
   try {
     S.settings = await api.put("/settings", { show_editor_diff: on });
@@ -415,15 +417,6 @@ export function renderToolsPanel() {
   $("tools-panel-btn").style.opacity = S.agentEnabled ? "1" : "0.5";
   const toolCards = TOOL_DEFS.map((t) => {
     const on = !!S.enabledTools[t.id];
-    const extras =
-      t.id === "editor_apply_patch" && on
-        ? `<div class="lg-config">
-             <label class="lg-enforce-label" title="Highlight edited sentences with green/red diff strikethrough. Turn off for clean output.">
-               <input type="checkbox" ${S.showEditorDiff ? "checked" : ""} onchange="toggleShowEditorDiff(this.checked)">
-               Show diff highlights
-             </label>
-           </div>`
-        : "";
     return `<div class="tool-card ${on ? "tool-on" : ""}">
       <div class="tool-card-header">
         <span class="tool-card-name">${t.name}</span>
@@ -433,7 +426,6 @@ export function renderToolsPanel() {
         </label>
       </div>
       <div class="tool-card-desc">${t.desc}</div>
-      ${extras}
     </div>`;
   }).join("");
 
@@ -471,7 +463,14 @@ export function renderToolsPanel() {
     ${lgConfig}
   </div>`;
 
-  $("tools-list").innerHTML = toolCards + lengthGuardCard;
+  const diffToggleRow = `<div class="tool-card">
+    <label class="lg-enforce-label" title="Show green/red diff overlay when the editor rewrites sentences.">
+      <input type="checkbox" ${S.showEditorDiff ? "checked" : ""} onchange="toggleShowEditorDiff(this.checked)">
+      Highlight editor changes
+    </label>
+  </div>`;
+
+  $("tools-list").innerHTML = toolCards + lengthGuardCard + diffToggleRow;
 }
 
 // ── Phrase Bank

@@ -107,14 +107,14 @@ function finalizeStreamingDiv(lastMsg) {
   div.setAttribute("data-msg-id", lastMsg.id);
   body.removeAttribute("id");
 
-  const bodyHtml = S.pendingRefineDiff
+  const bodyHtml = S.pendingRefineDiff && S.showEditorDiff
     ? formatProseWithDiff(S.pendingRefineDiff.ops)
     : formatProse(resolvePlaceholders(lastMsg.content));
   smoothUpdateBody(body, bodyHtml);
 
   const tb = div.querySelector(".msg-toolbar");
   if (tb) {
-    const diffBtn = S.pendingRefineDiff?.msgId && lastMsg.id === S.pendingRefineDiff.msgId
+    const diffBtn = S.pendingRefineDiff?.msgId && lastMsg.id === S.pendingRefineDiff.msgId && S.showEditorDiff
       ? `<button onclick="clearRefineDiff()" title="Clear diff highlights" class="btn-clear-diff">✕ Diff</button>`
       : "";
     tb.innerHTML = `<button onclick="startEdit(${lastMsg.id})" title="Edit">✏️ Edit</button>
@@ -379,7 +379,7 @@ export function renderMessages() {
           ${m.id ? `<button onclick="startEdit(${m.id})" title="Edit">✏️ Edit</button>` : `<button disabled>✏️ Edit</button>`}
           ${m.role === "assistant" ? (m.id ? `<button onclick="regenerate(${m.id})" title="Regenerate">🔄 Regen</button>` : `<button disabled>🔄 Regen</button>`) : ""}
           ${m.id ? `<button onclick="deleteMessage(${m.id})" title="Delete message, siblings, and all children" style="color:var(--red)">✕ Del</button>` : `<button disabled style="color:var(--red)">✕ Del</button>`}
-          ${S.pendingRefineDiff?.msgId && m.id === S.pendingRefineDiff.msgId ? `<button onclick="clearRefineDiff()" title="Clear diff highlights" class="btn-clear-diff">✕ Diff</button>` : ""}
+          ${S.pendingRefineDiff?.msgId && m.id === S.pendingRefineDiff.msgId && S.showEditorDiff ? `<button onclick="clearRefineDiff()" title="Clear diff highlights" class="btn-clear-diff">✕ Diff</button>` : ""}
         </div>`;
         const body = isEditing
           ? `
@@ -393,7 +393,7 @@ export function renderMessages() {
           </div>
         </div>`
           : `<div class="msg-body">${
-              S.pendingRefineDiff?.msgId && m.id === S.pendingRefineDiff.msgId
+              S.pendingRefineDiff?.msgId && m.id === S.pendingRefineDiff.msgId && S.showEditorDiff
                 ? formatProseWithDiff(S.pendingRefineDiff.ops)
                 : formatProse(resolvePlaceholders(m.content))
             }</div>`;
@@ -766,7 +766,7 @@ async function processSSEStream(resp, container, msgDiv, signal) {
             rewrittenResponse = text;
             S.streamingContent = text;
             if (S.streamingBodyEl) {
-              const html = S.pendingRefineDiff ? formatProseWithDiff(S.pendingRefineDiff.ops) : formatProse(text);
+              const html = S.pendingRefineDiff && S.showEditorDiff ? formatProseWithDiff(S.pendingRefineDiff.ops) : formatProse(text);
               smoothUpdateBody(S.streamingBodyEl, html);
             }
             scrollToBottom();
@@ -823,12 +823,11 @@ function handleSSEEvent(event, data, container, msgDiv, onToken, onRewrite) {
       _advanceReasoningPass(2); // writer done, editor starting → move to Editor dot
       try {
         const refined = JSON.parse(data).refined_text;
-        if (S.showEditorDiff) {
-          // S.streamingContent still holds the writer's unrefined text at this point
-          const original = resolvePlaceholders(S.streamingContent || "");
-          const refinedResolved = resolvePlaceholders(refined);
-          S.pendingRefineDiff = { original, ops: sentenceDiff(original, refinedResolved) };
-        }
+        // Always compute the diff ops so that toggling showEditorDiff is fully reversible
+        // without requiring re-generation. Rendering sites decide whether to display.
+        const original = resolvePlaceholders(S.streamingContent || "");
+        const refinedResolved = resolvePlaceholders(refined);
+        S.pendingRefineDiff = { original, ops: sentenceDiff(original, refinedResolved) };
         onRewrite(refined);
       } catch (_) {}
       break;
