@@ -103,6 +103,10 @@ function finalizeStreamingDiv(lastMsg) {
   if (!body) return false;
   const div = body.closest(".message");
   if (!div || !lastMsg || lastMsg.role !== "assistant" || !lastMsg.id) return false;
+  // Streaming box may be detached from the DOM (e.g. hideUntilBaked toggle is on,
+  // or editing-during-stream cleared it). In that case, fall through so the caller
+  // runs a full renderMessages() which will draw the baked message from S.messages.
+  if (!document.body.contains(div)) return false;
 
   div.setAttribute("data-msg-id", lastMsg.id);
   body.removeAttribute("id");
@@ -408,7 +412,7 @@ export function renderMessages() {
   if (badgeEl) ct.appendChild(badgeEl);
   // Don't show streaming box when editing a message (looks ugly)
   // Also hide for a short time after cancelling edit during streaming
-  if (streamingEl && !S.editingMsgId && !S.hideStreamingBox) ct.appendChild(streamingEl);
+  if (streamingEl && !S.editingMsgId && !S.hideStreamingBox && !S.hideUntilBaked) ct.appendChild(streamingEl);
 }
 
 export function startEdit(msgId) {
@@ -754,7 +758,7 @@ async function processSSEStream(resp, container, msgDiv, signal) {
           () => {
             if (firstToken) {
               firstToken = false;
-              container.appendChild(msgDiv);
+              if (!S.hideUntilBaked) container.appendChild(msgDiv);
               if (S.streamingBodyEl) S.streamingBodyEl.innerHTML = "";
             }
             fullResponse += data.replace(/\\n/g, "\n");

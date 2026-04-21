@@ -71,6 +71,9 @@ export async function loadSettings() {
   if (typeof S.settings.show_editor_diff === "number") S.showEditorDiff = S.settings.show_editor_diff !== 0;
   else if (typeof S.settings.show_editor_diff === "boolean") S.showEditorDiff = S.settings.show_editor_diff;
 
+  if (typeof S.settings.hide_streaming_until_baked === "number") S.hideUntilBaked = S.settings.hide_streaming_until_baked !== 0;
+  else if (typeof S.settings.hide_streaming_until_baked === "boolean") S.hideUntilBaked = S.settings.hide_streaming_until_baked;
+
   // Expand Settings section if endpoint_url is empty
   const settingsSection = $("settings-section");
   if (settingsSection && (!S.settings.endpoint_url || S.settings.endpoint_url.trim() === "")) {
@@ -378,6 +381,16 @@ export async function toggleShowEditorDiff(on) {
   }
 }
 
+export async function toggleHideUntilBaked(on) {
+  S.hideUntilBaked = on;
+  renderToolsPanel();
+  try {
+    S.settings = await api.put("/settings", { hide_streaming_until_baked: on });
+  } catch (e) {
+    toast("Failed to save hide-until-baked state", true);
+  }
+}
+
 export async function toggleLengthGuardEnforce(on) {
   S.lengthGuardEnforce = on;
   S.enabledTools.length_guard_enforce = on;
@@ -470,7 +483,14 @@ export function renderToolsPanel() {
     </label>
   </div>`;
 
-  $("tools-list").innerHTML = toolCards + lengthGuardCard + diffToggleRow;
+  const hideStreamingRow = `<div class="tool-card">
+    <label class="lg-enforce-label" title="Hide the assistant's reply while the pipeline (director -> writer -> editor) runs. The phase indicator at the top stays visible.">
+      <input type="checkbox" ${S.hideUntilBaked ? "checked" : ""} onchange="toggleHideUntilBaked(this.checked)">
+      Hide streaming message until baked
+    </label>
+  </div>`;
+
+  $("tools-list").innerHTML = toolCards + lengthGuardCard + diffToggleRow + hideStreamingRow;
 }
 
 // ── Phrase Bank

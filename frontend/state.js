@@ -39,6 +39,7 @@ export const S = {
   reasoningEnabled: { director: true, writer: false, editor: false },
   pendingRefineDiff: null, // {original, ops} set on writer_rewrite, cleared on next stream
   showEditorDiff: true, // when false, editor rewrites apply silently (no inline diff highlights)
+  hideUntilBaked: false, // when true, in-flight assistant message stays hidden until afterStream() runs
   autoscrollEnabled: true, // whether to auto-scroll chat to bottom during streaming
   _programmaticScroll: false, // true while scrollToBottom() is executing — suppresses scroll listener
 };
