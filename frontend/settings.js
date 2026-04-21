@@ -336,10 +336,10 @@ function initCombobox(rootEl, getItems) {
     dropdown.hidden = true;
   }
 
-  function selectVal(val) {
+  async function selectVal(val) {
     input.value = val;
     closeDropdown();
-    onHybridInput(input);
+    await onHybridInput(input);
     input.dispatchEvent(new Event("change", { bubbles: true }));
   }
 
@@ -470,24 +470,38 @@ async function syncModelConfigRecord(modelName, hyperparams) {
   }
 }
 
-export function onHybridInput(el) {
+export async function onHybridInput(el) {
   const key = el.dataset.key;
   if (key === "endpoint_url") {
     const match = S.endpoints.find((e) => e.url === el.value);
     if (!match) return;
+    // Pin active endpoint early so the model cascade can use it
+    S.activeEndpointId = match.id;
+    // Fresh fetch so api_key is always current
+    try {
+      const ep = await api.get(`/endpoints/${match.id}`);
+      Object.assign(match, ep);
+    } catch (e) {
+      console.error("Failed to fetch endpoint:", e);
+    }
     const apiKeyEl = document.querySelector('[data-key="api_key"]');
-    if (apiKeyEl) apiKeyEl.value = match.api_key;
-    loadModelConfigs(match.id).then(() => {
-      const modelEl = document.querySelector('[data-key="model_name"]');
-      if (!modelEl) return;
-      const matchModel = S.modelConfigs.find((m) => m.model_name === modelEl.value);
-      if (matchModel) {
-        fillModelConfigFields(matchModel);
-      } else if (S.modelConfigs.length > 0) {
-        modelEl.value = S.modelConfigs[0].model_name;
-        fillModelConfigFields(S.modelConfigs[0]);
-      }
-    });
+    if (apiKeyEl) apiKeyEl.value = match.api_key || "";
+    // Load models for this endpoint
+    await loadModelConfigs(match.id);
+    // Auto-select: prefer the stored active model config, fall back to first
+    const modelEl = document.querySelector('[data-key="model_name"]');
+    if (!modelEl || !S.modelConfigs.length) return;
+    const activeModel =
+      S.modelConfigs.find((m) => m.id === S.activeModelConfigId) || S.modelConfigs[0];
+    modelEl.value = activeModel.model_name;
+    fillModelConfigFields(activeModel);
+    // Persist the chosen model config
+    S.activeModelConfigId = activeModel.id;
+    try {
+      await api.put("/settings", { active_model_config_id: activeModel.id });
+    } catch (e) {
+      console.error("Failed to save active model config:", e);
+    }
   } else if (key === "model_name") {
     const match = S.modelConfigs.find((m) => m.model_name === el.value);
     if (match) fillModelConfigFields(match);
