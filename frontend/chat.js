@@ -387,9 +387,7 @@ export function renderMessages() {
           <textarea id="edit-textarea-${m.id}" rows="5">${esc(m.content)}</textarea>
           <div class="msg-edit-actions">
             <button class="btn btn-sm" onclick="cancelEdit()">Cancel</button>
-            <button class="btn btn-sm btn-accent" onclick="saveEdit(${m.id},'${m.role}')">
-              Save${m.role === "user" ? " & Regen" : ""}
-            </button>
+            <button class="btn btn-sm btn-accent" onclick="saveEdit(${m.id},'${m.role}')">Save</button>
           </div>
         </div>`
           : `<div class="msg-body">${
@@ -509,77 +507,14 @@ export async function saveEdit(msgId, role) {
   const trimmed = content.trim();
   S.editingMsgId = null;
 
-  // If "Save & Regen" was clicked but the user message wasn't changed,
-  // treat it as a plain regen instead of creating a duplicate branch.
-  if (role === "user") {
-    const msg = S.messages.find((m) => m.id === msgId);
-    if (msg && msg.content === content) {
-      const idx = S.messages.findIndex((m) => m.id === msgId);
-      const nextAssistant = S.messages.slice(idx + 1).find((m) => m.role === "assistant" && m.id);
-      if (nextAssistant) {
-        renderMessages();
-        return regenerate(nextAssistant.id);
-      }
-      // No assistant message after this user message; fall through to normal edit+regen
-    }
-  }
-
-  if (role === "assistant") {
-    try {
-      await api.post(convUrl(S.activeConvId, "messages", msgId, "edit"), { content, regenerate: false });
-      S.messages = await api.get(convUrl(S.activeConvId, "messages"));
-      renderMessages();
-      toast("Message edited");
-    } catch (e) {
-      toast(e.message, true);
-    }
-    return;
-  }
-
-  const msg = S.messages.find((m) => m.id === msgId);
-  if (msg) msg.content = content;
-  const idx = S.messages.findIndex((m) => m.id === msgId);
-  S.streamCutoffIndex = idx >= 0 ? idx + 1 : S.messages.length;
-
-  setStreaming(true);
-  setGenerationPhase("directing");
-  $("send-btn").disabled = true;
-  renderMessages();
-
-  const ct = $("chat-messages");
-  const editedEl = ct.querySelector(`[data-msg-id="${msgId}"]`);
-  if (editedEl) {
-    let next = editedEl.nextElementSibling;
-    while (next) {
-      const n = next.nextElementSibling;
-      next.remove();
-      next = n;
-    }
-  }
-
-  const msgDiv = createStreamingDiv();
-  S.abortController = new AbortController();
   try {
-    const resp = await fetch("/api" + convUrl(S.activeConvId, "messages", msgId, "edit"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content, regenerate: true, ...agentPayload() }),
-      signal: S.abortController.signal,
-    });
-    if (resp.headers.get("content-type")?.includes("text/event-stream")) {
-      await processSSEStream(resp, ct, msgDiv, S.abortController.signal);
-    } else {
-      S.messages = await api.get(convUrl(S.activeConvId, "messages"));
-      renderMessages();
-    }
+    await api.post(convUrl(S.activeConvId, "messages", msgId, "edit"), { content, regenerate: false });
+    S.messages = await api.get(convUrl(S.activeConvId, "messages"));
+    renderMessages();
+    toast("Message edited");
   } catch (e) {
-    if (e.name === "AbortError") {
-      S.wasAborted = true;
-    } else {
-      toast("Error: " + e.message, true);
-    }
+    toast(e.message, true);
   }
-  await afterStream();
 }
 
 // ── Streaming Helpers

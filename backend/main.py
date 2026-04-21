@@ -792,8 +792,8 @@ async def api_edit_message(cid: str, msg_id: int, data: EditMessage, request: Re
     if not original or original["conversation_id"] != cid:
         raise HTTPException(404, "Message not found")
 
-    # For assistant edits with no regeneration, just update the content in-place
-    if original["role"] == "assistant" and not data.regenerate:
+    # For edits with no regeneration, just update the content in-place
+    if not data.regenerate:
         await update_message_content(msg_id, data.content)
         return {"ok": True}
 
