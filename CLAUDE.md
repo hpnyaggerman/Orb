@@ -90,3 +90,74 @@ This clone is a **personal fork** of the GitHub upstream. `origin` points to `gi
 History: the project was originally hosted on GitLab, with `./scripts/mirror_to_gh.sh` maintaining a GitHub mirror under `origin-gh`. The original developer has since moved development to GitHub, dissolving the mirror relationship. `scripts/mirror_to_gh.sh` is **legacy** -- kept in the tree for historical reference but no longer part of the sync workflow. `origin-gh` no longer exists as a configured remote.
 
 `nyagman-dev` is a personal dev-feature branch -- **not** an upstream PR branch. It's a rolling work tree where new features land; individual changes may later be cherry-picked onto dedicated PR branches when ready to propose upstream. Branched from `46a8554` ("compact chat UI") on the GitHub fork.
+
+## Upstream sync workflow
+
+Bringing `main` into `nyagman-dev` uses a **prep-then-merge** pattern. The goal is a clean before/after boundary: every change made in anticipation of the merge lands as its own commit on `nyagman-dev` first, then `git merge --no-ff main` brings main's SHAs in unchanged under a single merge commit. Main's commits remain reachable via `<merge-commit>^2`, so future branches can still fork off them.
+
+Two rules govern everything below:
+
+- **Main takes precedence.** Branch bends to main's shape, not the other way around. Every prep commit and every conflict resolution is an exercise in adapting branch to main's new direction. Branch-side design is preserved only where it is additive and compatible with main; where it conflicts, branch's version gets adapted or dropped, not preserved against main.
+- **Design decisions require a user prompt.** Throughout prep and conflict resolution, choices routinely surface that have multiple reasonable shapes: which convention to promote to, how to adapt a function branch rewrote that main also rewrote, which of several valid interleaves to use, whether to drop a branch-side abstraction main has superseded. Any such choice that is not trivially obvious from main's shape alone must be put to the user before committing. Prompting is the default and mandatory behavior, not a fallback.
+
+### Phase A: Prep commits
+
+Start by reading main's commits since divergence. Inventory every change whose blast radius touches branch -- new or renamed files, schema changes, function signature changes, module splits or renames, naming conventions, and any logic branch also modified.
+
+**Prep exists for the class of problems git's auto-merge cannot detect.** A 3-way textual merge catches overlapping edits to the same hunk; it does **not** catch semantic collisions where each side's edit is clean in isolation but the combined result breaks at runtime or violates the project's patterns. These bite after a green merge. Prep commits exist to preempt them.
+
+Then, on branch and before the merge, land one commit per class of preemptive adaptation. The merge commit itself should be a mechanical interleave, not the place where design decisions happen under pressure.
+
+Common prep categories:
+
+1. **Collision resolution for sequentially-allocated identifiers.** Migration numbers, fixture IDs, enum slots -- any convention where both sides may have independently minted the same value. Rename branch's to the next free slot; confirm the runtime semantics of the rename (does the system key by name, number, or content hash?) and whether any already-recorded state needs reconciling.
+
+2. **Normalize against main's conventions.** If branch carries an ad-hoc pattern main has since formalized (inline schema patches vs. formal migrations, per-call logging vs. a central logger, etc.), promote branch's version to match main's shape so the merged result is consistent.
+
+3. **Pre-stage logic-conflict hotspots.** Functions both sides rewrote survive the textual merge but risk producing a Frankenstein mix. Where possible, rebase branch's change onto main's new shape pre-merge. Where not, note the location so Phase B's manual merge knows which side is the base.
+
+4. **Signature and call-site adaptation.** If main renamed a symbol, changed a function signature, or moved a module, update branch's call sites now, not at merge time. Git will auto-merge cleanly and then crash at runtime.
+
+5. **Refresh `CLAUDE.md`.** Read main's tree (`git show main:...`) and document its architectural additions plus any repo-layout changes. Grounds the prose in what actually landed.
+
+6. **Run formatters last.** `./scripts/format.sh` (black + biome). Skipping this pollutes the merge-commit boundary with a trailing post-merge style commit.
+
+### Phase B: Merge
+
+```bash
+git merge --no-ff main
+```
+
+Expect content conflicts in files both sides actively edited. Resolution follows the precedence rule above: where branch and main disagree on the *shape* of something, main wins and branch is bent to fit. The **interleave / take union** shortcut applies only to strictly additive conflicts -- both sides added real, disjoint content and both sides' additions should stay. Typical additive sites:
+
+- Ordered lists in shared registries (migration list, route tables, plugin lists).
+- Field sets in shared data structures (settings dicts, Pydantic models, allowed-keys lists, CREATE TABLE column lists, default-value maps).
+- Guard blocks in shared init paths (inline ALTER guards, startup hooks, feature-flag switchboards).
+- Adjacent code additions in the same module where both sides extended disjoint surfaces.
+
+Manual merge is needed where both sides rewrote the same logic, and this is where the user-prompt rule matters most: if the "right" merged shape isn't obvious from main's side alone, stop and ask rather than guessing.
+
+### Phase C: Verify
+
+Run in order; only push after all pass:
+
+1. `./scripts/lint.sh` (flake8). `./scripts/format.sh` (black + biome) -- should be a no-op post-Prep 4.
+2. `./scripts/tests.sh` (full pytest). Integration tests covering main's new endpoints must pass.
+3. Fresh-DB smoke: delete `backend/data/app.db`, start the server, verify `schema_migrations` contains every migration in order and any new seed rows land.
+4. Server boot smoke: `curl` the canonical endpoints on both sides (branch's plus whichever routes main added).
+5. Manual UI smoke: exercise the toggles and flows that branch and main each touched.
+
+### History-rewrite safety net
+
+Fixing something after the merge (missed prep commit, message reword, ASCII cleanup) without re-resolving conflicts by hand:
+
+1. `git tag backup/<label> HEAD` before touching anything.
+2. Reset or `git rebase -i --rebase-merges` as needed. `--rebase-merges` preserves the 2-parent merge commit during replay.
+3. When the replayed merge commit re-hits conflicts, restore the already-known-good resolutions: `git checkout backup/<label> -- <conflicted-files>`. Git accepts the restored blobs as resolved once staged.
+4. `git diff backup/<label>` on the whole tree should show only the intended delta before dropping the tag.
+
+## Style: non-ASCII
+
+Branch-owned content -- code, comments, docstrings, string literals, commit messages, and markdown -- must be ASCII-only. Standard replacements: em-dash `—` -> `--`, right arrow `→` -> `->`, box-drawing `═` -> `=`, ellipsis `…` -> `...`, curly quotes -> straight.
+
+Don't touch main's non-ASCII. Characters that exist on main and appear on a branch-modified line (e.g. a non-ASCII char inside a UI template whose surrounding logic branch only gated) stay -- main owns them. The rule covers branch-introduced characters only.
