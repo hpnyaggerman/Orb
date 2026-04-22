@@ -87,6 +87,8 @@ function toggleSection(header) {
 }
 
 const MOBILE_SIDEBAR_BREAKPOINT = 900;
+let _mobileBackArmed = false;
+let _handlingMobilePop = false;
 
 function isMobileSidebarViewport() {
   return window.matchMedia(`(max-width: ${MOBILE_SIDEBAR_BREAKPOINT}px)`).matches;
@@ -100,6 +102,7 @@ function toggleMobileHeaderActions() {
   if (!isMobileSidebarViewport()) return;
   $("mobile-chat-actions-menu")?.classList.toggle("open");
   closeBurger();
+  armMobileBackIfNeeded();
 }
 
 function closeMobileHeaderActions() {
@@ -134,12 +137,65 @@ function closeMobileUtilityPanels() {
   syncMobilePanelState();
 }
 
+function hasOpenBaseModal() {
+  return Boolean($("modal-root")?.firstElementChild);
+}
+
+function hasOpenCropModal() {
+  return Boolean($("modal-crop-root")?.firstElementChild);
+}
+
+function hasOpenMobileOverlay() {
+  if (!isMobileSidebarViewport()) return false;
+  const app = $("app");
+  return Boolean(
+    hasOpenCropModal() ||
+      hasOpenBaseModal() ||
+      $("mobile-chat-actions-menu")?.classList.contains("open") ||
+      app?.classList.contains("mobile-sidebar-open") ||
+      app?.classList.contains("mobile-tools-open") ||
+      app?.classList.contains("mobile-inspector-open"),
+  );
+}
+
+function armMobileBackIfNeeded() {
+  if (_handlingMobilePop || !isMobileSidebarViewport() || _mobileBackArmed || !hasOpenMobileOverlay()) return;
+  history.pushState({ orbMobileOverlay: true }, "");
+  _mobileBackArmed = true;
+}
+
+function closeTopMobileOverlay() {
+  if (!isMobileSidebarViewport()) return false;
+  if (hasOpenCropModal()) {
+    closeCropModal();
+    return true;
+  }
+  if (hasOpenBaseModal()) {
+    closeModal();
+    return true;
+  }
+  if ($("mobile-chat-actions-menu")?.classList.contains("open")) {
+    closeMobileHeaderActions();
+    return true;
+  }
+  if ($("tools-panel")?.classList.contains("open") || $("inspector")?.classList.contains("open")) {
+    closeMobileUtilityPanels();
+    return true;
+  }
+  if ($("app")?.classList.contains("mobile-sidebar-open")) {
+    closeMobileSidebar();
+    return true;
+  }
+  return false;
+}
+
 function toggleMobileSidebar() {
   if (!isMobileSidebarViewport()) return;
   closeMobileUtilityPanels();
   closeMobileHeaderActions();
   $("app")?.classList.toggle("mobile-sidebar-open");
   closeBurger();
+  armMobileBackIfNeeded();
 }
 
 // ── Burger menu
@@ -209,16 +265,39 @@ window.addEventListener("resize", () => {
     closeMobileHeaderActions();
   }
   syncMobilePanelState();
+  armMobileBackIfNeeded();
 });
 
 const toolsPanel = $("tools-panel");
 const inspectorPanel = $("inspector");
 if (toolsPanel && inspectorPanel) {
-  const observer = new MutationObserver(syncMobilePanelState);
+  const observer = new MutationObserver(() => {
+    syncMobilePanelState();
+    if (!_handlingMobilePop) armMobileBackIfNeeded();
+  });
   observer.observe(toolsPanel, { attributes: true, attributeFilter: ["class"] });
   observer.observe(inspectorPanel, { attributes: true, attributeFilter: ["class"] });
 }
 syncMobilePanelState();
+
+const modalRoot = $("modal-root");
+const cropModalRoot = $("modal-crop-root");
+if (modalRoot || cropModalRoot) {
+  const overlayObserver = new MutationObserver(() => {
+    if (!_handlingMobilePop) armMobileBackIfNeeded();
+  });
+  if (modalRoot) overlayObserver.observe(modalRoot, { childList: true });
+  if (cropModalRoot) overlayObserver.observe(cropModalRoot, { childList: true });
+}
+
+window.addEventListener("popstate", () => {
+  _mobileBackArmed = false;
+  if (!isMobileSidebarViewport()) return;
+  _handlingMobilePop = true;
+  const closedAny = closeTopMobileOverlay();
+  _handlingMobilePop = false;
+  if (closedAny && hasOpenMobileOverlay()) armMobileBackIfNeeded();
+});
 
 // Attachments handling
 function handleAttachmentSelect(e) {
