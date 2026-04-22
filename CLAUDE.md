@@ -54,6 +54,13 @@ aiosqlite; DB at `backend/data/app.db`. Migrations are append-only. To add one: 
 
 Messages form a **branching tree** via `parent_id`. Conversations track their `active_leaf_id`; swiping = switching which leaf is active. Don't assume flat history -- use `_get_path_to_leaf()` or `get_messages()` which walk the tree.
 
+**Endpoints + model configs (save-slot storage).** Two normalized tables sit alongside the flat `settings` row:
+
+- `endpoints(id, url, api_key)` -- saved backend connection slots.
+- `model_configs(id, endpoint_id, model_name, system_prompt, temperature, min_p, top_k, top_p, repetition_penalty, max_tokens)` -- saved model configurations, each tied to one endpoint.
+
+`settings.active_endpoint_id` / `settings.active_model_config_id` reference the currently-selected records. The flat `settings.endpoint_url` / `settings.api_key` / `settings.model_name` / hyperparam columns remain the **runtime source of truth** (what the orchestrator reads per request); the normalized tables are save slots the UI cascades to/from when the user switches between configurations. Dual-write: `update_settings()` writes the flat row, and the frontend `saveSetting()` cascade mirrors the change into the relevant `endpoints` / `model_configs` row via `syncEndpointRecord()` / `syncModelConfigRecord()`. CRUD helpers live in `database.py` (`get_endpoints`, `create_endpoint`, `update_endpoint`, `delete_endpoint`, `get_model_configs`, `create_model_config`, `update_model_config`, `delete_model_config`).
+
 ### Character cards -- `backend/tavern_cards.py`
 
 Tavern Card v2 spec (PNG with base64 JSON in a `tEXt` chunk). Exported cards include an `orb_id` tag so re-importing relinks conversation history instead of creating a duplicate character.
@@ -62,10 +69,24 @@ Tavern Card v2 spec (PNG with base64 JSON in a `tEXt` chunk). Exported cards inc
 
 Single FastAPI app. Frontend served as static files from `frontend/`. Streaming endpoints use `StreamingResponse` over SSE. `_active_clients` dict (keyed by conversation ID) tracks in-flight LLM generations so `/stop` can cancel them mid-stream.
 
+Notable routes beyond the obvious CRUD:
+
+- `/api/endpoints`, `/api/endpoints/{id}`, `/api/endpoints/{id}/models` -- endpoint save-slot CRUD.
+- `/api/models/{id}` -- model-config save-slot update / delete.
+- `POST /api/conversations/{cid}/continue` -- generate an assistant turn for the current user message **without** appending a new user message. Used when the frontend detects the last message is already a user turn (e.g. after edit-without-regen, or after an aborted prior generation). Internally calls `handle_turn(..., skip_user_persist=True)`.
+
 ### Frontend -- `frontend/`
 
 Vanilla JS, no build step, no framework. `state.js` exports a single global `S` object mutated directly by other modules. `api.js` is the fetch wrapper (all calls are same-origin `/api/*`). `chat.js` handles message rendering + SSE stream parsing. `library.js` handles character management.
 
+**Hybrid combobox (`settings.js`).** The `endpoint_url` and `model_name` settings fields render as "hybrid" inputs: a free-text field plus a dropdown of saved options (with per-item delete). A shared `initCombobox()` engine drives both. `saveSetting()` cascades: changing `endpoint_url` triggers `syncEndpointRecord()` (find or create an `endpoints` row, activate it, reload models); changing `model_name` triggers `syncModelConfigRecord()` (same pattern at the model_config level). Hyperparameter edits on the flat form flow through via `PUT /api/models/{id}`. Dropdown selection (`onHybridInput`) loads the chosen record's fields into the flat UI.
+
+**User-message edit flow (`chat.js`).** `saveEdit()` is symmetric across roles -- it always does an in-place content update, never regenerates. If the user wants a fresh assistant response after editing, they use the Send / regenerate buttons on the adjacent assistant turn. `sendMessage()` detects when the last message is already a user turn and calls `/api/conversations/{cid}/continue` rather than creating a duplicate user message.
+
 ## Repo / branch layout
 
-This repo mirrors an upstream GitLab repo (`origin`). A GitHub mirror (`origin-gh`) is maintained via `./scripts/mirror_to_gh.sh`, which pushes all `origin/*` branches to origin-gh without touching local-only branches (e.g. `nyagman-dev`). Deletions on origin are NOT propagated to origin-gh.
+This clone is a **personal fork** of the GitHub upstream. `origin` points to `git@github.com:hpnyaggerman/Orb.git`; only one remote.
+
+History: the project was originally hosted on GitLab, with `./scripts/mirror_to_gh.sh` maintaining a GitHub mirror under `origin-gh`. The original developer has since moved development to GitHub, dissolving the mirror relationship. `scripts/mirror_to_gh.sh` is **legacy** -- kept in the tree for historical reference but no longer part of the sync workflow. `origin-gh` no longer exists as a configured remote.
+
+`nyagman-dev` is a personal dev-feature branch -- **not** an upstream PR branch. It's a rolling work tree where new features land; individual changes may later be cherry-picked onto dedicated PR branches when ready to propose upstream. Branched from `46a8554` ("compact chat UI") on the GitHub fork.
