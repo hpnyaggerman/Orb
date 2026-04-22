@@ -30,10 +30,20 @@ export function initTheme() {
 }
 
 // ── Settings
+const MODEL_HYPERPARAM_KEYS = [
+  "system_prompt",
+  "temperature",
+  "max_tokens",
+  "top_p",
+  "min_p",
+  "top_k",
+  "repetition_penalty",
+];
+
 const SETTING_FIELDS = [
   { k: "endpoint_url", l: "Endpoint URL", t: "text" },
-  { k: "api_key", l: "API Key", t: "password" },
   { k: "model_name", l: "Model Name", t: "text" },
+  { k: "api_key", l: "API Key", t: "api_key" },
   { k: "system_prompt", l: "System Prompt", t: "textarea" },
   { k: "temperature", l: "Temperature", t: "number", s: "0.05", mn: "0", mx: "2" },
   { k: "max_tokens", l: "Max Tokens", t: "number", s: "64", mn: "64", mx: "8192" },
@@ -88,6 +98,8 @@ export async function loadSettings() {
   }
 
   renderSettings();
+  await loadEndpoints();
+  initComboboxes(); // Re-initialize comboboxes with loaded endpoints
   renderToolsPanel();
   await loadPersonas();
   updateUserBtn();
@@ -110,32 +122,426 @@ export function renderSettings() {
                 <textarea data-key="${f.k}" onchange="saveSetting(this)">${v}</textarea>
               </div>`;
     }
+    if (f.t === "api_key") {
+      return `<div class="field"><label>${f.l}</label>
+        <div class="api-key-wrap">
+          <input type="text" class="api-key-input" value="${esc(v)}" data-key="api_key" autocomplete="off" onchange="saveSetting(this)">
+          <button type="button" class="api-key-toggle" onclick="toggleApiKeyVisibility(this)" aria-label="Show/hide API key">
+            <svg class="eye-show" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+            <svg class="eye-hide" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
+          </button>
+        </div>
+      </div>`;
+    }
+    if (f.k === "endpoint_url" || f.k === "model_name") {
+      const ph = f.k === "endpoint_url" ? "http://localhost:5000/v1" : "google/gemma-4-31b-it";
+      return `<div class="field"><label>${f.l}</label>
+        <div class="cb-root" data-combobox="${f.k}">
+          <div class="cb-control">
+            <input type="text" class="cb-input" value="${v}" data-key="${f.k}" placeholder="${ph}" autocomplete="off" onchange="saveSetting(this)">
+            <span class="cb-arrow"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="2,4 6,8 10,4"/></svg></span>
+          </div>
+          <div class="cb-dropdown" hidden><div class="cb-list"></div></div>
+        </div>
+      </div>`;
+    }
     const attrs = f.s ? `step="${f.s}" min="${f.mn}" max="${f.mx}"` : "";
     return `<div class="field"><label>${f.l}</label>
               <input type="${f.t}" value="${v}" data-key="${f.k}" ${attrs} onchange="saveSetting(this)">
             </div>`;
   }).join("");
-  // Append reset button after the fields
   $("settings-form").innerHTML += `
     <div class="field" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--accent-dim)">
       <button class="btn btn-danger" onclick="showResetConfirmModal()" style="width:100%;justify-content:center">Reset to Defaults</button>
     </div>
   `;
+  initComboboxes();
 }
 
 export async function saveSetting(el) {
   let v = el.value;
   if (el.type === "number") v = parseFloat(v);
-  const validation = validate.validateSetting(el.dataset.key, v);
+  const key = el.dataset.key;
+  const validation = validate.validateSetting(key, v);
   if (!validation.valid) {
     toast(validation.error, true);
     return;
   }
+
+  // Build payload — include cascaded fields for endpoint_url and model_name
+  const payload = { [key]: v };
+  if (key === "endpoint_url") {
+    const apiKeyEl = document.querySelector('[data-key="api_key"]');
+    if (apiKeyEl) payload.api_key = apiKeyEl.value;
+  } else if (key === "model_name") {
+    MODEL_HYPERPARAM_KEYS.forEach((k) => {
+      const fieldEl = document.querySelector(`[data-key="${k}"]`);
+      if (fieldEl) payload[k] = fieldEl.type === "number" ? parseFloat(fieldEl.value) : fieldEl.value;
+    });
+  }
+
   try {
-    S.settings = await api.put("/settings", { [el.dataset.key]: v });
+    S.settings = await api.put("/settings", payload);
     toast("Settings saved");
   } catch (e) {
     toast("Failed: " + e.message, true);
+    return;
+  }
+
+  // Secondary: sync endpoint/model_config records
+  try {
+    if (key === "endpoint_url") {
+      await syncEndpointRecord(v, payload.api_key || "");
+    } else if (key === "api_key" && S.activeEndpointId) {
+      await api.put(`/endpoints/${S.activeEndpointId}`, { api_key: v });
+    } else if (key === "model_name") {
+      await syncModelConfigRecord(v, payload);
+    } else if (MODEL_HYPERPARAM_KEYS.includes(key) && S.activeModelConfigId) {
+      await api.put(`/models/${S.activeModelConfigId}`, { [key]: v });
+    }
+  } catch (e) {
+    console.error("Endpoint/model sync error:", e);
+  }
+}
+
+// ── Combobox engine
+
+let _comboboxCleanups = [];
+
+function highlightMatch(text, query) {
+  if (!query) return esc(text);
+  const lText = text.toLowerCase();
+  const lQuery = query.toLowerCase();
+  const idx = lText.indexOf(lQuery);
+  if (idx === -1) return esc(text);
+  return (
+    esc(text.slice(0, idx)) +
+    `<mark class="cb-hl">${esc(text.slice(idx, idx + query.length))}</mark>` +
+    esc(text.slice(idx + query.length))
+  );
+}
+
+function initComboboxes() {
+  _comboboxCleanups.forEach((fn) => fn());
+  _comboboxCleanups = [];
+  const epRoot = document.querySelector('[data-combobox="endpoint_url"]');
+  if (epRoot) initCombobox(epRoot, () => S.endpoints.map((e) => ({ value: e.url, id: e.id, type: "endpoint" })));
+  const mdRoot = document.querySelector('[data-combobox="model_name"]');
+  if (mdRoot) initCombobox(mdRoot, () => S.modelConfigs.map((m) => ({ value: m.model_name, id: m.id, type: "model" })));
+}
+
+// Global delete function for combobox items
+window.deleteComboboxItem = function (btn, type, id) {
+  const typeName = type === "endpoint" ? "endpoint" : "model configuration";
+  showConfirmModal(
+    {
+      title: `Delete ${typeName}?`,
+      message: `Are you sure you want to delete this ${typeName}? This action cannot be undone.`,
+      confirmText: "Delete",
+      confirmClass: "btn-danger",
+    },
+    async () => {
+      try {
+        let wasActive = false;
+        if (type === "endpoint") {
+          await api.del(`/endpoints/${id}`);
+          // Remove from S.endpoints
+          const index = S.endpoints.findIndex((e) => e.id === id);
+          if (index > -1) S.endpoints.splice(index, 1);
+          // If this was the active endpoint, clear active
+          if (S.activeEndpointId === id) {
+            S.activeEndpointId = null;
+            S.activeModelConfigId = null;
+            S.modelConfigs = [];
+            wasActive = true;
+          }
+        } else if (type === "model") {
+          await api.del(`/models/${id}`);
+          // Remove from S.modelConfigs
+          const index = S.modelConfigs.findIndex((m) => m.id === id);
+          if (index > -1) S.modelConfigs.splice(index, 1);
+          // If this was the active model config, clear active
+          if (S.activeModelConfigId === id) {
+            S.activeModelConfigId = null;
+            wasActive = true;
+          }
+        }
+
+        // If the deleted item was active, clear the corresponding combobox input
+        if (wasActive) {
+          const inputSelector = type === "endpoint" ? '[data-key="endpoint_url"]' : '[data-key="model_name"]';
+          const input = document.querySelector(inputSelector);
+          if (input) {
+            input.value = "";
+            // Trigger change event to save empty value
+            input.dispatchEvent(new Event("change", { bubbles: true }));
+          }
+        }
+
+        // Re-render both comboboxes
+        initComboboxes();
+        // Update datalists
+        populateEndpointDatalist();
+        populateModelDatalist();
+        toast("Deleted");
+      } catch (e) {
+        toast("Failed to delete: " + e.message, true);
+      }
+    },
+  );
+};
+
+function initCombobox(rootEl, getItems) {
+  const input = rootEl.querySelector(".cb-input");
+  const control = rootEl.querySelector(".cb-control");
+  const dropdown = rootEl.querySelector(".cb-dropdown");
+  const list = rootEl.querySelector(".cb-list");
+  let activeIdx = -1;
+  let isOpen = false;
+
+  function getFiltered() {
+    // Always return all items, no filtering (for creating new records)
+    return getItems();
+  }
+
+  function render() {
+    const items = getFiltered();
+    const total = items.length;
+    activeIdx = Math.max(-1, Math.min(activeIdx, total - 1));
+    const q = input.value.trim();
+    if (!total) {
+      list.innerHTML = '<div class="cb-empty">No saved options</div>';
+    } else {
+      list.innerHTML = items
+        .map((item, i) => {
+          const value = item.value;
+          const id = item.id;
+          const type = item.type;
+          return `
+              <div class="cb-option${i === activeIdx ? " active" : ""}" data-value="${esc(value)}" data-id="${id}" data-type="${type}">
+                <span class="cb-option-text">${highlightMatch(value, q)}</span>
+                <button class="cb-delete-btn" title="Delete" onclick="event.stopPropagation(); deleteComboboxItem(this, '${type}', ${id})">×</button>
+              </div>`;
+        })
+        .join("");
+    }
+    list.querySelectorAll(".cb-option").forEach((el, i) => {
+      el.onmousedown = (e) => {
+        if (e.target.classList.contains("cb-delete-btn")) return;
+        e.preventDefault();
+        selectVal(el.dataset.value);
+      };
+      el.onmouseenter = () => {
+        activeIdx = i;
+        render();
+      };
+    });
+  }
+
+  function openDropdown() {
+    if (isOpen) return;
+    isOpen = true;
+    activeIdx = -1;
+    control.classList.add("open");
+    dropdown.hidden = false;
+    render(); // Show all options
+  }
+
+  function closeDropdown() {
+    if (!isOpen) return;
+    isOpen = false;
+    control.classList.remove("open");
+    dropdown.hidden = true;
+  }
+
+  async function selectVal(val) {
+    input.value = val;
+    closeDropdown();
+    await onHybridInput(input);
+    input.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  input.addEventListener("keydown", (e) => {
+    // Only handle Escape to close dropdown - mouse-only navigation
+    if (e.key === "Escape") {
+      closeDropdown();
+      return;
+    }
+    // Allow typing, tab navigation, etc. but no arrow key or Enter navigation
+  });
+  control.addEventListener("mousedown", (e) => {
+    // Only toggle when clicking the arrow (cb-arrow), not the input or control background
+    if (!e.target.closest(".cb-arrow")) return;
+    e.preventDefault();
+    // Toggle dropdown
+    if (isOpen) closeDropdown();
+    else openDropdown();
+    // Focus input
+    input.focus();
+  });
+  const onDocDown = (e) => {
+    if (!rootEl.contains(e.target)) closeDropdown();
+  };
+  document.addEventListener("mousedown", onDocDown);
+  _comboboxCleanups.push(() => document.removeEventListener("mousedown", onDocDown));
+}
+
+// ── Endpoint / Model Config helpers
+
+export async function loadEndpoints() {
+  try {
+    S.endpoints = await api.get("/endpoints");
+    S.activeEndpointId = S.settings.active_endpoint_id || null;
+    S.activeModelConfigId = S.settings.active_model_config_id || null;
+    populateEndpointDatalist();
+    if (S.activeEndpointId) {
+      await loadModelConfigs(S.activeEndpointId);
+    }
+  } catch (e) {
+    console.error("Failed to load endpoints:", e);
+    S.endpoints = [];
+  }
+}
+
+export async function loadModelConfigs(endpointId) {
+  if (!endpointId) {
+    S.modelConfigs = [];
+    populateModelDatalist();
+    initComboboxes(); // Re-initialize comboboxes
+    return;
+  }
+  try {
+    S.modelConfigs = await api.get(`/endpoints/${endpointId}/models`);
+    populateModelDatalist();
+    initComboboxes(); // Re-initialize comboboxes with loaded model configs
+  } catch (e) {
+    S.modelConfigs = [];
+    initComboboxes(); // Re-initialize comboboxes even on error
+  }
+}
+
+function populateEndpointDatalist() {
+  const dl = document.getElementById("endpoint-datalist");
+  if (!dl) return;
+  dl.innerHTML = S.endpoints.map((e) => `<option value="${esc(e.url)}"></option>`).join("");
+}
+
+function populateModelDatalist() {
+  const dl = document.getElementById("model-datalist");
+  if (!dl) return;
+  dl.innerHTML = S.modelConfigs.map((m) => `<option value="${esc(m.model_name)}"></option>`).join("");
+}
+
+function fillModelConfigFields(config) {
+  MODEL_HYPERPARAM_KEYS.forEach((k) => {
+    const el = document.querySelector(`[data-key="${k}"]`);
+    if (el && config[k] !== undefined) el.value = config[k];
+  });
+}
+
+async function syncEndpointRecord(url, apiKey) {
+  const existing = S.endpoints.find((e) => e.url === url);
+  if (existing) {
+    S.activeEndpointId = existing.id;
+    if (existing.api_key !== apiKey) {
+      await api.put(`/endpoints/${existing.id}`, { api_key: apiKey });
+      existing.api_key = apiKey;
+    }
+    await api.put("/settings", { active_endpoint_id: existing.id });
+    if (!S.modelConfigs.length || S.modelConfigs[0]?.endpoint_id !== existing.id) {
+      await loadModelConfigs(existing.id);
+    }
+  } else if (url) {
+    const ep = await api.post("/endpoints", { url, api_key: apiKey });
+    S.endpoints.push(ep);
+    S.activeEndpointId = ep.id;
+    S.activeModelConfigId = null;
+    await api.put("/settings", { active_endpoint_id: ep.id, active_model_config_id: null });
+    populateEndpointDatalist();
+    await loadModelConfigs(ep.id);
+  }
+}
+
+async function syncModelConfigRecord(modelName, hyperparams) {
+  if (!S.activeEndpointId || !modelName) return;
+  const existing = S.modelConfigs.find((m) => m.model_name === modelName);
+  if (existing) {
+    S.activeModelConfigId = existing.id;
+    const update = {};
+    MODEL_HYPERPARAM_KEYS.forEach((k) => {
+      if (hyperparams[k] !== undefined) update[k] = hyperparams[k];
+    });
+    if (Object.keys(update).length) {
+      await api.put(`/models/${existing.id}`, update);
+      Object.assign(existing, update);
+    }
+    await api.put("/settings", { active_model_config_id: existing.id });
+  } else {
+    const mc = await api.post(`/endpoints/${S.activeEndpointId}/models`, {
+      model_name: modelName,
+      system_prompt: hyperparams.system_prompt || "",
+      temperature: hyperparams.temperature || 0.8,
+      min_p: hyperparams.min_p || 0,
+      top_k: hyperparams.top_k || 40,
+      top_p: hyperparams.top_p || 0.95,
+      repetition_penalty: hyperparams.repetition_penalty || 1.0,
+      max_tokens: hyperparams.max_tokens || 4096,
+    });
+    S.modelConfigs.push(mc);
+    S.activeModelConfigId = mc.id;
+    await api.put("/settings", { active_model_config_id: mc.id });
+    populateModelDatalist();
+  }
+}
+
+export async function onHybridInput(el) {
+  const key = el.dataset.key;
+  if (key === "endpoint_url") {
+    const match = S.endpoints.find((e) => e.url === el.value);
+    if (!match) return;
+    // Pin active endpoint early so the model cascade can use it
+    S.activeEndpointId = match.id;
+    // Fresh fetch so api_key is always current
+    try {
+      const ep = await api.get(`/endpoints/${match.id}`);
+      Object.assign(match, ep);
+    } catch (e) {
+      console.error("Failed to fetch endpoint:", e);
+    }
+    const apiKeyEl = document.querySelector('[data-key="api_key"]');
+    if (apiKeyEl) apiKeyEl.value = match.api_key || "";
+    // Load models for this endpoint
+    await loadModelConfigs(match.id);
+    // Auto-select: prefer the stored active model config, fall back to first
+    const modelEl = document.querySelector('[data-key="model_name"]');
+    if (!modelEl || !S.modelConfigs.length) return;
+    const activeModel = S.modelConfigs.find((m) => m.id === S.activeModelConfigId) || S.modelConfigs[0];
+    modelEl.value = activeModel.model_name;
+    fillModelConfigFields(activeModel);
+    // Persist the chosen model config
+    S.activeModelConfigId = activeModel.id;
+    try {
+      await api.put("/settings", { active_model_config_id: activeModel.id });
+    } catch (e) {
+      console.error("Failed to save active model config:", e);
+    }
+  } else if (key === "model_name") {
+    if (S.activeEndpointId) {
+      try {
+        await loadModelConfigs(S.activeEndpointId);
+      } catch (e) {
+        console.error("Failed to refresh model configs:", e);
+      }
+    }
+    const match = S.modelConfigs.find((m) => m.model_name === el.value);
+    if (!match) return;
+    fillModelConfigFields(match);
+    S.activeModelConfigId = match.id;
+    try {
+      await api.put("/settings", { active_model_config_id: match.id });
+    } catch (e) {
+      console.error("Failed to save active model config:", e);
+    }
   }
 }
 
@@ -680,3 +1086,19 @@ export async function showResetConfirmModal() {
 
 // Expose to global scope for inline onclick handlers
 window.showResetConfirmModal = showResetConfirmModal;
+
+window.toggleApiKeyVisibility = function (btn) {
+  const input = btn.closest(".api-key-wrap").querySelector(".api-key-input");
+  const visible = btn.dataset.visible === "1";
+  if (!visible) {
+    input.style.webkitTextSecurity = "none";
+    btn.dataset.visible = "1";
+    btn.querySelector(".eye-show").style.display = "none";
+    btn.querySelector(".eye-hide").style.display = "";
+  } else {
+    input.style.webkitTextSecurity = "disc";
+    btn.dataset.visible = "";
+    btn.querySelector(".eye-show").style.display = "";
+    btn.querySelector(".eye-hide").style.display = "none";
+  }
+};

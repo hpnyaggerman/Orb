@@ -18,6 +18,15 @@ from .database import (
     init_db,
     get_settings,
     update_settings,
+    get_endpoints,
+    get_endpoint,
+    create_endpoint,
+    update_endpoint,
+    delete_endpoint,
+    get_model_configs,
+    create_model_config,
+    update_model_config,
+    delete_model_config,
     get_mood_fragments,
     get_mood_fragment,
     create_mood_fragment,
@@ -60,6 +69,7 @@ from .database import (
     update_director_fragment,
     delete_director_fragment,
     reset_to_defaults,
+    get_messages,
 )
 import asyncio
 from .orchestrator import handle_turn, handle_regenerate
@@ -121,8 +131,46 @@ class SettingsUpdate(BaseModel):
     active_persona_id: Optional[int] = None
     character_library_view: Optional[str] = None
     character_library_sort: Optional[str] = None
+    active_endpoint_id: Optional[int] = None
+    active_model_config_id: Optional[int] = None
     show_editor_diff: Optional[bool] = None
     hide_streaming_until_baked: Optional[bool] = None
+
+
+class EndpointCreate(BaseModel):
+    url: str
+    api_key: str = ""
+
+
+class EndpointUpdate(BaseModel):
+    url: Optional[str] = None
+    api_key: Optional[str] = None
+
+
+class ModelConfigCreate(BaseModel):
+    model_config = {"protected_namespaces": ()}
+
+    model_name: str
+    system_prompt: str = ""
+    temperature: float = 0.8
+    min_p: float = 0.0
+    top_k: int = 40
+    top_p: float = 0.95
+    repetition_penalty: float = 1.0
+    max_tokens: int = 4096
+
+
+class ModelConfigUpdate(BaseModel):
+    model_config = {"protected_namespaces": ()}
+
+    model_name: Optional[str] = None
+    system_prompt: Optional[str] = None
+    temperature: Optional[float] = None
+    min_p: Optional[float] = None
+    top_k: Optional[int] = None
+    top_p: Optional[float] = None
+    repetition_penalty: Optional[float] = None
+    max_tokens: Optional[int] = None
 
 
 class MoodFragmentCreate(BaseModel):
@@ -313,6 +361,72 @@ async def api_get_settings():
 @app.put("/api/settings")
 async def api_update_settings(data: SettingsUpdate):
     return await update_settings(data.model_dump(exclude_unset=True))
+
+
+# Endpoints ──
+
+
+@app.get("/api/endpoints")
+async def api_get_endpoints():
+    return await get_endpoints()
+
+
+@app.get("/api/endpoints/{endpoint_id}")
+async def api_get_endpoint(endpoint_id: int):
+    result = await get_endpoint(endpoint_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Endpoint not found")
+    return result
+
+
+@app.post("/api/endpoints")
+async def api_create_endpoint(data: EndpointCreate):
+    return await create_endpoint(data.url, data.api_key)
+
+
+@app.put("/api/endpoints/{endpoint_id}")
+async def api_update_endpoint(endpoint_id: int, data: EndpointUpdate):
+    result = await update_endpoint(endpoint_id, data.model_dump(exclude_unset=True))
+    if not result:
+        raise HTTPException(404, "Endpoint not found")
+    return result
+
+
+@app.delete("/api/endpoints/{endpoint_id}")
+async def api_delete_endpoint(endpoint_id: int):
+    if not await delete_endpoint(endpoint_id):
+        raise HTTPException(404, "Endpoint not found")
+    return {"ok": True}
+
+
+@app.get("/api/endpoints/{endpoint_id}/models")
+async def api_get_model_configs(endpoint_id: int):
+    return await get_model_configs(endpoint_id)
+
+
+@app.post("/api/endpoints/{endpoint_id}/models")
+async def api_create_model_config(endpoint_id: int, data: ModelConfigCreate):
+    try:
+        return await create_model_config(endpoint_id, data.model_dump())
+    except Exception as e:
+        if "FOREIGN KEY constraint failed" in str(e):
+            raise HTTPException(404, "Endpoint not found")
+        raise
+
+
+@app.put("/api/models/{config_id}")
+async def api_update_model_config(config_id: int, data: ModelConfigUpdate):
+    result = await update_model_config(config_id, data.model_dump(exclude_unset=True))
+    if not result:
+        raise HTTPException(404, "Model config not found")
+    return result
+
+
+@app.delete("/api/models/{config_id}")
+async def api_delete_model_config(config_id: int):
+    if not await delete_model_config(config_id):
+        raise HTTPException(404, "Model config not found")
+    return {"ok": True}
 
 
 # Mood Fragments ──
@@ -794,8 +908,8 @@ async def api_edit_message(cid: str, msg_id: int, data: EditMessage, request: Re
     if not original or original["conversation_id"] != cid:
         raise HTTPException(404, "Message not found")
 
-    # For assistant edits with no regeneration, just update the content in-place
-    if original["role"] == "assistant" and not data.regenerate:
+    # For edits with no regeneration, just update the content in-place
+    if not data.regenerate:
         await update_message_content(msg_id, data.content)
         return {"ok": True}
 
@@ -921,6 +1035,32 @@ async def api_send_message(cid: str, data: SendMessage, request: Request):
         _sse_stream(
             handle_turn(
                 cid, data.content, attachments=attachments, client_ref=client_ref
+            ),
+            request,
+            client_ref=client_ref,
+            cid=cid,
+        ),
+        media_type="text/event-stream",
+    )
+
+
+@app.post("/api/conversations/{cid}/continue")
+async def api_continue_from_user(
+    cid: str, request: Request, data: Optional[RegenerateMsg] = None
+):
+    """Generate an assistant response for the current user turn without creating a new message."""
+    conv = await get_conversation(cid)
+    if not conv:
+        raise HTTPException(404, "Conversation not found")
+    messages = await get_messages(cid)
+    if not messages or messages[-1]["role"] != "user":
+        raise HTTPException(400, "Last message is not a user message")
+    user_content = messages[-1]["content"]
+    client_ref: list = []
+    return _CleanupStreamingResponse(
+        _sse_stream(
+            handle_turn(
+                cid, user_content, skip_user_persist=True, client_ref=client_ref
             ),
             request,
             client_ref=client_ref,

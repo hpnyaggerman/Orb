@@ -102,11 +102,7 @@ function finalizeStreamingDiv(lastMsg) {
   const body = S.streamingBodyEl;
   if (!body) return false;
   const div = body.closest(".message");
-  if (!div || !lastMsg || lastMsg.role !== "assistant" || !lastMsg.id) return false;
-  // Streaming box may be detached from the DOM (e.g. hideUntilBaked toggle is on,
-  // or editing-during-stream cleared it). In that case, fall through so the caller
-  // runs a full renderMessages() which will draw the baked message from S.messages.
-  if (!document.body.contains(div)) return false;
+  if (!div || !div.isConnected || !lastMsg || lastMsg.role !== "assistant" || !lastMsg.id) return false;
 
   div.setAttribute("data-msg-id", lastMsg.id);
   body.removeAttribute("id");
@@ -393,9 +389,7 @@ export function renderMessages() {
           <textarea id="edit-textarea-${m.id}" rows="5">${esc(m.content)}</textarea>
           <div class="msg-edit-actions">
             <button class="btn btn-sm" onclick="cancelEdit()">Cancel</button>
-            <button class="btn btn-sm btn-accent" onclick="saveEdit(${m.id},'${m.role}')">
-              Save${m.role === "user" ? " & Regen" : ""}
-            </button>
+            <button class="btn btn-sm btn-accent" onclick="saveEdit(${m.id},'${m.role}')">Save</button>
           </div>
         </div>`
           : `<div class="msg-body">${
@@ -515,77 +509,14 @@ export async function saveEdit(msgId, role) {
   const trimmed = content.trim();
   S.editingMsgId = null;
 
-  // If "Save & Regen" was clicked but the user message wasn't changed,
-  // treat it as a plain regen instead of creating a duplicate branch.
-  if (role === "user") {
-    const msg = S.messages.find((m) => m.id === msgId);
-    if (msg && msg.content === content) {
-      const idx = S.messages.findIndex((m) => m.id === msgId);
-      const nextAssistant = S.messages.slice(idx + 1).find((m) => m.role === "assistant" && m.id);
-      if (nextAssistant) {
-        renderMessages();
-        return regenerate(nextAssistant.id);
-      }
-      // No assistant message after this user message; fall through to normal edit+regen
-    }
-  }
-
-  if (role === "assistant") {
-    try {
-      await api.post(convUrl(S.activeConvId, "messages", msgId, "edit"), { content, regenerate: false });
-      S.messages = await api.get(convUrl(S.activeConvId, "messages"));
-      renderMessages();
-      toast("Message edited");
-    } catch (e) {
-      toast(e.message, true);
-    }
-    return;
-  }
-
-  const msg = S.messages.find((m) => m.id === msgId);
-  if (msg) msg.content = content;
-  const idx = S.messages.findIndex((m) => m.id === msgId);
-  S.streamCutoffIndex = idx >= 0 ? idx + 1 : S.messages.length;
-
-  setStreaming(true);
-  setGenerationPhase("directing");
-  $("send-btn").disabled = true;
-  renderMessages();
-
-  const ct = $("chat-messages");
-  const editedEl = ct.querySelector(`[data-msg-id="${msgId}"]`);
-  if (editedEl) {
-    let next = editedEl.nextElementSibling;
-    while (next) {
-      const n = next.nextElementSibling;
-      next.remove();
-      next = n;
-    }
-  }
-
-  const msgDiv = createStreamingDiv();
-  S.abortController = new AbortController();
   try {
-    const resp = await fetch("/api" + convUrl(S.activeConvId, "messages", msgId, "edit"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content, regenerate: true, ...agentPayload() }),
-      signal: S.abortController.signal,
-    });
-    if (resp.headers.get("content-type")?.includes("text/event-stream")) {
-      await processSSEStream(resp, ct, msgDiv, S.abortController.signal);
-    } else {
-      S.messages = await api.get(convUrl(S.activeConvId, "messages"));
-      renderMessages();
-    }
+    await api.post(convUrl(S.activeConvId, "messages", msgId, "edit"), { content, regenerate: false });
+    S.messages = await api.get(convUrl(S.activeConvId, "messages"));
+    renderMessages();
+    toast("Message edited");
   } catch (e) {
-    if (e.name === "AbortError") {
-      S.wasAborted = true;
-    } else {
-      toast("Error: " + e.message, true);
-    }
+    toast(e.message, true);
   }
-  await afterStream();
 }
 
 // ── Streaming Helpers
@@ -893,9 +824,41 @@ function agentPayload() {
 
 // ── Send Message
 export async function sendMessage() {
+  if (!S.activeConvId || S.isStreaming) return;
+
   const inp = $("chat-input");
   let content = inp.value.trim();
-  if (!content || !S.activeConvId || S.isStreaming) return;
+
+  // Guard against double user turns: if the last message is already from the user,
+  // ask the backend to generate a response for it without creating a new message.
+  const lastMsg = S.messages[S.messages.length - 1];
+  if (lastMsg?.role === "user" && lastMsg.id) {
+    inp.value = "";
+    inp.style.height = "auto";
+    setStreaming(true);
+    setGenerationPhase("pending");
+    $("send-btn").disabled = true;
+    renderMessages();
+    const ct = $("chat-messages");
+    const msgDiv = createStreamingDiv();
+    S.abortController = new AbortController();
+    try {
+      const resp = await fetch("/api" + convUrl(S.activeConvId, "continue"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(agentPayload()),
+        signal: S.abortController.signal,
+      });
+      await processSSEStream(resp, ct, msgDiv, S.abortController.signal);
+    } catch (e) {
+      if (e.name === "AbortError") S.wasAborted = true;
+      else toast("Connection error: " + e.message, true);
+    }
+    await afterStream();
+    return;
+  }
+
+  if (!content) return;
 
   // Resolve {{user}} and {{char}} placeholders before sending
   content = resolvePlaceholders(content);
