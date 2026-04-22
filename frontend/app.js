@@ -96,8 +96,48 @@ function closeMobileSidebar() {
   $("app")?.classList.remove("mobile-sidebar-open");
 }
 
+function toggleMobileHeaderActions() {
+  if (!isMobileSidebarViewport()) return;
+  $("mobile-chat-actions-menu")?.classList.toggle("open");
+  closeBurger();
+}
+
+function closeMobileHeaderActions() {
+  $("mobile-chat-actions-menu")?.classList.remove("open");
+}
+
+function syncMobilePanelState() {
+  const app = $("app");
+  const toolsPanel = $("tools-panel");
+  const inspector = $("inspector");
+  if (!app || !toolsPanel || !inspector) return;
+
+  if (!isMobileSidebarViewport()) {
+    app.classList.remove("mobile-tools-open", "mobile-inspector-open");
+    return;
+  }
+
+  const toolsOpen = toolsPanel.classList.contains("open");
+  const inspectorOpen = inspector.classList.contains("open");
+  app.classList.toggle("mobile-tools-open", toolsOpen);
+  app.classList.toggle("mobile-inspector-open", inspectorOpen);
+
+  if (toolsOpen || inspectorOpen) {
+    closeMobileSidebar();
+    closeMobileHeaderActions();
+  }
+}
+
+function closeMobileUtilityPanels() {
+  $("tools-panel")?.classList.remove("open");
+  $("inspector")?.classList.remove("open");
+  syncMobilePanelState();
+}
+
 function toggleMobileSidebar() {
   if (!isMobileSidebarViewport()) return;
+  closeMobileUtilityPanels();
+  closeMobileHeaderActions();
   $("app")?.classList.toggle("mobile-sidebar-open");
   closeBurger();
 }
@@ -115,10 +155,13 @@ function triggerAttachImage() {
 
 document.addEventListener("click", (e) => {
   if (!e.target.closest("#burger-btn") && !e.target.closest("#burger-dropdown")) closeBurger();
+  if (!e.target.closest("#mobile-chat-actions-toggle") && !e.target.closest("#mobile-chat-actions-menu")) {
+    closeMobileHeaderActions();
+  }
   if (
     isMobileSidebarViewport() &&
     $("app")?.classList.contains("mobile-sidebar-open") &&
-    e.target.closest("#sidebar .btn, #sidebar .sidebar-section-header, #sidebar .char-item, #sidebar .fragment-item")
+    e.target.closest("#sidebar .btn, #sidebar .char-item, #sidebar .fragment-item")
   ) {
     setTimeout(closeMobileSidebar, 0);
   }
@@ -130,15 +173,52 @@ document.addEventListener("click", (e) => {
   ) {
     closeMobileSidebar();
   }
+  if (
+    isMobileSidebarViewport() &&
+    $("tools-panel")?.classList.contains("open") &&
+    !e.target.closest("#tools-panel") &&
+    !e.target.closest("#tools-panel-btn") &&
+    !e.target.closest("#mobile-chat-actions-menu")
+  ) {
+    $("tools-panel").classList.remove("open");
+    syncMobilePanelState();
+  }
+  if (
+    isMobileSidebarViewport() &&
+    $("inspector")?.classList.contains("open") &&
+    !e.target.closest("#inspector") &&
+    !e.target.closest("#inspector-toggle") &&
+    !e.target.closest("#mobile-chat-actions-menu")
+  ) {
+    $("inspector").classList.remove("open");
+    syncMobilePanelState();
+  }
 });
 
 window.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") closeMobileSidebar();
+  if (e.key === "Escape") {
+    closeMobileSidebar();
+    closeMobileHeaderActions();
+    closeMobileUtilityPanels();
+  }
 });
 
 window.addEventListener("resize", () => {
-  if (!isMobileSidebarViewport()) closeMobileSidebar();
+  if (!isMobileSidebarViewport()) {
+    closeMobileSidebar();
+    closeMobileHeaderActions();
+  }
+  syncMobilePanelState();
 });
+
+const toolsPanel = $("tools-panel");
+const inspectorPanel = $("inspector");
+if (toolsPanel && inspectorPanel) {
+  const observer = new MutationObserver(syncMobilePanelState);
+  observer.observe(toolsPanel, { attributes: true, attributeFilter: ["class"] });
+  observer.observe(inspectorPanel, { attributes: true, attributeFilter: ["class"] });
+}
+syncMobilePanelState();
 
 // Attachments handling
 function handleAttachmentSelect(e) {
@@ -322,6 +402,8 @@ Object.assign(window, {
   // ui
   toggleSection,
   toggleMobileSidebar,
+  toggleMobileHeaderActions,
+  closeMobileHeaderActions,
   toggleBurger,
   closeBurger,
   triggerAttachImage,
