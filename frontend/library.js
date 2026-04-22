@@ -22,6 +22,7 @@ let _browserSortBy = "time-added"; // 'name', 'time-added', 'most-recent-chat', 
 let _browserConversations = [];
 let _browserSelectedTags = new Set();
 let _browserTopTags = []; // top 15 most popular tags
+let _charBrowserResizeBound = false;
 
 // ── Mood Fragments
 export async function loadMoodFragments() {
@@ -950,7 +951,7 @@ export async function showCharacterBrowserModal() {
     <div class="modal-title-row">
       <div>
         <h2>Character Library</h2>
-        <div style="font-size:11px;color:var(--text-muted)">${_browserCharacters.length} character${_browserCharacters.length !== 1 ? "s" : ""}</div>
+        <div class="char-browser-count">${_browserCharacters.length} character${_browserCharacters.length !== 1 ? "s" : ""}</div>
       </div>
       <div class="modal-title-actions">
         <div class="view-toggle" id="char-browser-view-toggle">
@@ -998,6 +999,7 @@ export function setCharBrowserView(mode) {
   _browserSearchQuery = prevSearch;
   _browserSelectedTags = prevTags;
   renderCharBrowserItems();
+  syncCharBrowserMinHeight();
 }
 
 export function onCharBrowserSearch() {
@@ -1167,9 +1169,24 @@ function renderCharBrowserListItem(c) {
 }
 
 function renderCharacterBrowser() {
+  if (!_charBrowserResizeBound) {
+    window.addEventListener("resize", () => {
+      if ($("char-browser-content")) syncCharBrowserMinHeight();
+    });
+    _charBrowserResizeBound = true;
+  }
   setTimeout(() => {
     renderCharBrowserItems();
-    const container = $("char-browser-content");
-    if (container) container.style.minHeight = container.offsetHeight + "px";
+    syncCharBrowserMinHeight();
   }, 0);
+}
+
+function syncCharBrowserMinHeight() {
+  const container = $("char-browser-content");
+  if (!container) return;
+  container.style.minHeight = "";
+  requestAnimationFrame(() => {
+    const activeContainer = $("char-browser-content");
+    if (activeContainer) activeContainer.style.minHeight = activeContainer.offsetHeight + "px";
+  });
 }

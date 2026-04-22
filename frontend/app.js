@@ -86,6 +86,22 @@ function toggleSection(header) {
   header.nextElementSibling.classList.toggle("collapsed");
 }
 
+const MOBILE_SIDEBAR_BREAKPOINT = 900;
+
+function isMobileSidebarViewport() {
+  return window.matchMedia(`(max-width: ${MOBILE_SIDEBAR_BREAKPOINT}px)`).matches;
+}
+
+function closeMobileSidebar() {
+  $("app")?.classList.remove("mobile-sidebar-open");
+}
+
+function toggleMobileSidebar() {
+  if (!isMobileSidebarViewport()) return;
+  $("app")?.classList.toggle("mobile-sidebar-open");
+  closeBurger();
+}
+
 // ── Burger menu
 function toggleBurger() {
   $("burger-dropdown").classList.toggle("open");
@@ -99,6 +115,29 @@ function triggerAttachImage() {
 
 document.addEventListener("click", (e) => {
   if (!e.target.closest("#burger-btn") && !e.target.closest("#burger-dropdown")) closeBurger();
+  if (
+    isMobileSidebarViewport() &&
+    $("app")?.classList.contains("mobile-sidebar-open") &&
+    e.target.closest("#sidebar .btn, #sidebar .sidebar-section-header, #sidebar .char-item, #sidebar .fragment-item")
+  ) {
+    setTimeout(closeMobileSidebar, 0);
+  }
+  if (
+    isMobileSidebarViewport() &&
+    $("app")?.classList.contains("mobile-sidebar-open") &&
+    !e.target.closest("#sidebar") &&
+    !e.target.closest("#mobile-sidebar-toggle")
+  ) {
+    closeMobileSidebar();
+  }
+});
+
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeMobileSidebar();
+});
+
+window.addEventListener("resize", () => {
+  if (!isMobileSidebarViewport()) closeMobileSidebar();
 });
 
 // Attachments handling
@@ -282,6 +321,7 @@ Object.assign(window, {
   clearRefineDiff,
   // ui
   toggleSection,
+  toggleMobileSidebar,
   toggleBurger,
   closeBurger,
   triggerAttachImage,
