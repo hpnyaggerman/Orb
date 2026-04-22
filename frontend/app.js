@@ -210,31 +210,48 @@ function triggerAttachImage() {
 }
 
 document.addEventListener("click", (e) => {
-  if (!e.target.closest("#burger-btn") && !e.target.closest("#burger-dropdown")) closeBurger();
-  if (!e.target.closest("#mobile-chat-actions-toggle") && !e.target.closest("#mobile-chat-actions-menu")) {
+  const path = typeof e.composedPath === "function" ? e.composedPath() : [];
+  const target = e.target instanceof Element ? e.target : null;
+  const inPath = (id) => path.some((node) => node instanceof Element && node.id === id);
+  const inSelector = (selector) => Boolean(target?.closest(selector));
+
+  const clickedBurgerBtn = inPath("burger-btn") || inSelector("#burger-btn");
+  const clickedBurgerDropdown = inPath("burger-dropdown") || inSelector("#burger-dropdown");
+  const clickedMobileActionsToggle = inPath("mobile-chat-actions-toggle") || inSelector("#mobile-chat-actions-toggle");
+  const clickedMobileActionsMenu = inPath("mobile-chat-actions-menu") || inSelector("#mobile-chat-actions-menu");
+  const clickedSidebar = inPath("sidebar") || inSelector("#sidebar");
+  const clickedSidebarToggle = inPath("mobile-sidebar-toggle") || inSelector("#mobile-sidebar-toggle");
+  const clickedToolsPanel = inPath("tools-panel") || inSelector("#tools-panel");
+  const clickedToolsBtn = inPath("tools-panel-btn") || inSelector("#tools-panel-btn");
+  const clickedInspectorPanel = inPath("inspector") || inSelector("#inspector");
+  const clickedInspectorBtn = inPath("inspector-toggle") || inSelector("#inspector-toggle");
+  const clickedSidebarAction = inSelector("#sidebar .btn, #sidebar .char-item, #sidebar .fragment-item");
+
+  if (!clickedBurgerBtn && !clickedBurgerDropdown) closeBurger();
+  if (!clickedMobileActionsToggle && !clickedMobileActionsMenu) {
     closeMobileHeaderActions();
   }
   if (
     isMobileSidebarViewport() &&
     $("app")?.classList.contains("mobile-sidebar-open") &&
-    e.target.closest("#sidebar .btn, #sidebar .char-item, #sidebar .fragment-item")
+    clickedSidebarAction
   ) {
     setTimeout(closeMobileSidebar, 0);
   }
   if (
     isMobileSidebarViewport() &&
     $("app")?.classList.contains("mobile-sidebar-open") &&
-    !e.target.closest("#sidebar") &&
-    !e.target.closest("#mobile-sidebar-toggle")
+    !clickedSidebar &&
+    !clickedSidebarToggle
   ) {
     closeMobileSidebar();
   }
   if (
     isMobileSidebarViewport() &&
     $("tools-panel")?.classList.contains("open") &&
-    !e.target.closest("#tools-panel") &&
-    !e.target.closest("#tools-panel-btn") &&
-    !e.target.closest("#mobile-chat-actions-menu")
+    !clickedToolsPanel &&
+    !clickedToolsBtn &&
+    !clickedMobileActionsMenu
   ) {
     $("tools-panel").classList.remove("open");
     syncMobilePanelState();
@@ -242,9 +259,9 @@ document.addEventListener("click", (e) => {
   if (
     isMobileSidebarViewport() &&
     $("inspector")?.classList.contains("open") &&
-    !e.target.closest("#inspector") &&
-    !e.target.closest("#inspector-toggle") &&
-    !e.target.closest("#mobile-chat-actions-menu")
+    !clickedInspectorPanel &&
+    !clickedInspectorBtn &&
+    !clickedMobileActionsMenu
   ) {
     $("inspector").classList.remove("open");
     syncMobilePanelState();
