@@ -720,29 +720,6 @@ const TOOL_DEFS = [
   },
 ];
 
-let _agentToolSyncQueue = Promise.resolve();
-
-function queueAgentToolSettingsSave(patch, errorMessage) {
-  _agentToolSyncQueue = _agentToolSyncQueue.catch(() => {}).then(async () => {
-    try {
-      S.settings = await api.put("/settings", patch);
-    } catch (e) {
-      toast(errorMessage, true);
-      throw e;
-    }
-  });
-  return _agentToolSyncQueue;
-}
-
-export async function waitForAgentToolSettingsSync() {
-  try {
-    await _agentToolSyncQueue;
-    return true;
-  } catch (_) {
-    return false;
-  }
-}
-
 export function toggleToolsPanel() {
   const panel = $("tools-panel");
   const inspector = $("inspector");
@@ -764,33 +741,43 @@ export function toggleToolsPanel() {
 export async function setAgentEnabled(on) {
   S.agentEnabled = on;
   $("tools-panel-btn").style.opacity = on ? "1" : "0.5";
-  await queueAgentToolSettingsSave({ enable_agent: on }, "Failed to save agent state");
+  try {
+    S.settings = await api.put("/settings", { enable_agent: on });
+  } catch (e) {
+    toast("Failed to save agent state", true);
+  }
 }
 
 export async function toggleToolEnabled(id, on) {
   S.enabledTools[id] = on;
   renderToolsPanel();
-  await queueAgentToolSettingsSave({ enabled_tools: S.enabledTools }, "Failed to save tool state");
+  try {
+    S.settings = await api.put("/settings", { enabled_tools: S.enabledTools });
+  } catch (e) {
+    toast("Failed to save tool state", true);
+  }
 }
 
 export async function toggleLengthGuard(on) {
   S.lengthGuardEnabled = on;
   S.enabledTools.length_guard = on;
   renderToolsPanel();
-  await queueAgentToolSettingsSave(
-    { enabled_tools: S.enabledTools },
-    "Failed to save length guard state",
-  );
+  try {
+    S.settings = await api.put("/settings", { enabled_tools: S.enabledTools });
+  } catch (e) {
+    toast("Failed to save length guard state", true);
+  }
 }
 
 export async function toggleLengthGuardEnforce(on) {
   S.lengthGuardEnforce = on;
   S.enabledTools.length_guard_enforce = on;
   renderToolsPanel();
-  await queueAgentToolSettingsSave(
-    { enabled_tools: S.enabledTools },
-    "Failed to save length guard enforce state",
-  );
+  try {
+    S.settings = await api.put("/settings", { enabled_tools: S.enabledTools });
+  } catch (e) {
+    toast("Failed to save length guard enforce state", true);
+  }
 }
 
 export async function saveLengthGuardConfig() {
