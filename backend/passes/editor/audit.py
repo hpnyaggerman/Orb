@@ -80,7 +80,7 @@ def run_audit(
             text, opener_n_words, opener_min_consecutive
         ),
         template_result=detect_template_repetition(
-            text, template_max_tags, template_flag_threshold
+            text, max_words=template_max_tags, flag_threshold=template_flag_threshold
         ),
         not_but_result=detect_contrastive_negation(text),
     )
