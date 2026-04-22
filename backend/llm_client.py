@@ -5,7 +5,7 @@ import json
 import logging
 from typing import AsyncIterator
 
-from .endpoint_profiles import ALWAYS_ALLOWED
+from .endpoint_profiles import ModelProfile
 
 logger = logging.getLogger(__name__)
 
@@ -36,12 +36,12 @@ class LLMClient:
         base_url: str,
         api_key: str = "",
         timeout: float = 120.0,
-        param_allowlist: frozenset[str] | set[str] | None = None,
+        profile: ModelProfile | None = None,
     ):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.timeout = timeout
-        self.param_allowlist = param_allowlist
+        self.profile = profile
         self._abort: asyncio.Event = asyncio.Event()
 
     def abort(self) -> None:
@@ -82,13 +82,9 @@ class LLMClient:
         if tool_choice:
             body["tool_choice"] = tool_choice
 
-        if self.param_allowlist is not None:
-            allowed = ALWAYS_ALLOWED | self.param_allowlist
-            dropped = [k for k in body if k not in allowed]
-            for k in dropped:
-                body.pop(k)
-            if dropped:
-                logger.info("LLM param allowlist dropped: %s", dropped)
+        if self.profile is not None:
+            for action in self.profile.apply(body):
+                logger.info("LLM profile: %s", action)
 
         logger.info(
             "LLM complete: model=%s, tools=%s, tool_choice=%s",
