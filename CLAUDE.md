@@ -139,7 +139,7 @@ Manual merge is needed where both sides rewrote the same logic, and this is wher
 
 ### Phase C: Verify
 
-Run in order; only push after all pass:
+Run in order. The user pushes only after all pass; the agent does not push:
 
 1. `./scripts/lint.sh` (flake8). `./scripts/format.sh` (black + biome) -- should be a no-op post-Prep 4.
 2. `./scripts/tests.sh` (full pytest). Integration tests covering main's new endpoints must pass.
@@ -147,14 +147,92 @@ Run in order; only push after all pass:
 4. Server boot smoke: `curl` the canonical endpoints on both sides (branch's plus whichever routes main added).
 5. Manual UI smoke: exercise the toggles and flows that branch and main each touched.
 
-### History-rewrite safety net
+### History rewrite
 
-Fixing something after the merge (missed prep commit, message reword, ASCII cleanup) without re-resolving conflicts by hand:
+Fixing already-committed work in place -- reword, remove a leaked secret, back out a debug change, change a conflict resolution, recover a bad commit or merge -- without re-doing manual conflict resolution or losing commit timestamps.
 
-1. `git tag backup/<label> HEAD` before touching anything.
-2. Reset or `git rebase -i --rebase-merges` as needed. `--rebase-merges` preserves the 2-parent merge commit during replay.
-3. When the replayed merge commit re-hits conflicts, restore the already-known-good resolutions: `git checkout backup/<label> -- <conflicted-files>`. Git accepts the restored blobs as resolved once staged.
-4. `git diff backup/<label>` on the whole tree should show only the intended delta before dropping the tag.
+**Any history rewrite requires explicit user confirmation.** Before touching anything: present the plan (what is changing, which recipe from step 3, which commits are affected, the expected end state) and wait for the user to say go. Rewrites silently break downstream clones; the user owns that call.
+
+**Invariants.** After the rewrite, relative to `backup/<label>` (step 1):
+- The tree differs only by the intended delta.
+- If the range contains a merge, `HEAD^2` still matches `main` hash-for-hash.
+- Every commit's author-date and committer-date are unchanged.
+
+**1. Tag before touching anything.** `git tag backup/<label> HEAD`. Originals stay reachable through this tag until step 6; without it, a bad `git reset` is unrecoverable.
+
+**2. Pin both dates on every commit you create.** `git commit`, `git commit --amend`, and `git merge` reset committer-date to now; `git cherry-pick` and `git rebase` preserve author-date but still reset committer-date. Pin both explicitly:
+```
+AD=$(git log -1 --format=%aI <original-sha>)
+CD=$(git log -1 --format=%cI <original-sha>)
+GIT_AUTHOR_DATE="$AD" GIT_COMMITTER_DATE="$CD" git commit ...
+```
+The same env-var prefix goes in front of `git commit --amend` and `git merge --no-ff`. (`%aI`/`%cI` = ISO-8601 author/committer date.)
+
+**3. Pick the recipe matching what you're changing.**
+
+*Single non-merge commit* (reword or content edit):
+```
+git rebase -i --rebase-merges <base>        # mark the target `edit`
+# at the stop:
+orig=$(cat .git/rebase-merge/stopped-sha)
+AD=$(git log -1 --format=%aI "$orig")
+CD=$(git log -1 --format=%cI "$orig")
+# content edit: modify files, git add.
+# reword:      skip that, pass -m below.
+GIT_AUTHOR_DATE="$AD" GIT_COMMITTER_DATE="$CD" \
+  git commit --amend [-m "<new>"]
+git rebase --continue
+```
+
+*Merge commit* (content fix, reword, or changed conflict resolution):
+```
+# capture the merge's dates before resetting:
+AD=$(git log -1 --format=%aI <old-merge>)
+CD=$(git log -1 --format=%cI <old-merge>)
+git reset --hard <old-merge>^1              # branch tip right before the merge
+GIT_AUTHOR_DATE="$AD" GIT_COMMITTER_DATE="$CD" \
+  git merge --no-ff main -m "<msg>"
+# on conflict: restore from backup (step 4), apply the fix, then
+GIT_AUTHOR_DATE="$AD" GIT_COMMITTER_DATE="$CD" git commit
+```
+
+*Chain of commits* (bulk reword, purge a file from the range, apply a cross-commit patch):
+```
+git reset --hard <base>
+for sha in $(git log <base>..backup/<label> --reverse --format=%H); do
+  AD=$(git log -1 --format=%aI "$sha")
+  CD=$(git log -1 --format=%cI "$sha")
+  git cherry-pick --no-commit "$sha"
+  # optional: modify files here before committing
+  GIT_AUTHOR_DATE="$AD" GIT_COMMITTER_DATE="$CD" \
+    git commit -m "<new message>"
+done
+```
+
+Constraints that apply across recipes:
+- `--rebase-merges` is mandatory whenever a merge is in the rewritten range; without it git flattens the merge and the `HEAD^2 == main` invariant breaks.
+- For committer-date exactness across many commits, prefer the chain rewrite over `rebase -i`: rebase offers no hook on `pick`-only steps.
+- `cherry-pick --no-commit` already inherits the source author; pinning `GIT_AUTHOR_DATE` on the follow-up `git commit` is belt-and-suspenders.
+
+**4. If the replay re-hits original conflicts, restore from backup** rather than re-resolving by hand:
+```
+git checkout backup/<label> -- <conflicted-files>
+git diff --check              # must exit 0 before the next commit
+```
+Staged restored blobs count as resolved.
+
+**5. Verify before dropping the backup.** All of:
+- `git diff backup/<label> HEAD` shows only the intended delta.
+- If the range contains a merge: `git log <merge>^2` matches `git log main` hash-for-hash.
+- Dates unchanged: `diff <(git log <base>..backup/<label> --format='%aI %cI') <(git log <base>..HEAD --format='%aI %cI')` must be empty.
+- Tests, lint, format clean.
+- Messages and files match the rewrite's intent. Example checks:
+  ```
+  git log <base>..HEAD --format='%B' | grep -iE '^(wip|fixup|squash)'  # no fixup leftovers
+  git log <base>..HEAD --name-only | grep -F '<purged-file>'           # purged file is gone
+  ```
+
+**6. Finish.** `git tag -d backup/<label>`, and delete any stale `backup/*` tags left from earlier rewrites. **The agent never pushes; force or not.** Hand back with a clear summary and let the user run `git push --force-with-lease origin <branch>` themselves.
 
 ## Style: non-ASCII
 
