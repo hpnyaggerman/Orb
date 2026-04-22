@@ -71,8 +71,10 @@ export async function loadSettings() {
   if (typeof S.settings.show_editor_diff === "number") S.showEditorDiff = S.settings.show_editor_diff !== 0;
   else if (typeof S.settings.show_editor_diff === "boolean") S.showEditorDiff = S.settings.show_editor_diff;
 
-  if (typeof S.settings.hide_streaming_until_baked === "number") S.hideUntilBaked = S.settings.hide_streaming_until_baked !== 0;
-  else if (typeof S.settings.hide_streaming_until_baked === "boolean") S.hideUntilBaked = S.settings.hide_streaming_until_baked;
+  if (typeof S.settings.hide_streaming_until_baked === "number")
+    S.hideUntilBaked = S.settings.hide_streaming_until_baked !== 0;
+  else if (typeof S.settings.hide_streaming_until_baked === "boolean")
+    S.hideUntilBaked = S.settings.hide_streaming_until_baked;
 
   // Expand Settings section if endpoint_url is empty
   const settingsSection = $("settings-section");

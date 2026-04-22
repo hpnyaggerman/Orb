@@ -111,16 +111,18 @@ function finalizeStreamingDiv(lastMsg) {
   div.setAttribute("data-msg-id", lastMsg.id);
   body.removeAttribute("id");
 
-  const bodyHtml = S.pendingRefineDiff && S.showEditorDiff
-    ? formatProseWithDiff(S.pendingRefineDiff.ops)
-    : formatProse(resolvePlaceholders(lastMsg.content));
+  const bodyHtml =
+    S.pendingRefineDiff && S.showEditorDiff
+      ? formatProseWithDiff(S.pendingRefineDiff.ops)
+      : formatProse(resolvePlaceholders(lastMsg.content));
   smoothUpdateBody(body, bodyHtml);
 
   const tb = div.querySelector(".msg-toolbar");
   if (tb) {
-    const diffBtn = S.pendingRefineDiff?.msgId && lastMsg.id === S.pendingRefineDiff.msgId && S.showEditorDiff
-      ? `<button onclick="clearRefineDiff()" title="Clear diff highlights" class="btn-clear-diff">✕ Diff</button>`
-      : "";
+    const diffBtn =
+      S.pendingRefineDiff?.msgId && lastMsg.id === S.pendingRefineDiff.msgId && S.showEditorDiff
+        ? `<button onclick="clearRefineDiff()" title="Clear diff highlights" class="btn-clear-diff">✕ Diff</button>`
+        : "";
     tb.innerHTML = `<button onclick="startEdit(${lastMsg.id})" title="Edit">✏️ Edit</button>
       <button onclick="regenerate(${lastMsg.id})" title="Regenerate">🔄 Regen</button>
       <button onclick="deleteMessage(${lastMsg.id})" title="Delete message, siblings, and all children" style="color:var(--red)">✕ Del</button>${diffBtn}`;
@@ -770,7 +772,10 @@ async function processSSEStream(resp, container, msgDiv, signal) {
             rewrittenResponse = text;
             S.streamingContent = text;
             if (S.streamingBodyEl) {
-              const html = S.pendingRefineDiff && S.showEditorDiff ? formatProseWithDiff(S.pendingRefineDiff.ops) : formatProse(text);
+              const html =
+                S.pendingRefineDiff && S.showEditorDiff
+                  ? formatProseWithDiff(S.pendingRefineDiff.ops)
+                  : formatProse(text);
               smoothUpdateBody(S.streamingBodyEl, html);
             }
             scrollToBottom();
