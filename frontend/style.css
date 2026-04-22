@@ -3,17 +3,31 @@
    ═══════════════════════════════════════════ */
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
+html {
+  height: 100%;
+}
+
 body {
   font-family: var(--font-ui);
   background: var(--bg-deep);
   color: var(--text-primary);
   height: 100vh;
+  height: 100dvh;
   overflow: hidden;
 }
 
 #app {
   display: flex;
   height: 100vh;
+  height: 100dvh;
+}
+
+@supports (-webkit-touch-callout: none) {
+  html,
+  body,
+  #app {
+    min-height: -webkit-fill-available;
+  }
 }
 
 .hidden { display: none !important; }
