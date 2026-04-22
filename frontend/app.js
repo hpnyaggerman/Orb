@@ -81,11 +81,9 @@ import {
 import { closeModal, switchTab, showConfirmModal, runConfirmCb, closeCropModal } from "./modal.js";
 import {
   initMobileUi,
-  toggleBurger,
   toggleMobileSidebar,
   toggleMobileHeaderActions,
   closeMobileHeaderActions,
-  closeBurger,
 } from "./mobile.js";
 
 // ── Sidebar toggle
@@ -94,9 +92,21 @@ function toggleSection(header) {
   header.nextElementSibling.classList.toggle("collapsed");
 }
 
+// ── Burger menu
+function toggleBurger() {
+  $("burger-dropdown").classList.toggle("open");
+}
+function closeBurger() {
+  $("burger-dropdown").classList.remove("open");
+}
+
 function triggerAttachImage() {
   $("attach-image-input").click();
 }
+
+document.addEventListener("click", (e) => {
+  if (!e.target.closest("#burger-btn") && !e.target.closest("#burger-dropdown")) closeBurger();
+});
 
 // Attachments handling
 function handleAttachmentSelect(e) {
@@ -343,7 +353,7 @@ initAutoscroll();
 
 // Load data independently to prevent failures from blocking other loads
 async function initAll() {
-  initMobileUi();
+  initMobileUi({ closeBurger });
 
   try {
     await loadSettings();

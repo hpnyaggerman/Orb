@@ -43,6 +43,7 @@ const MOBILE_SIDE_PANELS = Object.freeze([
 let _mobileBackArmed = false;
 let _handlingMobilePop = false;
 let _initialized = false;
+let _closeBurger = () => {};
 
 // ── DOM/state helpers
 function getElement(id) {
@@ -87,15 +88,6 @@ function createEventMatcher(event) {
   };
 }
 
-// ── Public toggles
-export function closeBurger() {
-  setElementOpen(IDS.burgerMenu, false);
-}
-
-export function toggleBurger() {
-  setElementOpen(IDS.burgerMenu, !isElementOpen(IDS.burgerMenu));
-}
-
 function closeMobileSidebar() {
   setAppState(APP_STATE.sidebarOpen, false);
 }
@@ -107,7 +99,7 @@ export function closeMobileHeaderActions() {
 export function toggleMobileHeaderActions() {
   if (!isMobileSidebarViewport()) return;
   setElementOpen(IDS.mobileActionsMenu, !isElementOpen(IDS.mobileActionsMenu));
-  closeBurger();
+  _closeBurger();
   armMobileBackIfNeeded();
 }
 
@@ -204,7 +196,7 @@ export function toggleMobileSidebar() {
   closeMobileUtilityPanels();
   closeMobileHeaderActions();
   setAppState(APP_STATE.sidebarOpen, !hasAppState(APP_STATE.sidebarOpen));
-  closeBurger();
+  _closeBurger();
   armMobileBackIfNeeded();
 }
 
@@ -213,10 +205,6 @@ function handleDocumentClick(event) {
   const matcher = createEventMatcher(event);
   const clickedMobileActionsMenu = matcher.hasId(IDS.mobileActionsMenu);
   const sidebarOpen = hasAppState(APP_STATE.sidebarOpen);
-
-  if (!matcher.hasId(IDS.burgerButton) && !matcher.hasId(IDS.burgerMenu)) {
-    closeBurger();
-  }
 
   if (!matcher.hasId(IDS.mobileActionsToggle) && !clickedMobileActionsMenu) {
     closeMobileHeaderActions();
@@ -293,9 +281,10 @@ function bindViewportListener(handler) {
 }
 
 // ── Init
-export function initMobileUi() {
+export function initMobileUi(deps) {
   if (_initialized) return;
   _initialized = true;
+  _closeBurger = deps.closeBurger;
 
   document.addEventListener("click", handleDocumentClick);
   window.addEventListener("keydown", handleEscape);
