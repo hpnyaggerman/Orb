@@ -267,7 +267,7 @@ async def editor_pass(
         for msg in reversed(prefix):
             if msg.get("role") == "assistant":
                 assistant_messages.append(msg.get("content", ""))
-                if len(assistant_messages) >= 2:
+                if len(assistant_messages) >= 3:
                     break
 
     # ── Initial audit
