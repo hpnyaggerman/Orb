@@ -491,11 +491,6 @@ async def init_db():
             await db.execute(
                 "ALTER TABLE settings ADD COLUMN character_library_sort TEXT NOT NULL DEFAULT 'time-added'"
             )
-        if "show_editor_diff" not in existing_cols:
-            await db.execute(
-                "ALTER TABLE settings ADD COLUMN show_editor_diff INTEGER NOT NULL DEFAULT 1"
-            )
-
         # Migration for director_state keywords column
         director_cols = {
             row[1]
