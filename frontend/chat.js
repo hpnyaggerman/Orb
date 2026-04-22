@@ -16,6 +16,7 @@ import {
 import { api } from "./api.js";
 import { showModal, closeModal, showConfirmModal } from "./modal.js";
 import { renderCharacters, loadCharacters, refreshCharacters } from "./library.js";
+import { waitForAgentToolSettingsSync } from "./settings.js";
 import { validate } from "./validate.js";
 
 // ── Attachments rendering
@@ -817,9 +818,18 @@ function agentPayload() {
   return { enable_agent: S.agentEnabled };
 }
 
+async function ensureAgentToolSettingsReady() {
+  const synced = await waitForAgentToolSettingsSync();
+  if (!synced) {
+    toast("Tool settings failed to save. Try toggling again.", true);
+  }
+  return synced;
+}
+
 // ── Send Message
 export async function sendMessage() {
   if (!S.activeConvId || S.isStreaming) return;
+  if (!(await ensureAgentToolSettingsReady())) return;
 
   const inp = $("chat-input");
   let content = inp.value.trim();
@@ -907,6 +917,7 @@ export async function sendMessage() {
 // ── Regenerate
 export async function regenerate(msgId) {
   if (S.isStreaming || !S.activeConvId) return;
+  if (!(await ensureAgentToolSettingsReady())) return;
   setStreaming(true);
   setGenerationPhase("pending");
   $("send-btn").disabled = true;
