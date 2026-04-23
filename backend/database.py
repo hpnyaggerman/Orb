@@ -522,8 +522,7 @@ async def init_db():
                 "ALTER TABLE settings ADD COLUMN shared_system_prompt TEXT NOT NULL DEFAULT ''"
             )
         endpoint_cols = {
-            row[1]
-            for row in await db.execute_fetchall("PRAGMA table_info(endpoints)")
+            row[1] for row in await db.execute_fetchall("PRAGMA table_info(endpoints)")
         }
         if "active_model_config_id" not in endpoint_cols:
             await db.execute(
@@ -702,8 +701,14 @@ async def get_settings() -> dict:
                         s["endpoint_url"] = mc["endpoint_url"]
                         s["api_key"] = mc.get("api_key", "")
                         s["model_name"] = mc["model_name"]
-                        for field in ("temperature", "min_p", "top_k", "top_p",
-                                      "repetition_penalty", "max_tokens"):
+                        for field in (
+                            "temperature",
+                            "min_p",
+                            "top_k",
+                            "top_p",
+                            "repetition_penalty",
+                            "max_tokens",
+                        ):
                             if mc.get(field) is not None:
                                 s[field] = mc[field]
                         if mc.get("system_prompt") is not None:
