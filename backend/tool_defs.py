@@ -31,8 +31,8 @@ def build_direct_scene_tool(director_fragments: list[dict]) -> dict:
     Director fragments provide dynamic string/array parameters beyond the fixed
     moods and keywords fields. The returned dict is in OpenAI function-calling format.
     """
-    properties: dict = dict(_DIRECT_SCENE_FIXED_PROPERTIES)
-    required: list[str] = list(_DIRECT_SCENE_FIXED_REQUIRED)
+    properties: dict = {}
+    required: list[str] = []
 
     for df in director_fragments:
         fid = df["id"]
@@ -47,6 +47,9 @@ def build_direct_scene_tool(director_fragments: list[dict]) -> dict:
         properties[fid] = prop
         if df.get("required"):
             required.append(fid)
+
+    properties.update(_DIRECT_SCENE_FIXED_PROPERTIES)
+    required.extend(_DIRECT_SCENE_FIXED_REQUIRED)
 
     return {
         "type": "function",
