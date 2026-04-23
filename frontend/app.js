@@ -79,12 +79,7 @@ import {
   hideAvatarPopup,
 } from "./chat.js";
 import { closeModal, switchTab, showConfirmModal, runConfirmCb, closeCropModal } from "./modal.js";
-import {
-  initMobileUi,
-  toggleMobileSidebar,
-  toggleMobileHeaderActions,
-  closeMobileHeaderActions,
-} from "./mobile.js";
+import { initMobileUi, toggleMobileSidebar, toggleMobileHeaderActions, closeMobileHeaderActions } from "./mobile.js";
 
 // ── Sidebar toggle
 function toggleSection(header) {
