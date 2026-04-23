@@ -29,7 +29,7 @@ SEED_MOOD_FRAGMENTS = [
     {
         "id": "inner-thoughts",
         "label": "Inner Thoughts",
-        "description": "Foreground the character's inner thoughts. Use when the user is acting strange.",
+        "description": "Foreground the character's inner thoughts. Only use when the user is acting strange.",
         "prompt_text": (
             "Foreground the character's inner thoughts. Show the gap between what they think "
             "and what they say. Stream of consciousness is acceptable. The reader should feel "
