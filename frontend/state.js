@@ -44,4 +44,5 @@ export const S = {
   pendingRefineDiff: null, // {original, ops} set on writer_rewrite, cleared on next stream
   autoscrollEnabled: true, // whether to auto-scroll chat to bottom during streaming
   _programmaticScroll: false, // true while scrollToBottom() is executing — suppresses scroll listener
+  hasMultipleTabs: false, // true if multiple tabs of the app are open
 };

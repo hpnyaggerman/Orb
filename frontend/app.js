@@ -1,6 +1,7 @@
 import { $ } from "./utils.js";
 import { S } from "./state.js";
 import { validate } from "./validate.js";
+import { initTabLock, setLockStateChangeCallback } from "./tabLock.js";
 import {
   initTheme,
   loadSettings,
@@ -340,6 +341,13 @@ function initAutoscroll() {
 // ── Init
 initTheme();
 initAutoscroll();
+initTabLock();
+// Re-render messages when tab lock state changes to update toolbar buttons
+setLockStateChangeCallback((hasMultipleTabs) => {
+  if (S.activeConvId) {
+    renderMessages();
+  }
+});
 
 // Load data independently to prevent failures from blocking other loads
 async function initAll() {

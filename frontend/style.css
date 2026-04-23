@@ -1992,6 +1992,29 @@ label {
 }
 
 /* ═══════════════════════════════════════════
+   9.5 Tab Lock Banner
+   ═══════════════════════════════════════════ */
+.tab-lock-banner {
+  background: var(--red);
+  color: var(--text-on-accent);
+  padding: 10px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.tab-lock-banner.hidden {
+  display: none !important;
+}
+
+.tab-lock-icon {
+  font-size: 16px;
+}
+
+/* ═══════════════════════════════════════════
    10. Character Browser Modal
    ═══════════════════════════════════════════ */
 

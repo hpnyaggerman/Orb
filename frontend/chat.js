@@ -17,6 +17,7 @@ import { api } from "./api.js";
 import { showModal, closeModal, showConfirmModal } from "./modal.js";
 import { renderCharacters, loadCharacters, refreshCharacters } from "./library.js";
 import { validate } from "./validate.js";
+import { requestSendPermission } from "./tabLock.js";
 
 // ── Attachments rendering
 function formatBytes(bytes) {
@@ -118,9 +119,13 @@ function finalizeStreamingDiv(lastMsg) {
       S.pendingRefineDiff?.msgId && lastMsg.id === S.pendingRefineDiff.msgId
         ? `<button onclick="clearRefineDiff()" title="Clear diff highlights" class="btn-clear-diff">✕ Diff</button>`
         : "";
-    tb.innerHTML = `<button onclick="startEdit(${lastMsg.id})" title="Edit">✏️ Edit</button>
-      <button onclick="regenerate(${lastMsg.id})" title="Regenerate">🔄 Regen</button>
-      <button onclick="deleteMessage(${lastMsg.id})" title="Delete message, siblings, and all children" style="color:var(--red)">✕ Del</button>${diffBtn}`;
+    const editBtn = S.hasMultipleTabs
+      ? `<button disabled title="Close other tabs to edit">✏️ Edit</button>`
+      : `<button onclick="startEdit(${lastMsg.id})" title="Edit">✏️ Edit</button>`;
+    const regenBtn = S.hasMultipleTabs
+      ? `<button disabled title="Close other tabs to regenerate">🔄 Regen</button>`
+      : `<button onclick="regenerate(${lastMsg.id})" title="Regenerate">🔄 Regen</button>`;
+    tb.innerHTML = `${editBtn}${regenBtn}<button onclick="deleteMessage(${lastMsg.id})" title="Delete message, siblings, and all children" style="color:var(--red)">✕ Del</button>${diffBtn}`;
   }
 
   const bc = lastMsg.branch_count || 1;
@@ -373,14 +378,26 @@ export function renderMessages() {
           <button onclick="event.stopPropagation();switchBranch(${m.next_branch_id})" ${!m.next_branch_id ? "disabled" : ""}>▶</button>
         </span>`
             : "";
+        const editBtn =
+          S.hasMultipleTabs || !m.id
+            ? `<button disabled title="${S.hasMultipleTabs ? "Close other tabs to edit" : ""}">✏️ Edit</button>`
+            : `<button onclick="startEdit(${m.id})" title="Edit">✏️ Edit</button>`;
+        const regenBtn =
+          S.hasMultipleTabs || !m.id || m.role !== "assistant"
+            ? `<button disabled title="${S.hasMultipleTabs ? "Close other tabs to regenerate" : ""}">🔄 Regen</button>`
+            : `<button onclick="regenerate(${m.id})" title="Regenerate">🔄 Regen</button>`;
+        const delBtn = m.id
+          ? `<button onclick="deleteMessage(${m.id})" title="Delete message, siblings, and all children" style="color:var(--red)">✕ Del</button>`
+          : `<button disabled style="color:var(--red)">✕ Del</button>`;
+        const diffBtn =
+          S.pendingRefineDiff?.msgId && m.id === S.pendingRefineDiff.msgId
+            ? `<button onclick="clearRefineDiff()" title="Clear diff highlights" class="btn-clear-diff">✕ Diff</button>`
+            : "";
         const toolbar = isEditing
           ? ""
           : `
         <div class="msg-toolbar">
-          ${m.id ? `<button onclick="startEdit(${m.id})" title="Edit">✏️ Edit</button>` : `<button disabled>✏️ Edit</button>`}
-          ${m.role === "assistant" ? (m.id ? `<button onclick="regenerate(${m.id})" title="Regenerate">🔄 Regen</button>` : `<button disabled>🔄 Regen</button>`) : ""}
-          ${m.id ? `<button onclick="deleteMessage(${m.id})" title="Delete message, siblings, and all children" style="color:var(--red)">✕ Del</button>` : `<button disabled style="color:var(--red)">✕ Del</button>`}
-          ${S.pendingRefineDiff?.msgId && m.id === S.pendingRefineDiff.msgId ? `<button onclick="clearRefineDiff()" title="Clear diff highlights" class="btn-clear-diff">✕ Diff</button>` : ""}
+          ${editBtn}${regenBtn}${delBtn}${diffBtn}
         </div>`;
         const body = isEditing
           ? `
@@ -820,6 +837,7 @@ function agentPayload() {
 // ── Send Message
 export async function sendMessage() {
   if (!S.activeConvId || S.isStreaming) return;
+  if (!requestSendPermission()) return;
 
   const inp = $("chat-input");
   let content = inp.value.trim();
