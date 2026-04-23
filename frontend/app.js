@@ -70,6 +70,7 @@ import {
   deleteMessage,
   switchBranch,
   regenerate,
+  continueFromUser,
   sendMessage,
   stopGeneration,
   toggleInspector,
@@ -274,6 +275,7 @@ Object.assign(window, {
   deleteMessage,
   switchBranch,
   regenerate,
+  continueFromUser,
   sendMessage,
   stopGeneration,
   // inspector

@@ -384,10 +384,12 @@ export function renderMessages() {
             : `<button onclick="startEdit(${m.id})" title="Edit">✏️ Edit</button>`;
         const childAssistant =
           m.role === "user" ? S.messages.find((child) => child.parent_id === m.id && child.role === "assistant") : null;
+        const regenTargetId = m.role === "assistant" ? m.id : childAssistant?.id;
+        const canRegen = m.role === "assistant" || childAssistant || (m.role === "user" && m.id);
         const regenBtn =
-          S.hasMultipleTabs || !m.id || (m.role !== "assistant" && !childAssistant)
+          S.hasMultipleTabs || !canRegen
             ? `<button disabled title="${S.hasMultipleTabs ? "Close other tabs to regenerate" : ""}">🔄 Regen</button>`
-            : `<button onclick="regenerate(${m.role === "assistant" ? m.id : childAssistant.id})" title="Regenerate">🔄 Regen</button>`;
+            : `<button onclick="${regenTargetId ? `regenerate(${regenTargetId})` : `continueFromUser()`}" title="Regenerate">🔄 Regen</button>`;
         const delBtn = m.id
           ? `<button onclick="deleteMessage(${m.id})" title="Delete message, siblings, and all children" style="color:var(--red)">✕ Del</button>`
           : `<button disabled style="color:var(--red)">✕ Del</button>`;
@@ -578,10 +580,10 @@ function patchPendingUserMessage(pendingMsg) {
   const tb = div.querySelector(".msg-toolbar");
   if (tb) {
     const childAssistant = S.messages.find((m) => m.parent_id === freshMsg.id && m.role === "assistant");
-    const regenBtn =
-      S.hasMultipleTabs || !childAssistant
-        ? `<button disabled title="${S.hasMultipleTabs ? "Close other tabs to regenerate" : ""}">🔄 Regen</button>`
-        : `<button onclick="regenerate(${childAssistant.id})" title="Regenerate">🔄 Regen</button>`;
+    const regenTargetId = childAssistant?.id;
+    const regenBtn = S.hasMultipleTabs
+      ? `<button disabled title="Close other tabs to regenerate">🔄 Regen</button>`
+      : `<button onclick="${regenTargetId ? `regenerate(${regenTargetId})` : `continueFromUser()`}" title="Regenerate">🔄 Regen</button>`;
     tb.innerHTML = `<button onclick="startEdit(${freshMsg.id})" title="Edit">✏️ Edit</button>${regenBtn}<button onclick="deleteMessage(${freshMsg.id})" title="Delete message, siblings, and all children" style="color:var(--red)">✕ Del</button>`;
   }
 }
@@ -659,10 +661,10 @@ async function afterStream() {
   const finalized = finalizeStreamingDiv(lastMsg);
   S.streamingBodyEl = null;
 
-  if (finalized) {
+  if (pendingUserMsg && finalized) {
     // Avoid a full re-render: only patch user messages that were rendered without an ID
     // (happens during sendMessage when pendingUserMsg has id=null).
-    if (pendingUserMsg) patchPendingUserMessage(pendingUserMsg);
+    patchPendingUserMessage(pendingUserMsg);
   } else {
     renderMessages();
   }
@@ -840,6 +842,35 @@ function agentPayload() {
   return { enable_agent: S.agentEnabled };
 }
 
+export async function continueFromUser() {
+  if (!S.activeConvId || S.isStreaming) return;
+  const lastMsg = S.messages[S.messages.length - 1];
+  if (lastMsg?.role !== "user") {
+    toast("Last message is not a user message", true);
+    return;
+  }
+  setStreaming(true);
+  setGenerationPhase("pending");
+  $("send-btn").disabled = true;
+  renderMessages();
+  const ct = $("chat-messages");
+  const msgDiv = createStreamingDiv();
+  S.abortController = new AbortController();
+  try {
+    const resp = await fetch("/api" + convUrl(S.activeConvId, "continue"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(agentPayload()),
+      signal: S.abortController.signal,
+    });
+    await processSSEStream(resp, ct, msgDiv, S.abortController.signal);
+  } catch (e) {
+    if (e.name === "AbortError") S.wasAborted = true;
+    else toast("Connection error: " + e.message, true);
+  }
+  await afterStream();
+}
+
 // ── Send Message
 export async function sendMessage() {
   if (!S.activeConvId || S.isStreaming) return;
@@ -854,26 +885,7 @@ export async function sendMessage() {
   if (lastMsg?.role === "user" && lastMsg.id) {
     inp.value = "";
     inp.style.height = "auto";
-    setStreaming(true);
-    setGenerationPhase("pending");
-    $("send-btn").disabled = true;
-    renderMessages();
-    const ct = $("chat-messages");
-    const msgDiv = createStreamingDiv();
-    S.abortController = new AbortController();
-    try {
-      const resp = await fetch("/api" + convUrl(S.activeConvId, "continue"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(agentPayload()),
-        signal: S.abortController.signal,
-      });
-      await processSSEStream(resp, ct, msgDiv, S.abortController.signal);
-    } catch (e) {
-      if (e.name === "AbortError") S.wasAborted = true;
-      else toast("Connection error: " + e.message, true);
-    }
-    await afterStream();
+    await continueFromUser();
     return;
   }
 
