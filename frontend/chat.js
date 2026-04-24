@@ -83,7 +83,7 @@ function setGenerationPhase(phase) {
   el.querySelector(".gen-dot").className = "gen-dot" + (S.generationPhase === "refining" ? " spin" : "");
 }
 
-function smoothUpdateBody(el, newHtml) {
+function smoothUpdateBody(el, newHtml, onComplete) {
   if (!el || el.innerHTML === newHtml) return;
   const prev = el.offsetHeight;
   el.innerHTML = newHtml;
@@ -94,13 +94,19 @@ function smoothUpdateBody(el, newHtml) {
     el.offsetHeight; // force reflow
     el.style.transition = "height 0.3s ease";
     el.style.height = next + "px";
+    let settled = false;
     const done = () => {
+      if (settled) return;
+      settled = true;
       el.style.height = "";
       el.style.overflow = "";
       el.style.transition = "";
+      onComplete?.();
     };
     el.addEventListener("transitionend", done, { once: true });
     setTimeout(done, 350); // fallback
+  } else {
+    onComplete?.();
   }
 }
 
@@ -116,7 +122,7 @@ function finalizeStreamingDiv(lastMsg) {
   const bodyHtml = S.pendingRefineDiff
     ? formatProseWithDiff(S.pendingRefineDiff.ops)
     : formatProse(resolvePlaceholders(lastMsg.content));
-  smoothUpdateBody(body, bodyHtml);
+  smoothUpdateBody(body, bodyHtml, () => scrollToBottom(true));
 
   const tb = div.querySelector(".msg-toolbar");
   if (tb) {
@@ -434,6 +440,7 @@ function getCharName() {
 
 export function renderMessages() {
   const ct = $("chat-messages");
+  const distFromBottom = ct.scrollHeight - ct.scrollTop - ct.clientHeight;
   let streamingEl = null;
   let badgeEl = null;
   if (S.isStreaming) {
@@ -515,6 +522,13 @@ export function renderMessages() {
   // Don't show streaming box when editing a message (looks ugly)
   // Also hide for a short time after cancelling edit during streaming
   if (streamingEl && !S.editingMsgId && !S.hideStreamingBox) ct.appendChild(streamingEl);
+  // Restore scroll position synchronously so the browser never paints a jump.
+  // Near-bottom → snap to bottom; otherwise preserve distance from bottom.
+  if (distFromBottom <= 50) {
+    ct.scrollTop = ct.scrollHeight;
+  } else {
+    ct.scrollTop = Math.max(0, ct.scrollHeight - ct.clientHeight - distFromBottom);
+  }
 }
 
 export function startEdit(msgId) {
@@ -750,10 +764,10 @@ async function afterStream() {
   const finalized = finalizeStreamingDiv(lastMsg);
   S.streamingBodyEl = null;
 
-  if (pendingUserMsg && finalized) {
-    // Avoid a full re-render: only patch user messages that were rendered without an ID
-    // (happens during sendMessage when pendingUserMsg has id=null).
-    patchPendingUserMessage(pendingUserMsg);
+  if (finalized) {
+    // Streaming div already updated in-place — no full re-render needed.
+    // Only patch the pending user message if one exists (sendMessage path).
+    if (pendingUserMsg) patchPendingUserMessage(pendingUserMsg);
   } else {
     renderMessages();
   }
@@ -804,7 +818,7 @@ async function processSSEStream(resp, container, msgDiv, signal) {
           () => {
             if (firstToken) {
               firstToken = false;
-              container.appendChild(msgDiv);
+              if (!msgDiv.isConnected) container.appendChild(msgDiv);
               if (S.streamingBodyEl) S.streamingBodyEl.innerHTML = "";
             }
             fullResponse += data.replace(/\\n/g, "\n");
@@ -817,9 +831,10 @@ async function processSSEStream(resp, container, msgDiv, signal) {
             S.streamingContent = text;
             if (S.streamingBodyEl) {
               const html = S.pendingRefineDiff ? formatProseWithDiff(S.pendingRefineDiff.ops) : formatProse(text);
-              smoothUpdateBody(S.streamingBodyEl, html);
+              smoothUpdateBody(S.streamingBodyEl, html, scrollToBottom);
+            } else {
+              scrollToBottom();
             }
-            scrollToBottom();
           },
         );
         currentEvent = null;
@@ -944,6 +959,8 @@ export async function continueFromUser() {
   renderMessages();
   const ct = $("chat-messages");
   const msgDiv = createStreamingDiv();
+  ct.appendChild(msgDiv);
+  scrollToBottom();
   S.abortController = new AbortController();
   try {
     const resp = await fetch("/api" + convUrl(S.activeConvId, "continue"), {
@@ -1044,6 +1061,8 @@ export async function regenerate(msgId) {
 
   const ct = $("chat-messages");
   const msgDiv = createStreamingDiv();
+  ct.appendChild(msgDiv);
+  scrollToBottom();
   S.abortController = new AbortController();
   try {
     const resp = await fetch("/api" + convUrl(S.activeConvId, "messages", msgId, "regenerate"), {
