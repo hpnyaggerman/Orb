@@ -25,8 +25,6 @@ MIGRATIONS: list[str] = [
     "0006_rename_fragments_to_mood_fragments",
     "0007_add_user_personas_columns",
     "0008_multi_endpoints",
-    "0009_hide_streaming_until_baked",
-    "0010_add_show_editor_diff",
 ]
 
 
