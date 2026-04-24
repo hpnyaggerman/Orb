@@ -646,10 +646,13 @@ async def handle_regenerate(
         )
         prefix = _build_prefix_from_ctx(ctx, history)
 
-        # Get the moods that were active BEFORE this turn (not the current state)
-        # This ensures regeneration uses the correct baseline moods
+        # Get the moods that were active BEFORE this turn (not the current state).
+        # Logs are keyed by the user's turn_index (= assistant turn_index - 1), so
+        # querying with target["turn_index"] would return the log for THIS very turn
+        # (the previously swiped message). Subtracting 1 skips that entry and returns
+        # the grandparent's moods — the correct baseline for the director prompt.
         moods_before = await db.get_moods_before_turn(
-            conversation_id, target["turn_index"]
+            conversation_id, target["turn_index"] - 1
         )
         if moods_before:
             ctx["director"]["active_moods"] = moods_before
