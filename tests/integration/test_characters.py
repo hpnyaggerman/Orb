@@ -113,9 +113,7 @@ async def test_rename_character_updates_matching_conversation_titles(client, db)
         row = await cur.fetchone()
     assert row["title"] == "Old Name"
 
-    await client.put(
-        f"/api/characters/{card_id}", json={"name": "New Name"}
-    )
+    await client.put(f"/api/characters/{card_id}", json={"name": "New Name"})
 
     async with db.execute(
         "SELECT title, character_name FROM conversations WHERE id = ?", (cid,)
@@ -138,9 +136,7 @@ async def test_rename_character_leaves_custom_title_alone(client, db):
     )
     cid = conv_resp.json()["id"]
 
-    await client.put(
-        f"/api/characters/{card_id}", json={"name": "Renamed"}
-    )
+    await client.put(f"/api/characters/{card_id}", json={"name": "Renamed"})
 
     async with db.execute(
         "SELECT title, character_name FROM conversations WHERE id = ?", (cid,)

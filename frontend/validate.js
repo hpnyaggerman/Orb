@@ -26,6 +26,7 @@ const MAX_PERSONA_NAME = 100;
 const MAX_PERSONA_DESC = 2000;
 const MAX_PHRASE_VARIANT = 500;
 const MAX_BROWSE_SEARCH = 200;
+const MAX_CONVERSATION_TITLE = 200;
 const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10 MB
 const MAX_AVATAR_SIZE = 5 * 1024 * 1024; // 5 MB
 const MIN_AVATAR_DIMENSION = 200;
@@ -556,6 +557,20 @@ export function validateBrowseSearch(query) {
 }
 
 /**
+ * Validate a conversation title.
+ * @param {string} title - The conversation title
+ * @returns {{ valid: boolean, error?: string }}
+ */
+export function validateConversationTitle(title) {
+  const trimmed = (title || "").trim();
+  if (!trimmed) return { valid: false, error: "Title cannot be empty" };
+  if (trimmed.length > MAX_CONVERSATION_TITLE) {
+    return { valid: false, error: `Title must be ${MAX_CONVERSATION_TITLE} characters or less` };
+  }
+  return { valid: true };
+}
+
+/**
  * Validate an edit message.
  * @param {string} content - The message content
  * @returns {{ valid: boolean, error?: string }}
@@ -601,4 +616,5 @@ export const validate = {
   validatePhraseVariants,
   validateBrowseSearch,
   validateEditMessage,
+  validateConversationTitle,
 };

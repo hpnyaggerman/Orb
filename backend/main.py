@@ -37,6 +37,7 @@ from .database import (
     create_conversation,
     delete_conversation,
     touch_conversation,
+    update_conversation,
     get_messages_with_branch_info,
     get_director_state,
     get_conversation_logs,
@@ -217,6 +218,10 @@ class ConversationCreate(BaseModel):
     character_scenario: str = ""
     first_mes: str = ""
     post_history_instructions: str = ""
+
+
+class ConversationUpdate(BaseModel):
+    title: Optional[str] = None
 
 
 class CharacterCardCreate(BaseModel):
@@ -660,6 +665,15 @@ async def api_touch_conversation(cid: str):
     return {"ok": True}
 
 
+@app.put("/api/conversations/{cid}")
+async def api_update_conversation(cid: str, data: ConversationUpdate):
+    conv = await get_conversation(cid)
+    if not conv:
+        raise HTTPException(404, "Conversation not found")
+    result = await update_conversation(cid, data.model_dump(exclude_unset=True))
+    return result
+
+
 # Character Cards ──
 
 
@@ -739,7 +753,11 @@ async def api_update_character(card_id: str, data: CharacterCardUpdate):
     result = await update_character_card(card_id, data.model_dump(exclude_none=True))
     if not result:
         raise HTTPException(404, "Character card not found")
-    old_name = old_card["name"] if old_card and "name" in data.model_dump(exclude_none=True) else None
+    old_name = (
+        old_card["name"]
+        if old_card and "name" in data.model_dump(exclude_none=True)
+        else None
+    )
     await sync_conversations_for_card(card_id, result, old_name=old_name)
     return result
 
