@@ -1,5 +1,5 @@
 """
-editor.py — Editor pass: the post-processing phase that runs a 
+editor.py — Editor pass: the post-processing phase that runs a
 ReAct-style LLM loop that fixes audit issues in Writer's output.
 """
 

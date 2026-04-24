@@ -179,11 +179,9 @@ def format_report(report: AuditReport) -> str:
 
     # 4. Not-but patterns
     if report.not_but_result:
-        lines = ["Contrastive Negation Patterns"]
+        lines = ["Contrastive Negation Patterns (Not X, but Y)"]
         for nb in report.not_but_result:
             sentence = nb.get("sentence", "")
-            x_template = nb.get("x_template", "")
-            y_template = nb.get("y_template", "")
             is_parallel = nb.get("is_parallel", False)
             parallel_note = " (parallel structure)" if is_parallel else ""
             lines.append(f'   - Sentence: "{sentence}"{parallel_note}')
