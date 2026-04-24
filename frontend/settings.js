@@ -3,6 +3,7 @@ import { $, esc, toast } from "./utils.js";
 import { api } from "./api.js";
 import { showModal, closeModal, showConfirmModal } from "./modal.js";
 import { validate } from "./validate.js";
+import { renderMessages } from "./chat.js";
 
 // ── Theme
 const THEMES = [
@@ -30,6 +31,7 @@ export function initTheme() {
 
 // ── Settings
 const MODEL_HYPERPARAM_KEYS = [
+  "shared_system_prompt",
   "system_prompt",
   "temperature",
   "max_tokens",
@@ -41,9 +43,10 @@ const MODEL_HYPERPARAM_KEYS = [
 
 const SETTING_FIELDS = [
   { k: "endpoint_url", l: "Endpoint URL", t: "text" },
-  { k: "model_name", l: "Model Name", t: "text" },
   { k: "api_key", l: "API Key", t: "api_key" },
-  { k: "system_prompt", l: "System Prompt", t: "textarea" },
+  { k: "model_name", l: "Model Name", t: "text" },
+  { k: "shared_system_prompt", l: "System Prompt (global)", t: "textarea" },
+  { k: "system_prompt", l: "System Prompt (model)", t: "textarea" },
   { k: "temperature", l: "Temperature", t: "number", s: "0.05", mn: "0", mx: "2" },
   { k: "max_tokens", l: "Max Tokens", t: "number", s: "64", mn: "64", mx: "8192" },
   { k: "top_p", l: "Top P", t: "number", s: "0.05", mn: "0", mx: "1" },
@@ -77,6 +80,14 @@ export async function loadSettings() {
   if (S.settings.reasoning_enabled_passes)
     S.reasoningEnabled = { ...S.reasoningEnabled, ...S.settings.reasoning_enabled_passes };
 
+  if (typeof S.settings.show_editor_diff === "number") S.showEditorDiff = S.settings.show_editor_diff !== 0;
+  else if (typeof S.settings.show_editor_diff === "boolean") S.showEditorDiff = S.settings.show_editor_diff;
+
+  if (typeof S.settings.hide_streaming_until_baked === "number")
+    S.hideUntilBaked = S.settings.hide_streaming_until_baked !== 0;
+  else if (typeof S.settings.hide_streaming_until_baked === "boolean")
+    S.hideUntilBaked = S.settings.hide_streaming_until_baked;
+
   // Expand Settings section if endpoint_url is empty
   const settingsSection = $("settings-section");
   if (settingsSection && (!S.settings.endpoint_url || S.settings.endpoint_url.trim() === "")) {
@@ -109,8 +120,9 @@ export function renderSettings() {
   $("settings-form").innerHTML = SETTING_FIELDS.map((f) => {
     const v = S.settings[f.k] ?? "";
     if (f.t === "textarea") {
+      const rows = f.k === "system_prompt" ? ' rows="2"' : "";
       return `<div class="field"><label>${f.l}</label>
-                <textarea data-key="${f.k}" onchange="saveSetting(this)">${v}</textarea>
+                <textarea data-key="${f.k}"${rows} onchange="saveSetting(this)">${v}</textarea>
               </div>`;
     }
     if (f.t === "api_key") {
@@ -142,6 +154,12 @@ export function renderSettings() {
             </div>`;
   }).join("");
   $("settings-form").innerHTML += `
+    <div class="field" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--accent-dim)">
+      <label class="lg-enforce-label" title="Hide the assistant's reply while the pipeline (director -> writer -> editor) runs. The phase indicator stays visible.">
+        <input type="checkbox" ${S.hideUntilBaked ? "checked" : ""} onchange="toggleHideUntilBaked(this.checked)">
+        Hide streaming message until baked
+      </label>
+    </div>
     <div class="field" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--accent-dim)">
       <button class="btn btn-danger" onclick="showResetConfirmModal()" style="width:100%;justify-content:center">Reset to Defaults</button>
     </div>
@@ -383,7 +401,9 @@ export async function loadEndpoints() {
   try {
     S.endpoints = await api.get("/endpoints");
     S.activeEndpointId = S.settings.active_endpoint_id || null;
-    S.activeModelConfigId = S.settings.active_model_config_id || null;
+    // active_model_config_id lives on the endpoint row, not settings
+    const activeEp = S.endpoints.find((e) => e.id === S.activeEndpointId);
+    S.activeModelConfigId = activeEp?.active_model_config_id || null;
     populateEndpointDatalist();
     if (S.activeEndpointId) {
       await loadModelConfigs(S.activeEndpointId);
@@ -447,7 +467,7 @@ async function syncEndpointRecord(url, apiKey) {
     S.endpoints.push(ep);
     S.activeEndpointId = ep.id;
     S.activeModelConfigId = null;
-    await api.put("/settings", { active_endpoint_id: ep.id, active_model_config_id: null });
+    await api.put("/settings", { active_endpoint_id: ep.id });
     populateEndpointDatalist();
     await loadModelConfigs(ep.id);
   }
@@ -466,7 +486,7 @@ async function syncModelConfigRecord(modelName, hyperparams) {
       await api.put(`/models/${existing.id}`, update);
       Object.assign(existing, update);
     }
-    await api.put("/settings", { active_model_config_id: existing.id });
+    await api.put(`/endpoints/${S.activeEndpointId}`, { active_model_config_id: existing.id });
   } else {
     const mc = await api.post(`/endpoints/${S.activeEndpointId}/models`, {
       model_name: modelName,
@@ -480,7 +500,7 @@ async function syncModelConfigRecord(modelName, hyperparams) {
     });
     S.modelConfigs.push(mc);
     S.activeModelConfigId = mc.id;
-    await api.put("/settings", { active_model_config_id: mc.id });
+    await api.put(`/endpoints/${S.activeEndpointId}`, { active_model_config_id: mc.id });
     populateModelDatalist();
   }
 }
@@ -503,16 +523,16 @@ export async function onHybridInput(el) {
     if (apiKeyEl) apiKeyEl.value = match.api_key || "";
     // Load models for this endpoint
     await loadModelConfigs(match.id);
-    // Auto-select: prefer the stored active model config, fall back to first
+    // Auto-select: prefer this endpoint's last-used model, fall back to first
     const modelEl = document.querySelector('[data-key="model_name"]');
     if (!modelEl || !S.modelConfigs.length) return;
-    const activeModel = S.modelConfigs.find((m) => m.id === S.activeModelConfigId) || S.modelConfigs[0];
+    const activeModel = S.modelConfigs.find((m) => m.id === match.active_model_config_id) || S.modelConfigs[0];
     modelEl.value = activeModel.model_name;
     fillModelConfigFields(activeModel);
-    // Persist the chosen model config
+    // Persist the chosen model config on the endpoint row
     S.activeModelConfigId = activeModel.id;
     try {
-      await api.put("/settings", { active_model_config_id: activeModel.id });
+      await api.put(`/endpoints/${match.id}`, { active_model_config_id: activeModel.id });
     } catch (e) {
       console.error("Failed to save active model config:", e);
     }
@@ -529,7 +549,7 @@ export async function onHybridInput(el) {
     fillModelConfigFields(match);
     S.activeModelConfigId = match.id;
     try {
-      await api.put("/settings", { active_model_config_id: match.id });
+      await api.put(`/endpoints/${S.activeEndpointId}`, { active_model_config_id: match.id });
     } catch (e) {
       console.error("Failed to save active model config:", e);
     }
@@ -780,6 +800,28 @@ export async function toggleLengthGuardEnforce(on) {
   }
 }
 
+export async function toggleShowEditorDiff(on) {
+  S.showEditorDiff = on;
+  renderMessages();
+  renderToolsPanel();
+  try {
+    S.settings = await api.put("/settings", { show_editor_diff: on });
+  } catch (e) {
+    toast("Failed to save editor diff setting", true);
+  }
+}
+
+export async function toggleHideUntilBaked(on) {
+  S.hideUntilBaked = on;
+  renderMessages();
+  renderSettings();
+  try {
+    S.settings = await api.put("/settings", { hide_streaming_until_baked: on });
+  } catch (e) {
+    toast("Failed to save hide-until-baked setting", true);
+  }
+}
+
 export async function saveLengthGuardConfig() {
   const words = parseInt($("lg-max-words").value, 10);
   const paras = parseInt($("lg-max-paragraphs").value, 10);
@@ -808,6 +850,15 @@ export function renderToolsPanel() {
   $("tools-panel-btn").style.opacity = S.agentEnabled ? "1" : "0.5";
   const toolCards = TOOL_DEFS.map((t) => {
     const on = !!S.enabledTools[t.id];
+    const extras =
+      t.id === "editor_apply_patch" && on
+        ? `<div class="lg-config">
+             <label class="lg-enforce-label" title="Highlight edited sentences with green/red strikethrough when the editor pass rewrites the writer's output.">
+               <input type="checkbox" ${S.showEditorDiff ? "checked" : ""} onchange="toggleShowEditorDiff(this.checked)">
+               Show diff highlights
+             </label>
+           </div>`
+        : "";
     return `<div class="tool-card ${on ? "tool-on" : ""}">
       <div class="tool-card-header">
         <span class="tool-card-name">${t.name}</span>
@@ -817,6 +868,7 @@ export function renderToolsPanel() {
         </label>
       </div>
       <div class="tool-card-desc">${t.desc}</div>
+      ${extras}
     </div>`;
   }).join("");
 

@@ -37,6 +37,7 @@ from .database import (
     create_conversation,
     delete_conversation,
     touch_conversation,
+    update_conversation,
     get_messages_with_branch_info,
     get_director_state,
     get_conversation_logs,
@@ -119,6 +120,7 @@ class SettingsUpdate(BaseModel):
     top_p: Optional[float] = None
     repetition_penalty: Optional[float] = None
     max_tokens: Optional[int] = None
+    shared_system_prompt: Optional[str] = None
     system_prompt: Optional[str] = None
     user_name: Optional[str] = None
     user_description: Optional[str] = None
@@ -132,7 +134,8 @@ class SettingsUpdate(BaseModel):
     character_library_view: Optional[str] = None
     character_library_sort: Optional[str] = None
     active_endpoint_id: Optional[int] = None
-    active_model_config_id: Optional[int] = None
+    show_editor_diff: Optional[bool] = None
+    hide_streaming_until_baked: Optional[bool] = None
 
 
 class EndpointCreate(BaseModel):
@@ -143,6 +146,7 @@ class EndpointCreate(BaseModel):
 class EndpointUpdate(BaseModel):
     url: Optional[str] = None
     api_key: Optional[str] = None
+    active_model_config_id: Optional[int] = None
 
 
 class ModelConfigCreate(BaseModel):
@@ -216,6 +220,10 @@ class ConversationCreate(BaseModel):
     character_scenario: str = ""
     first_mes: str = ""
     post_history_instructions: str = ""
+
+
+class ConversationUpdate(BaseModel):
+    title: Optional[str] = None
 
 
 class CharacterCardCreate(BaseModel):
@@ -659,6 +667,15 @@ async def api_touch_conversation(cid: str):
     return {"ok": True}
 
 
+@app.put("/api/conversations/{cid}")
+async def api_update_conversation(cid: str, data: ConversationUpdate):
+    conv = await get_conversation(cid)
+    if not conv:
+        raise HTTPException(404, "Conversation not found")
+    result = await update_conversation(cid, data.model_dump(exclude_unset=True))
+    return result
+
+
 # Character Cards ──
 
 
@@ -734,10 +751,16 @@ async def api_get_character(card_id: str):
 
 @app.put("/api/characters/{card_id}")
 async def api_update_character(card_id: str, data: CharacterCardUpdate):
+    old_card = await get_character_card(card_id)
     result = await update_character_card(card_id, data.model_dump(exclude_none=True))
     if not result:
         raise HTTPException(404, "Character card not found")
-    await sync_conversations_for_card(card_id, result)
+    old_name = (
+        old_card["name"]
+        if old_card and "name" in data.model_dump(exclude_none=True)
+        else None
+    )
+    await sync_conversations_for_card(card_id, result, old_name=old_name)
     return result
 
 

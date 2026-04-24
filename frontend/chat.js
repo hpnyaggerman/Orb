@@ -17,6 +17,12 @@ import { api } from "./api.js";
 import { showModal, closeModal, showConfirmModal } from "./modal.js";
 import { renderCharacters, loadCharacters, refreshCharacters } from "./library.js";
 import { validate } from "./validate.js";
+import { requestSendPermission } from "./tabLock.js";
+
+const ICON_EDIT = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>`;
+const ICON_REGEN = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.5"/></svg>`;
+const ICON_DEL = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>`;
+const ICON_CLEAR = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/></svg>`;
 
 // ── Attachments rendering
 function formatBytes(bytes) {
@@ -77,7 +83,7 @@ function setGenerationPhase(phase) {
   el.querySelector(".gen-dot").className = "gen-dot" + (S.generationPhase === "refining" ? " spin" : "");
 }
 
-function smoothUpdateBody(el, newHtml) {
+function smoothUpdateBody(el, newHtml, onComplete) {
   if (!el || el.innerHTML === newHtml) return;
   const prev = el.offsetHeight;
   el.innerHTML = newHtml;
@@ -88,13 +94,19 @@ function smoothUpdateBody(el, newHtml) {
     el.offsetHeight; // force reflow
     el.style.transition = "height 0.3s ease";
     el.style.height = next + "px";
+    let settled = false;
     const done = () => {
+      if (settled) return;
+      settled = true;
       el.style.height = "";
       el.style.overflow = "";
       el.style.transition = "";
+      onComplete?.();
     };
     el.addEventListener("transitionend", done, { once: true });
     setTimeout(done, 350); // fallback
+  } else {
+    onComplete?.();
   }
 }
 
@@ -107,20 +119,25 @@ function finalizeStreamingDiv(lastMsg) {
   div.setAttribute("data-msg-id", lastMsg.id);
   body.removeAttribute("id");
 
-  const bodyHtml = S.pendingRefineDiff
-    ? formatProseWithDiff(S.pendingRefineDiff.ops)
-    : formatProse(resolvePlaceholders(lastMsg.content));
-  smoothUpdateBody(body, bodyHtml);
+  const bodyHtml =
+    S.pendingRefineDiff && S.showEditorDiff
+      ? formatProseWithDiff(S.pendingRefineDiff.ops)
+      : formatProse(resolvePlaceholders(lastMsg.content));
+  smoothUpdateBody(body, bodyHtml, () => scrollToBottom(true));
 
   const tb = div.querySelector(".msg-toolbar");
   if (tb) {
     const diffBtn =
-      S.pendingRefineDiff?.msgId && lastMsg.id === S.pendingRefineDiff.msgId
+      S.pendingRefineDiff?.msgId && lastMsg.id === S.pendingRefineDiff.msgId && S.showEditorDiff
         ? `<button onclick="clearRefineDiff()" title="Clear diff highlights" class="btn-clear-diff">✕ Diff</button>`
         : "";
-    tb.innerHTML = `<button onclick="startEdit(${lastMsg.id})" title="Edit">✏️ Edit</button>
-      <button onclick="regenerate(${lastMsg.id})" title="Regenerate">🔄 Regen</button>
-      <button onclick="deleteMessage(${lastMsg.id})" title="Delete message, siblings, and all children" style="color:var(--red)">✕ Del</button>${diffBtn}`;
+    const editBtn = S.hasMultipleTabs
+      ? `<button disabled title="Close other tabs to edit">${ICON_EDIT}</button>`
+      : `<button onclick="startEdit(${lastMsg.id})" title="Edit">${ICON_EDIT}</button>`;
+    const regenBtn = S.hasMultipleTabs
+      ? `<button disabled title="Close other tabs to regenerate">${ICON_REGEN}</button>`
+      : `<button onclick="regenerate(${lastMsg.id})" title="Regenerate">${ICON_REGEN}</button>`;
+    tb.innerHTML = `${editBtn}${regenBtn}<button onclick="deleteMessage(${lastMsg.id})" title="Delete message, siblings, and all children" class="msg-btn-del">${ICON_DEL}</button>${diffBtn}`;
   }
 
   const bc = lastMsg.branch_count || 1;
@@ -335,6 +352,87 @@ export async function showConvHistoryModal() {
     <div class="modal-actions"><button class="btn" onclick="closeModal()">Close</button></div>`);
 }
 
+// ── Title Edit
+let _titleEditBackup = "";
+
+export function startEditTitle() {
+  if (!S.activeConvId) return;
+  const conv = S.conversations.find((c) => c.id === S.activeConvId);
+  if (!conv) return;
+  const area = $("chat-title-text");
+  if (!area) return;
+  _titleEditBackup = area.textContent;
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.id = "chat-title-input";
+  input.className = "chat-title-input";
+  input.value = _titleEditBackup;
+  input.addEventListener("keydown", handleTitleEditKey);
+  input.addEventListener("blur", saveTitleEdit);
+
+  area.replaceWith(input);
+  input.focus();
+  input.select();
+}
+
+export function handleTitleEditKey(e) {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    saveTitleEdit();
+  }
+  if (e.key === "Escape") {
+    e.preventDefault();
+    cancelTitleEdit();
+  }
+}
+
+export async function saveTitleEdit() {
+  const inp = $("chat-title-input");
+  if (!inp) return;
+  const newTitle = inp.value.trim();
+  if (!newTitle) {
+    cancelTitleEdit();
+    return;
+  }
+  const validation = validate.validateConversationTitle(newTitle);
+  if (!validation.valid) {
+    toast(validation.error, true);
+    cancelTitleEdit();
+    return;
+  }
+  if (newTitle === _titleEditBackup) {
+    cancelTitleEdit();
+    return;
+  }
+  try {
+    const updated = await api.put("/conversations/" + S.activeConvId, { title: newTitle });
+    const conv = S.conversations.find((c) => c.id === S.activeConvId);
+    if (conv) conv.title = updated.title;
+    const div = document.createElement("div");
+    div.className = "chat-title";
+    div.id = "chat-title-text";
+    div.textContent = updated.title || conv?.character_name || "";
+    inp.replaceWith(div);
+    _titleEditBackup = "";
+    toast("Title updated");
+  } catch (e) {
+    toast(e.message, true);
+    cancelTitleEdit();
+  }
+}
+
+export function cancelTitleEdit() {
+  const inp = $("chat-title-input");
+  if (!inp) return;
+  const div = document.createElement("div");
+  div.className = "chat-title";
+  div.id = "chat-title-text";
+  div.textContent = _titleEditBackup;
+  inp.replaceWith(div);
+  _titleEditBackup = "";
+}
+
 // ── Messages
 function getCharName() {
   const c = S.conversations.find((c) => c.id === S.activeConvId);
@@ -343,6 +441,7 @@ function getCharName() {
 
 export function renderMessages() {
   const ct = $("chat-messages");
+  const distFromBottom = ct.scrollHeight - ct.scrollTop - ct.clientHeight;
   let streamingEl = null;
   let badgeEl = null;
   if (S.isStreaming) {
@@ -373,14 +472,30 @@ export function renderMessages() {
           <button onclick="event.stopPropagation();switchBranch(${m.next_branch_id})" ${!m.next_branch_id ? "disabled" : ""}>▶</button>
         </span>`
             : "";
+        const editBtn =
+          S.hasMultipleTabs || !m.id
+            ? `<button disabled title="${S.hasMultipleTabs ? "Close other tabs to edit" : ""}">${ICON_EDIT}</button>`
+            : `<button onclick="startEdit(${m.id})" title="Edit">${ICON_EDIT}</button>`;
+        const childAssistant =
+          m.role === "user" ? S.messages.find((child) => child.parent_id === m.id && child.role === "assistant") : null;
+        const regenTargetId = m.role === "assistant" ? m.id : childAssistant?.id;
+        const canRegen = m.role === "assistant" || childAssistant || (m.role === "user" && m.id);
+        const regenBtn =
+          S.hasMultipleTabs || !canRegen
+            ? `<button disabled title="${S.hasMultipleTabs ? "Close other tabs to regenerate" : ""}">${ICON_REGEN}</button>`
+            : `<button onclick="${regenTargetId ? `regenerate(${regenTargetId})` : `continueFromUser()`}" title="Regenerate">${ICON_REGEN}</button>`;
+        const delBtn = m.id
+          ? `<button onclick="deleteMessage(${m.id})" title="Delete message, siblings, and all children" class="msg-btn-del">${ICON_DEL}</button>`
+          : `<button disabled class="msg-btn-del">${ICON_DEL}</button>`;
+        const diffBtn =
+          S.pendingRefineDiff?.msgId && m.id === S.pendingRefineDiff.msgId && S.showEditorDiff
+            ? `<button onclick="clearRefineDiff()" title="Clear diff highlights" class="btn-clear-diff">${ICON_CLEAR}</button>`
+            : "";
         const toolbar = isEditing
           ? ""
           : `
         <div class="msg-toolbar">
-          ${m.id ? `<button onclick="startEdit(${m.id})" title="Edit">✏️ Edit</button>` : `<button disabled>✏️ Edit</button>`}
-          ${m.role === "assistant" ? (m.id ? `<button onclick="regenerate(${m.id})" title="Regenerate">🔄 Regen</button>` : `<button disabled>🔄 Regen</button>`) : ""}
-          ${m.id ? `<button onclick="deleteMessage(${m.id})" title="Delete message, siblings, and all children" style="color:var(--red)">✕ Del</button>` : `<button disabled style="color:var(--red)">✕ Del</button>`}
-          ${S.pendingRefineDiff?.msgId && m.id === S.pendingRefineDiff.msgId ? `<button onclick="clearRefineDiff()" title="Clear diff highlights" class="btn-clear-diff">✕ Diff</button>` : ""}
+          ${editBtn}${regenBtn}${delBtn}${diffBtn}
         </div>`;
         const body = isEditing
           ? `
@@ -392,7 +507,7 @@ export function renderMessages() {
           </div>
         </div>`
           : `<div class="msg-body">${
-              S.pendingRefineDiff?.msgId && m.id === S.pendingRefineDiff.msgId
+              S.pendingRefineDiff?.msgId && m.id === S.pendingRefineDiff.msgId && S.showEditorDiff
                 ? formatProseWithDiff(S.pendingRefineDiff.ops)
                 : formatProse(resolvePlaceholders(m.content))
             }</div>`;
@@ -407,7 +522,14 @@ export function renderMessages() {
   if (badgeEl) ct.appendChild(badgeEl);
   // Don't show streaming box when editing a message (looks ugly)
   // Also hide for a short time after cancelling edit during streaming
-  if (streamingEl && !S.editingMsgId && !S.hideStreamingBox) ct.appendChild(streamingEl);
+  if (streamingEl && !S.editingMsgId && !S.hideStreamingBox && !S.hideUntilBaked) ct.appendChild(streamingEl);
+  // Restore scroll position synchronously so the browser never paints a jump.
+  // Near-bottom → snap to bottom; otherwise preserve distance from bottom.
+  if (distFromBottom <= 50) {
+    ct.scrollTop = ct.scrollHeight;
+  } else {
+    ct.scrollTop = Math.max(0, ct.scrollHeight - ct.clientHeight - distFromBottom);
+  }
 }
 
 export function startEdit(msgId) {
@@ -424,6 +546,12 @@ export function startEdit(msgId) {
   }
   const ta = $("edit-textarea-" + msgId);
   if (ta) {
+    ta.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        cancelEdit();
+      }
+    });
     ta.focus();
     ta.selectionStart = ta.selectionEnd = ta.value.length;
     ta.style.height = "auto";
@@ -457,7 +585,7 @@ export async function deleteMessage(msgId) {
       try {
         S.messages = await api.del(convUrl(S.activeConvId, "messages", msgId));
         S.lastDirectorData = null;
-        // Re-fetch director state so active moods are correct after deletion
+        // Re-fetch director state so moods are correct after deletion
         S.directorState = await api.get(convUrl(S.activeConvId, "director"));
         renderMessages();
         renderInspector();
@@ -479,7 +607,7 @@ export async function switchBranch(msgId) {
 
     S.messages = await api.post(convUrl(S.activeConvId, "messages", msgId, "switch-branch"), {});
     S.lastDirectorData = null;
-    // Re-fetch director state so active moods are correct for this branch
+    // Re-fetch director state so moods are correct for this branch
     S.directorState = await api.get(convUrl(S.activeConvId, "director"));
     renderMessages();
     renderInspector();
@@ -542,9 +670,9 @@ function createStreamingDiv() {
       <span class="typing-indicator"><span></span><span></span><span></span></span>
     </div>
     <div class="msg-toolbar">
-      <button disabled>✏️ Edit</button>
-      <button disabled>🔄 Regen</button>
-      <button disabled style="color:var(--red)">✕ Del</button>
+      <button disabled>${ICON_EDIT}</button>
+      <button disabled>${ICON_REGEN}</button>
+      <button disabled class="msg-btn-del">${ICON_DEL}</button>
     </div>`;
   S.streamingBodyEl = div.querySelector(".msg-body");
   return div;
@@ -558,8 +686,12 @@ function patchPendingUserMessage(pendingMsg) {
   div.setAttribute("data-msg-id", freshMsg.id);
   const tb = div.querySelector(".msg-toolbar");
   if (tb) {
-    tb.innerHTML = `<button onclick="startEdit(${freshMsg.id})" title="Edit">✏️ Edit</button>
-      <button onclick="deleteMessage(${freshMsg.id})" title="Delete message, siblings, and all children" style="color:var(--red)">✕ Del</button>`;
+    const childAssistant = S.messages.find((m) => m.parent_id === freshMsg.id && m.role === "assistant");
+    const regenTargetId = childAssistant?.id;
+    const regenBtn = S.hasMultipleTabs
+      ? `<button disabled title="Close other tabs to regenerate">${ICON_REGEN}</button>`
+      : `<button onclick="${regenTargetId ? `regenerate(${regenTargetId})` : `continueFromUser()`}" title="Regenerate">${ICON_REGEN}</button>`;
+    tb.innerHTML = `<button onclick="startEdit(${freshMsg.id})" title="Edit">${ICON_EDIT}</button>${regenBtn}<button onclick="deleteMessage(${freshMsg.id})" title="Delete message, siblings, and all children" class="msg-btn-del">${ICON_DEL}</button>`;
   }
 }
 
@@ -637,8 +769,8 @@ async function afterStream() {
   S.streamingBodyEl = null;
 
   if (finalized) {
-    // Avoid a full re-render: only patch user messages that were rendered without an ID
-    // (happens during sendMessage when pendingUserMsg has id=null).
+    // Streaming div already updated in-place — no full re-render needed.
+    // Only patch the pending user message if one exists (sendMessage path).
     if (pendingUserMsg) patchPendingUserMessage(pendingUserMsg);
   } else {
     renderMessages();
@@ -690,7 +822,7 @@ async function processSSEStream(resp, container, msgDiv, signal) {
           () => {
             if (firstToken) {
               firstToken = false;
-              container.appendChild(msgDiv);
+              if (!msgDiv.isConnected && !S.hideUntilBaked) container.appendChild(msgDiv);
               if (S.streamingBodyEl) S.streamingBodyEl.innerHTML = "";
             }
             fullResponse += data.replace(/\\n/g, "\n");
@@ -702,10 +834,14 @@ async function processSSEStream(resp, container, msgDiv, signal) {
             rewrittenResponse = text;
             S.streamingContent = text;
             if (S.streamingBodyEl) {
-              const html = S.pendingRefineDiff ? formatProseWithDiff(S.pendingRefineDiff.ops) : formatProse(text);
-              smoothUpdateBody(S.streamingBodyEl, html);
+              const html =
+                S.pendingRefineDiff && S.showEditorDiff
+                  ? formatProseWithDiff(S.pendingRefineDiff.ops)
+                  : formatProse(text);
+              smoothUpdateBody(S.streamingBodyEl, html, scrollToBottom);
+            } else {
+              scrollToBottom();
             }
-            scrollToBottom();
           },
         );
         currentEvent = null;
@@ -817,9 +953,41 @@ function agentPayload() {
   return { enable_agent: S.agentEnabled };
 }
 
+export async function continueFromUser() {
+  if (!S.activeConvId || S.isStreaming) return;
+  const lastMsg = S.messages[S.messages.length - 1];
+  if (lastMsg?.role !== "user") {
+    toast("Last message is not a user message", true);
+    return;
+  }
+  setStreaming(true);
+  setGenerationPhase("pending");
+  $("send-btn").disabled = true;
+  renderMessages();
+  const ct = $("chat-messages");
+  const msgDiv = createStreamingDiv();
+  if (!S.hideUntilBaked) ct.appendChild(msgDiv);
+  scrollToBottom();
+  S.abortController = new AbortController();
+  try {
+    const resp = await fetch("/api" + convUrl(S.activeConvId, "continue"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(agentPayload()),
+      signal: S.abortController.signal,
+    });
+    await processSSEStream(resp, ct, msgDiv, S.abortController.signal);
+  } catch (e) {
+    if (e.name === "AbortError") S.wasAborted = true;
+    else toast("Connection error: " + e.message, true);
+  }
+  await afterStream();
+}
+
 // ── Send Message
 export async function sendMessage() {
   if (!S.activeConvId || S.isStreaming) return;
+  if (!requestSendPermission()) return;
 
   const inp = $("chat-input");
   let content = inp.value.trim();
@@ -830,26 +998,7 @@ export async function sendMessage() {
   if (lastMsg?.role === "user" && lastMsg.id) {
     inp.value = "";
     inp.style.height = "auto";
-    setStreaming(true);
-    setGenerationPhase("pending");
-    $("send-btn").disabled = true;
-    renderMessages();
-    const ct = $("chat-messages");
-    const msgDiv = createStreamingDiv();
-    S.abortController = new AbortController();
-    try {
-      const resp = await fetch("/api" + convUrl(S.activeConvId, "continue"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(agentPayload()),
-        signal: S.abortController.signal,
-      });
-      await processSSEStream(resp, ct, msgDiv, S.abortController.signal);
-    } catch (e) {
-      if (e.name === "AbortError") S.wasAborted = true;
-      else toast("Connection error: " + e.message, true);
-    }
-    await afterStream();
+    await continueFromUser();
     return;
   }
 
@@ -919,6 +1068,8 @@ export async function regenerate(msgId) {
 
   const ct = $("chat-messages");
   const msgDiv = createStreamingDiv();
+  if (!S.hideUntilBaked) ct.appendChild(msgDiv);
+  scrollToBottom();
   S.abortController = new AbortController();
   try {
     const resp = await fetch("/api" + convUrl(S.activeConvId, "messages", msgId, "regenerate"), {
@@ -1086,7 +1237,7 @@ export function renderInspector() {
   const tc = ld.tool_calls || [];
   const inj = ld.injection_block || "";
   $("inspector-content").innerHTML = `
-    <div class="inspector-block"><h4>Active Moods</h4>
+    <div class="inspector-block"><h4>Moods</h4>
       <div>${stylesHtml || '<span style="color:var(--text-muted);font-size:12px">None</span>'}</div>
     </div>
     ${_buildReasoningHtml()}

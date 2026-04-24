@@ -29,7 +29,7 @@ SEED_MOOD_FRAGMENTS = [
     {
         "id": "inner-thoughts",
         "label": "Inner Thoughts",
-        "description": "Foreground the character's inner thoughts. Use when the user is acting strange.",
+        "description": "Foreground the character's inner thoughts. Only use when the user is acting strange.",
         "prompt_text": (
             "Foreground the character's inner thoughts. Show the gap between what they think "
             "and what they say. Stream of consciousness is acceptable. The reader should feel "
@@ -212,7 +212,8 @@ DEFAULT_SETTINGS = {
     "top_p": 0.95,
     "repetition_penalty": 1.0,
     "max_tokens": 4096,
-    "system_prompt": "You are a creative roleplay partner. Be responsive to the scene's evolving tone.\nCharacters have their own conviction and ideas, they may disagree with each other.\nKeep tenses (past, present) and POV consistent.\nAvoid repetition of word choices and sentence structures.",
+    "shared_system_prompt": "You are a creative roleplay partner. Be responsive to the scene's evolving tone.\nCharacters have their own conviction and ideas, they may disagree with each other.\nKeep tenses (past, present) and POV consistent.\nAvoid repetition of word choices and sentence structures.",
+    "system_prompt": "",
     "user_name": "User",
     "user_description": "",
     "enable_agent": True,
@@ -220,6 +221,8 @@ DEFAULT_SETTINGS = {
     "length_guard_max_paragraphs": 4,
     "character_library_view": "grid",
     "character_library_sort": "time-added",
+    "show_editor_diff": 1,
+    "hide_streaming_until_baked": 0,
 }
 
 SEED_PHRASE_BANK = [
@@ -330,6 +333,7 @@ async def init_db():
                 top_p REAL NOT NULL DEFAULT 0.95,
                 repetition_penalty REAL NOT NULL DEFAULT 1.0,
                 max_tokens INTEGER NOT NULL DEFAULT 4096,
+                shared_system_prompt TEXT NOT NULL DEFAULT '',
                 system_prompt TEXT NOT NULL DEFAULT '',
                 user_name TEXT NOT NULL DEFAULT 'User',
                 user_description TEXT NOT NULL DEFAULT '',
@@ -340,7 +344,9 @@ async def init_db():
                 reasoning_enabled_passes TEXT NOT NULL DEFAULT '{"director":true,"writer":false,"editor":false}',
                 active_persona_id INTEGER REFERENCES user_personas(id) ON DELETE SET NULL,
                 character_library_view TEXT NOT NULL DEFAULT 'grid',
-                character_library_sort TEXT NOT NULL DEFAULT 'time-added'
+                character_library_sort TEXT NOT NULL DEFAULT 'time-added',
+                show_editor_diff INTEGER NOT NULL DEFAULT 1,
+                hide_streaming_until_baked INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS mood_fragments (
@@ -455,7 +461,8 @@ async def init_db():
             CREATE TABLE IF NOT EXISTS endpoints (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 url TEXT NOT NULL,
-                api_key TEXT NOT NULL DEFAULT ''
+                api_key TEXT NOT NULL DEFAULT '',
+                active_model_config_id INTEGER REFERENCES model_configs(id) ON DELETE SET NULL
             );
 
             CREATE TABLE IF NOT EXISTS model_configs (
@@ -510,9 +517,24 @@ async def init_db():
             await db.execute(
                 "ALTER TABLE settings ADD COLUMN active_endpoint_id INTEGER REFERENCES endpoints(id) ON DELETE SET NULL"
             )
-        if "active_model_config_id" not in existing_cols:
+        if "shared_system_prompt" not in existing_cols:
             await db.execute(
-                "ALTER TABLE settings ADD COLUMN active_model_config_id INTEGER REFERENCES model_configs(id) ON DELETE SET NULL"
+                "ALTER TABLE settings ADD COLUMN shared_system_prompt TEXT NOT NULL DEFAULT ''"
+            )
+        if "show_editor_diff" not in existing_cols:
+            await db.execute(
+                "ALTER TABLE settings ADD COLUMN show_editor_diff INTEGER NOT NULL DEFAULT 1"
+            )
+        if "hide_streaming_until_baked" not in existing_cols:
+            await db.execute(
+                "ALTER TABLE settings ADD COLUMN hide_streaming_until_baked INTEGER NOT NULL DEFAULT 0"
+            )
+        endpoint_cols = {
+            row[1] for row in await db.execute_fetchall("PRAGMA table_info(endpoints)")
+        }
+        if "active_model_config_id" not in endpoint_cols:
+            await db.execute(
+                "ALTER TABLE endpoints ADD COLUMN active_model_config_id INTEGER REFERENCES model_configs(id) ON DELETE SET NULL"
             )
 
         # Migration for director_state keywords column
@@ -544,7 +566,7 @@ async def init_db():
         if row[0]["c"] == 0:
             s = DEFAULT_SETTINGS
             await db.execute(
-                "INSERT INTO settings (id, endpoint_url, model_name, temperature, min_p, top_k, top_p, repetition_penalty, max_tokens, system_prompt, enabled_tools) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO settings (id, endpoint_url, model_name, temperature, min_p, top_k, top_p, repetition_penalty, max_tokens, shared_system_prompt, system_prompt, enabled_tools) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     s["endpoint_url"],
                     s["model_name"],
@@ -554,6 +576,7 @@ async def init_db():
                     s["top_p"],
                     s["repetition_penalty"],
                     s["max_tokens"],
+                    s["shared_system_prompt"],
                     s["system_prompt"],
                     json.dumps(DEFAULT_ENABLED_TOOLS),
                 ),
@@ -578,7 +601,7 @@ async def init_db():
                     (
                         endpoint_id,
                         s.get("model_name", "default"),
-                        s.get("system_prompt", ""),
+                        "",  # Model-specific system_prompt starts empty
                         s.get("temperature", 0.8),
                         s.get("min_p", 0.0),
                         s.get("top_k", 40),
@@ -589,8 +612,12 @@ async def init_db():
                 )
                 model_config_id = cur2.lastrowid
                 await db.execute(
-                    "UPDATE settings SET active_endpoint_id = ?, active_model_config_id = ? WHERE id = 1",
-                    (endpoint_id, model_config_id),
+                    "UPDATE endpoints SET active_model_config_id = ? WHERE id = ?",
+                    (model_config_id, endpoint_id),
+                )
+                await db.execute(
+                    "UPDATE settings SET active_endpoint_id = ? WHERE id = 1",
+                    (endpoint_id,),
                 )
 
         # Seed mood fragments if empty
@@ -657,6 +684,43 @@ async def get_settings() -> dict:
             s.get("reasoning_enabled_passes")
             or '{"director":true,"writer":false,"editor":false}'
         )
+        # Overlay endpoint_url, api_key, model_name, and hyperparameters from the
+        # active endpoint's active model config so callers always get live values
+        # rather than the stale flat columns.
+        active_ep_id = s.get("active_endpoint_id")
+        if active_ep_id:
+            ep_rows = await db.execute_fetchall(
+                "SELECT id, url, api_key, active_model_config_id FROM endpoints WHERE id = ?",
+                (active_ep_id,),
+            )
+            if ep_rows:
+                ep = dict(ep_rows[0])
+                mc_id = ep.get("active_model_config_id")
+                if mc_id:
+                    mc_rows = await db.execute_fetchall(
+                        """SELECT mc.*, e.url AS endpoint_url, e.api_key
+                           FROM model_configs mc
+                           JOIN endpoints e ON mc.endpoint_id = e.id
+                           WHERE mc.id = ?""",
+                        (mc_id,),
+                    )
+                    if mc_rows:
+                        mc = dict(mc_rows[0])
+                        s["endpoint_url"] = mc["endpoint_url"]
+                        s["api_key"] = mc.get("api_key", "")
+                        s["model_name"] = mc["model_name"]
+                        for field in (
+                            "temperature",
+                            "min_p",
+                            "top_k",
+                            "top_p",
+                            "repetition_penalty",
+                            "max_tokens",
+                        ):
+                            if mc.get(field) is not None:
+                                s[field] = mc[field]
+                        if mc.get("system_prompt") is not None:
+                            s["system_prompt"] = mc["system_prompt"]
         return s
     finally:
         await db.close()
@@ -675,6 +739,7 @@ async def update_settings(data: dict) -> dict:
             "top_p",
             "repetition_penalty",
             "max_tokens",
+            "shared_system_prompt",
             "system_prompt",
             "user_name",
             "user_description",
@@ -687,7 +752,8 @@ async def update_settings(data: dict) -> dict:
             "character_library_view",
             "character_library_sort",
             "active_endpoint_id",
-            "active_model_config_id",
+            "show_editor_diff",
+            "hide_streaming_until_baked",
         ]
         json_fields = {"enabled_tools", "reasoning_enabled_passes"}
         sets = []
@@ -715,7 +781,7 @@ async def get_endpoints() -> list[dict]:
     db = await get_db()
     try:
         rows = await db.execute_fetchall(
-            "SELECT id, url, api_key FROM endpoints ORDER BY id ASC"
+            "SELECT id, url, api_key, active_model_config_id FROM endpoints ORDER BY id ASC"
         )
         return [dict(r) for r in rows]
     finally:
@@ -726,7 +792,8 @@ async def get_endpoint(endpoint_id: int) -> dict | None:
     db = await get_db()
     try:
         rows = await db.execute_fetchall(
-            "SELECT id, url, api_key FROM endpoints WHERE id = ?", (endpoint_id,)
+            "SELECT id, url, api_key, active_model_config_id FROM endpoints WHERE id = ?",
+            (endpoint_id,),
         )
         return dict(rows[0]) if rows else None
     finally:
@@ -751,7 +818,7 @@ async def create_endpoint(url: str, api_key: str = "") -> dict:
 async def update_endpoint(endpoint_id: int, data: dict) -> dict | None:
     db = await get_db()
     try:
-        allowed = ["url", "api_key"]
+        allowed = ["url", "api_key", "active_model_config_id"]
         sets, vals = [], []
         for k in allowed:
             if k in data:
@@ -765,7 +832,8 @@ async def update_endpoint(endpoint_id: int, data: dict) -> dict | None:
             )
             await db.commit()
         rows = await db.execute_fetchall(
-            "SELECT id, url FROM endpoints WHERE id = ?", (endpoint_id,)
+            "SELECT id, url, api_key, active_model_config_id FROM endpoints WHERE id = ?",
+            (endpoint_id,),
         )
         return dict(rows[0]) if rows else None
     finally:
@@ -1122,6 +1190,30 @@ async def touch_conversation(cid: str) -> bool:
         )
         await db.commit()
         return cur.rowcount > 0
+    finally:
+        await db.close()
+
+
+async def update_conversation(cid: str, data: dict) -> dict | None:
+    db = await get_db()
+    try:
+        allowed = ["title"]
+        sets = []
+        vals = []
+        for k in allowed:
+            if k in data:
+                sets.append(f"{k} = ?")
+                vals.append(data[k])
+        if sets:
+            sets.append("updated_at = ?")
+            vals.append(datetime.now(timezone.utc).isoformat())
+            vals.append(cid)
+            await db.execute(
+                f"UPDATE conversations SET {', '.join(sets)} WHERE id = ?",
+                vals,
+            )
+            await db.commit()
+        return await get_conversation(cid)
     finally:
         await db.close()
 
@@ -1861,12 +1953,17 @@ async def update_character_card(card_id: str, data: dict) -> dict | None:
         await db.close()
 
 
-async def sync_conversations_for_card(card_id: str, card: dict) -> None:
+async def sync_conversations_for_card(
+    card_id: str, card: dict, old_name: str | None = None
+) -> None:
     """Propagate mutable card fields to all conversations linked to this card.
 
     Only syncs fields that are denormalised onto the conversation row and
     affect prompt-building at runtime. first_mes is excluded because it has
     already been materialised as a message in the conversation tree.
+
+    If ``old_name`` is provided, conversation titles that still match the old
+    name are updated to the new name so they don't become stale.
     """
     db = await get_db()
     try:
@@ -1883,6 +1980,13 @@ async def sync_conversations_for_card(card_id: str, card: dict) -> None:
                 card_id,
             ),
         )
+        if old_name is not None:
+            await db.execute(
+                """UPDATE conversations
+                   SET title = ?
+                   WHERE character_card_id = ? AND title = ?""",
+                (card.get("name", ""), card_id, old_name),
+            )
         await db.commit()
     finally:
         await db.close()
@@ -2006,9 +2110,20 @@ async def delete_message_with_descendants(cid: str, msg_id: int) -> bool:
 async def resolve_char_context(conv: dict, settings: dict) -> tuple[str, str, str]:
     """Load character card data and resolve the effective system prompt, persona, and example messages.
 
+    Combines shared_system_prompt (global) with system_prompt (model-specific).
+    Character card system_prompt, if present, completely overrides both.
+
     Returns (system_prompt, char_persona, mes_example).
     """
-    system_prompt = settings["system_prompt"]
+    # Combine shared (global) + model-specific system prompts
+    shared = settings.get("shared_system_prompt", "")
+    model_specific = settings.get("system_prompt", "")
+
+    if shared and model_specific:
+        system_prompt = f"{shared}\n\n{model_specific}"
+    else:
+        system_prompt = shared or model_specific
+
     char_persona, mes_example = "", ""
     if card_id := conv.get("character_card_id"):
         card = await get_character_card(card_id)
@@ -2018,6 +2133,7 @@ async def resolve_char_context(conv: dict, settings: dict) -> tuple[str, str, st
             )
             mes_example = card.get("mes_example", "")
             if card.get("system_prompt"):
+                # Character card system_prompt completely overrides
                 system_prompt = card["system_prompt"]
     return system_prompt, char_persona, mes_example
 
@@ -2056,7 +2172,7 @@ async def reset_to_defaults() -> None:
         # Re-seed settings
         s = DEFAULT_SETTINGS
         await db.execute(
-            "INSERT INTO settings (id, endpoint_url, model_name, temperature, min_p, top_k, top_p, repetition_penalty, max_tokens, system_prompt, enabled_tools) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO settings (id, endpoint_url, model_name, temperature, min_p, top_k, top_p, repetition_penalty, max_tokens, shared_system_prompt, system_prompt, enabled_tools) VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 s["endpoint_url"],
                 s["model_name"],
@@ -2066,6 +2182,7 @@ async def reset_to_defaults() -> None:
                 s["top_p"],
                 s["repetition_penalty"],
                 s["max_tokens"],
+                s["shared_system_prompt"],
                 s["system_prompt"],
                 json.dumps(DEFAULT_ENABLED_TOOLS),
             ),
@@ -2082,7 +2199,7 @@ async def reset_to_defaults() -> None:
             (
                 endpoint_id,
                 s["model_name"],
-                s["system_prompt"],
+                "",  # Model-specific system_prompt starts empty
                 s["temperature"],
                 s["min_p"],
                 s["top_k"],
@@ -2093,8 +2210,12 @@ async def reset_to_defaults() -> None:
         )
         model_config_id = cur_mc.lastrowid
         await db.execute(
-            "UPDATE settings SET active_endpoint_id = ?, active_model_config_id = ? WHERE id = 1",
-            (endpoint_id, model_config_id),
+            "UPDATE endpoints SET active_model_config_id = ? WHERE id = ?",
+            (model_config_id, endpoint_id),
+        )
+        await db.execute(
+            "UPDATE settings SET active_endpoint_id = ? WHERE id = 1",
+            (endpoint_id,),
         )
 
         # Re-seed mood fragments

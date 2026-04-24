@@ -21,7 +21,7 @@ _DIRECT_SCENE_FIXED_REQUIRED: list[str] = []
 
 _DIRECT_SCENE_DESCRIPTION = (
     "Call this to direct the scene. Deduce what the user wants to see and show them. "
-    "Be very specific and intentional with the direction. Aim to keep things fresh."
+    "Be very specific and intentional with the direction. Aim to keep things fresh, may churn if need to."
 )
 
 
@@ -31,8 +31,8 @@ def build_direct_scene_tool(director_fragments: list[dict]) -> dict:
     Director fragments provide dynamic string/array parameters beyond the fixed
     moods and keywords fields. The returned dict is in OpenAI function-calling format.
     """
-    properties: dict = dict(_DIRECT_SCENE_FIXED_PROPERTIES)
-    required: list[str] = list(_DIRECT_SCENE_FIXED_REQUIRED)
+    properties: dict = {}
+    required: list[str] = []
 
     for df in director_fragments:
         fid = df["id"]
@@ -47,6 +47,9 @@ def build_direct_scene_tool(director_fragments: list[dict]) -> dict:
         properties[fid] = prop
         if df.get("required"):
             required.append(fid)
+
+    properties.update(_DIRECT_SCENE_FIXED_PROPERTIES)
+    required.extend(_DIRECT_SCENE_FIXED_REQUIRED)
 
     return {
         "type": "function",
@@ -208,7 +211,7 @@ EDITOR_PATCH_INSTRUCTIONS = (
 EDITOR_REWRITE_INSTRUCTIONS = (
     "Use `editor_rewrite` to produce a rewrite within the specified limits.\n\n"
     "REWRITING RULES:\n"
-    "- Preserve the author's vocabulary and creative word choices and all key story beats. Sentence starters should be varied - avoid 3+ consecutive sentences starting with the same word (e.g. 'she, she, she').\n"
+    "- Preserve the author's vocabulary and creative word choices and all key story beats. Sentence starters should be varied.\n"
     "- First priority is to get rid of repetitiveness and condense comma-separated adjectives into stronger, more precise words (e.g. old, ruined building -> decrepit building).\n"
     "- Be more concise but maintain coherence and narrative flow."
 )
@@ -217,6 +220,13 @@ EDITOR_REWRITE_INSTRUCTIONS = (
 # The model already receives the full audit report and length-guard
 # instruction with concrete word/paragraph limits.
 EDITOR_BOTH_INSTRUCTIONS = "Call `editor_rewrite` to address both concerns in a single rewrite. Address all audit issues while also respecting length constraints."
+
+STRUCTURAL_REWRITE_INSTRUCTIONS = (
+    "STRUCTURAL REPETITION: This response follows the same paragraph layout as recent "
+    "previous messages. Call `editor_rewrite` with an entirely different structure — "
+    "change the order and balance of narration, dialogue, and internal thought so the "
+    "response is laid out distinctly from the previous ones."
+)
 
 LENGTH_GUARD_INSTRUCTIONS = (
     "LENGTH GUARD: The draft is {word_count} words — too long. "

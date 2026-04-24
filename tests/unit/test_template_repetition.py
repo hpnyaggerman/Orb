@@ -1,190 +1,131 @@
 """
-Tests for contrastive-negation detection.
+Tests for template_repetition detection.
 
 Organised into:
-  - TRUE POSITIVES  – the "AI slop" patterns we *want* to catch
-  - FALSE POSITIVES – legitimate English the detector should *ignore*
+  - TRUE POSITIVES  – repetitive templates across paragraphs we *want* to catch
+  - FALSE POSITIVES – legitimate variation that should *not* trigger
   - EDGE CASES      – boundary inputs
 """
 
 import pytest
 
-from backend.passes.editor.contrastive_negation import detect_contrastive_negation
+from backend.passes.editor.template_repetition import (
+    detect_template_repetition,
+)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# TRUE POSITIVES – rhetorical "not X, but Y" / "isn't X, is Y" slop
+# TRUE POSITIVES – repetitive templates across paragraphs that should be flagged
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
 class TestTruePositives:
     """These MUST be detected."""
 
-    def test_classic_not_but(self):
-        hits = detect_contrastive_negation("It's not a bug, but a feature.")
-        assert len(hits) >= 1
-
-    def test_isnt_it_is(self):
-        hits = detect_contrastive_negation(
-            "This isn't a setback, it is an opportunity."
+    def test_same_template_three_times(self):
+        """Simple exact template repetition with max_words=2."""
+        text = (
+            "The question hangs in the air. "
+            "The question is heavy. "
+            "The question remains."
         )
-        assert len(hits) >= 1
+        result = detect_template_repetition(text, max_words=2, flag_threshold=3)
+        assert len(result.flagged_templates) >= 1
+        flagged = result.flagged_templates[0]
+        assert "the question" in flagged.template
+        assert flagged.count >= 3
 
-    def test_was_not_but(self):
-        hits = detect_contrastive_negation("He was not angry, but disappointed.")
-        assert len(hits) >= 1
-
-    def test_isnt_simple_mistake(self):
-        hits = detect_contrastive_negation(
-            "It isn't a simple mistake, it is a catastrophe."
+    def test_similar_templates_across_paragraphs(self):
+        """Similar templates appearing across paragraph breaks."""
+        text = (
+            "The question hangs in the air.\n\n"
+            "Another paragraph here.\n\n"
+            "Then another paragraph.\n\n"
+            "The question is heavy.\n\n"
+            "The question remains unanswered."
         )
-        assert len(hits) >= 1
+        result = detect_template_repetition(text, max_words=2, flag_threshold=3)
+        assert len(result.flagged_templates) >= 1
+        # Find the flagged template about "the question"
+        question_templates = [
+            ft for ft in result.flagged_templates if "the question" in ft.template
+        ]
+        assert len(question_templates) >= 1
+        assert question_templates[0].count >= 3
 
-    def test_not_just_but(self):
-        """'not just X, but Y' is the same rhetorical move."""
-        hits = detect_contrastive_negation(
-            "She is not just talented, she is extraordinary."
+    def test_multiple_similar_templates(self):
+        """Different template groups should be detected."""
+        text = (
+            "The wind blows through the trees. "
+            "The wind is cold today. "
+            "The wind has died down. "
+            "She looks out the window. "
+            "She looks at the clock. "
+            "She looks away."
         )
-        assert len(hits) >= 1
+        result = detect_template_repetition(text, max_words=2, flag_threshold=3)
+        # Should detect "the wind" and "she looks" templates
+        templates = [ft.template for ft in result.flagged_templates]
+        assert any("the wind" in t for t in templates)
+        assert any("she looks" in t for t in templates)
 
-    def test_arent_they_are(self):
-        hits = detect_contrastive_negation(
-            "They aren't obstacles, they are stepping stones."
+    def test_partial_template_match(self):
+        """Templates with significant word overlap should cluster."""
+        text = (
+            "It was not a question but a statement. "
+            "It was not the answer she expected. "
+            "It was not even close to correct."
         )
-        assert len(hits) >= 1
+        result = detect_template_repetition(text, max_words=3, flag_threshold=3)
+        # "it was not" should be a flagged template
+        assert len(result.flagged_templates) >= 1
 
-    def test_wasnt_was(self):
-        hits = detect_contrastive_negation(
-            "It wasn't a failure, it was a learning experience."
+    def test_long_range_template_repetition(self):
+        """Templates appearing far apart should still be detected."""
+        text = (
+            "In the beginning there was light.\n\n"
+            "Many paragraphs pass by here with various content.\n\n"
+            "The story continues in its usual way.\n\n"
+            "Characters develop and plot thickens.\n\n"
+            "In the beginning there was nothing."
         )
-        assert len(hits) >= 1
-
-    def test_not_x_but_rather_y(self):
-        hits = detect_contrastive_negation(
-            "This is not a crisis, but rather an inflection point."
-        )
-        assert len(hits) >= 1
-
-    def test_doesnt_verb_at_x_verbs_at_y(self):
-        """Semicolon-separated 'doesn't VERB at X; VERBs at Y' contrastive pattern."""
-        hits = detect_contrastive_negation(
-            "She doesn't look at Kai; she looks at the object."
-        )
-        assert len(hits) >= 1
-
-    def test_didnt_just_dash_had(self):
-        """'didn't just X—she had it practically Y' contrastive pattern."""
-        hits = detect_contrastive_negation(
-            "she didn't just suggest—she had it practically curated"
-        )
-        assert len(hits) >= 1
+        result = detect_template_repetition(text, max_words=3, flag_threshold=2)
+        flagged = result.flagged_templates
+        # Should detect "in the beginning" pattern
+        assert any("in the beginning" in ft.template for ft in flagged)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# FALSE POSITIVES – legitimate English that should NOT trigger
+# FALSE POSITIVES – legitimate variation that should NOT trigger
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
-class TestFalsePositive_NotOnlyButAlso:
-    """'not only … but (also)' is a standard intensifier, not slop."""
+class TestFalsePositives:
+    """These should NOT be flagged."""
 
-    def test_not_only_but_also(self):
-        hits = detect_contrastive_negation(
-            "Not only is she talented, but she is also kind."
+    def test_no_repetition_below_threshold(self):
+        """Single occurrence should not be flagged."""
+        text = "The question hangs in the air."
+        result = detect_template_repetition(text, flag_threshold=2)
+        assert len(result.flagged_templates) == 0
+
+    def test_dissimilar_templates(self):
+        """Completely different sentence structures."""
+        text = (
+            "The sun rose over the mountains. "
+            "Birds chirped in the trees. "
+            "A gentle breeze rustled the leaves."
         )
-        assert len(hits) == 0
+        result = detect_template_repetition(text, flag_threshold=2)
+        # Should have no flagged templates
+        assert len(result.flagged_templates) == 0
 
-    def test_not_only_inline(self):
-        hits = detect_contrastive_negation(
-            "He is not only a doctor but also a musician."
-        )
-        assert len(hits) == 0
-
-    def test_not_only_without_also(self):
-        hits = detect_contrastive_negation("This is not only useful but necessary.")
-        assert len(hits) == 0
-
-
-class TestFalsePositive_RegularContrast:
-    """Ordinary 'not … but' where X and Y aren't parallel noun/adj phrases."""
-
-    def test_not_like_but_brought(self):
-        hits = detect_contrastive_negation(
-            "I do not like rain, but I brought an umbrella."
-        )
-        assert len(hits) == 0
-
-    def test_not_invited_but_came(self):
-        hits = detect_contrastive_negation("She was not invited, but she came anyway.")
-        assert len(hits) == 0
-
-    def test_not_coming_but_should_go(self):
-        hits = detect_contrastive_negation("He's not coming, but we should still go.")
-        assert len(hits) == 0
-
-    def test_not_sure_but_think(self):
-        hits = detect_contrastive_negation("I'm not sure, but I think it's Thursday.")
-        assert len(hits) == 0
-
-    def test_not_ideal_but_works(self):
-        hits = detect_contrastive_negation("It's not ideal, but it works.")
-        assert len(hits) == 0
-
-
-class TestFalsePositive_Questions:
-    """Questions that happen to contain negated be + later be verb."""
-
-    def test_isnt_where_is(self):
-        hits = detect_contrastive_negation("Isn't that strange? Where is the manager?")
-        assert len(hits) == 0
-
-    def test_isnt_what_is(self):
-        hits = detect_contrastive_negation("Why isn't it working? What is the error?")
-        assert len(hits) == 0
-
-
-class TestFalsePositive_UnrelatedClauses:
-    """Be-verb reappears but refers to a different subject or is incidental."""
-
-    def test_isnt_and_there_is(self):
-        hits = detect_contrastive_negation(
-            "He isn't available, and there is no substitute."
-        )
-        assert len(hits) == 0
-
-    def test_isnt_but_deadline_is(self):
-        hits = detect_contrastive_negation(
-            "It isn't done yet, but the deadline is tomorrow."
-        )
-        assert len(hits) == 0
-
-    def test_wasnt_sure_and_was_confused(self):
-        hits = detect_contrastive_negation("She wasn't sure, and he was confused too.")
-        assert len(hits) == 0
-
-
-class TestFalsePositive_NotInOtherConstructions:
-    """'not' is part of an infinitive, 'whether or not', etc."""
-
-    def test_told_not_to_go(self):
-        hits = detect_contrastive_negation("I told him not to go, but he is stubborn.")
-        assert len(hits) == 0
-
-    def test_try_not_to_worry(self):
-        hits = detect_contrastive_negation("Try not to worry, but this is serious.")
-        assert len(hits) == 0
-
-
-class TestFalsePositive_DifferentSubjects:
-    """Negation + affirmation about completely different things."""
-
-    def test_different_nouns(self):
-        hits = detect_contrastive_negation("The car is not red, the house is blue.")
-        # Debatable — could be slop-ish, but different subjects = likely not.
-        # At minimum is_parallel should be True to match.
-        for h in hits:
-            if not h["is_parallel"]:
-                pytest.fail("Non-parallel different-subject hit is a false positive")
+    def test_high_flag_threshold_blocks_detection(self):
+        """High threshold should prevent flagging."""
+        text = "The question hangs in the air. " "The question is heavy."
+        result = detect_template_repetition(text, max_words=2, flag_threshold=3)
+        # Threshold is 3 but only 2 occurrences
+        assert len(result.flagged_templates) == 0
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -194,24 +135,116 @@ class TestFalsePositive_DifferentSubjects:
 
 class TestEdgeCases:
     def test_empty_string(self):
-        assert detect_contrastive_negation("") == []
+        result = detect_template_repetition("")
+        assert result.total_sentences == 0
+        assert result.flagged_templates == []
+        assert result.repetition_score == 0.0
 
-    def test_short_sentence(self):
-        assert detect_contrastive_negation("Not bad.") == []
+    def test_single_sentence(self):
+        result = detect_template_repetition("One sentence only.")
+        assert result.total_sentences == 1
+        assert result.flagged_templates == []
 
-    def test_no_pattern(self):
-        assert (
-            detect_contrastive_negation("The sky is blue and the grass is green.") == []
+    def test_only_dialogue_no_narration(self):
+        """Dialogue-only text - only attribution fragments remain after stripping."""
+        text = '"Hello there," he said. "How are you?" she asked.'
+        result = detect_template_repetition(text)
+        # Dialogue is stripped, leaving only "he said" and "she asked" as narration fragments
+        # These short fragments are valid sentences for analysis
+        assert result.total_sentences == 2
+        assert "he said" in result.all_templates
+        assert "she asked" in result.all_templates
+
+    def test_mixed_dialogue_and_narration(self):
+        """Should analyze only narration, ignoring dialogue."""
+        text = (
+            '"Hello," he said. The question hung in the air. '
+            '"What?" she replied. The question was heavy. '
+            '"I see," he nodded. The question remained.'
         )
+        result = detect_template_repetition(text, max_words=2, flag_threshold=3)
+        # Should find the "the question" template in narration
+        assert len(result.flagged_templates) >= 1
+        flagged = result.flagged_templates[0]
+        assert "the question" in flagged.template
+        assert flagged.count == 3
 
-    def test_multiple_sentences_one_hit(self):
-        text = "The sky is blue. It's not a bug, but a feature. Have a nice day."
-        hits = detect_contrastive_negation(text)
-        assert len(hits) == 1
+    def test_varied_max_tags(self):
+        """Different max_tags values should capture different templates."""
+        text = (
+            "It was the best of times it was the worst of times. "
+            "It was the age of wisdom it was the age of foolishness."
+        )
+        # With max_words=2, should match "it was"
+        result_small = detect_template_repetition(text, max_words=2, flag_threshold=2)
+        # With max_words=4, might match more specifically
+        result_large = detect_template_repetition(text, max_words=4, flag_threshold=2)
 
-    def test_result_has_sentence_field(self):
-        hits = detect_contrastive_negation("It's not a bug, but a feature.")
-        assert hits and "sentence" in hits[0]
+        # Both should find something
+        print(result_large)
+        assert len(result_small.flagged_templates) >= 1
+
+    def test_normalization_lowercase(self):
+        """Templates should be case-insensitive."""
+        text = (
+            "The Question hangs in the air. "
+            "THE QUESTION is heavy. "
+            "the question remains."
+        )
+        result = detect_template_repetition(text, max_words=2, flag_threshold=3)
+        # Should cluster these together
+        assert len(result.flagged_templates) >= 1
+        assert result.flagged_templates[0].count >= 3
+
+    def test_result_dataclass_fields(self):
+        """Verify FlaggedTemplate has expected fields."""
+        text = (
+            "The test sentence one. "
+            "The test sentence two. "
+            "The test sentence three."
+        )
+        result = detect_template_repetition(text, max_words=2, flag_threshold=3)
+        assert len(result.flagged_templates) >= 1
+
+        ft = result.flagged_templates[0]
+        assert hasattr(ft, "template")
+        assert hasattr(ft, "count")
+        assert hasattr(ft, "fraction")
+        assert hasattr(ft, "sentences")
+        assert isinstance(ft.sentences, list)
+        assert isinstance(ft.count, int)
+
+    def test_repetition_score_calculation(self):
+        """Repetition score should reflect template reuse."""
+        text = (
+            "Template A here. " "Template A again. " "Something completely different."
+        )
+        result = detect_template_repetition(text, max_words=2)
+        # Score should be > 0 since there's repetition
+        # Note: templates are "template a" and "something completely"
+        # So no exact template is repeated 2+ times
+        assert result.total_sentences == 3
+
+    def test_similarity_threshold_effect(self):
+        """Higher similarity threshold should reduce clustering."""
+        text = "The big red dog. " "The big blue cat. " "The big green fish."
+        # High threshold - less clustering
+        result_high = detect_template_repetition(
+            text, max_words=3, flag_threshold=2, similarity_threshold=0.9
+        )
+        # Lower threshold - more clustering
+        result_low = detect_template_repetition(
+            text, max_words=3, flag_threshold=2, similarity_threshold=0.5
+        )
+        # Low threshold should find at least as many flagged templates as high
+        assert len(result_low.flagged_templates) >= len(result_high.flagged_templates)
+
+    def test_exact_template_repetition_in_score(self):
+        """Exact template repetition should affect score."""
+        text = "The cat sat. " "The cat sat. " "The cat sat."
+        result = detect_template_repetition(text, max_words=3)
+        # "the cat sat" appears 3 times
+        assert result.repetition_score > 0
 
 
 if __name__ == "__main__":

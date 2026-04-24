@@ -1,6 +1,7 @@
 import { $ } from "./utils.js";
 import { S } from "./state.js";
 import { validate } from "./validate.js";
+import { initTabLock, setLockStateChangeCallback } from "./tabLock.js";
 import {
   initTheme,
   loadSettings,
@@ -15,6 +16,8 @@ import {
   toggleLengthGuard,
   saveLengthGuardConfig,
   toggleLengthGuardEnforce,
+  toggleShowEditorDiff,
+  toggleHideUntilBaked,
   showPhraseBankModal,
   showAddPhraseGroupModal,
   showPersonaEditModal,
@@ -69,6 +72,7 @@ import {
   deleteMessage,
   switchBranch,
   regenerate,
+  continueFromUser,
   sendMessage,
   stopGeneration,
   toggleInspector,
@@ -77,8 +81,13 @@ import {
   clearRefineDiff,
   showAvatarPopup,
   hideAvatarPopup,
+  startEditTitle,
+  saveTitleEdit,
+  cancelTitleEdit,
+  handleTitleEditKey,
 } from "./chat.js";
 import { closeModal, switchTab, showConfirmModal, runConfirmCb, closeCropModal } from "./modal.js";
+import { initMobileUi, toggleMobileSidebar, toggleMobileHeaderActions, closeMobileHeaderActions } from "./mobile.js";
 
 // ── Sidebar toggle
 function toggleSection(header) {
@@ -93,6 +102,7 @@ function toggleBurger() {
 function closeBurger() {
   $("burger-dropdown").classList.remove("open");
 }
+
 function triggerAttachImage() {
   $("attach-image-input").click();
 }
@@ -227,6 +237,8 @@ Object.assign(window, {
   toggleLengthGuard,
   saveLengthGuardConfig,
   toggleLengthGuardEnforce,
+  toggleShowEditorDiff,
+  toggleHideUntilBaked,
   // phrase bank
   showPhraseBankModal,
   showAddPhraseGroupModal,
@@ -266,6 +278,11 @@ Object.assign(window, {
   selectConversation,
   deleteConversationFromModal,
   showConvHistoryModal,
+  // title edit
+  startEditTitle,
+  saveTitleEdit,
+  cancelTitleEdit,
+  handleTitleEditKey,
   // messages
   startEdit,
   cancelEdit,
@@ -273,6 +290,7 @@ Object.assign(window, {
   deleteMessage,
   switchBranch,
   regenerate,
+  continueFromUser,
   sendMessage,
   stopGeneration,
   // inspector
@@ -282,6 +300,9 @@ Object.assign(window, {
   clearRefineDiff,
   // ui
   toggleSection,
+  toggleMobileSidebar,
+  toggleMobileHeaderActions,
+  closeMobileHeaderActions,
   toggleBurger,
   closeBurger,
   triggerAttachImage,
@@ -340,9 +361,18 @@ function initAutoscroll() {
 // ── Init
 initTheme();
 initAutoscroll();
+initTabLock();
+// Re-render messages when tab lock state changes to update toolbar buttons
+setLockStateChangeCallback((hasMultipleTabs) => {
+  if (S.activeConvId) {
+    renderMessages();
+  }
+});
 
 // Load data independently to prevent failures from blocking other loads
 async function initAll() {
+  initMobileUi({ closeBurger });
+
   try {
     await loadSettings();
   } catch (e) {

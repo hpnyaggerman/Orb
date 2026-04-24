@@ -20,6 +20,10 @@ from backend.passes.editor.slop_detector import (
 )
 from backend.passes.editor.opening_monotony import MonotonyResult
 from backend.passes.editor.template_repetition import TemplateResult
+from backend.passes.editor.structural_repetition import (
+    StructuralResult,
+    MessageStructure,
+)
 from backend.passes.editor.editor import editor_pass
 from backend.tool_defs import MAX_EDITOR_ITERATIONS
 
@@ -60,6 +64,42 @@ def _dirty_report(n_issues: int, label: str = "") -> AuditReport:
         ),
         not_but_result=[],
     )
+
+
+def _structural_dirty_report() -> AuditReport:
+    """Return an AuditReport flagged only for structural repetition."""
+    return AuditReport(
+        cliche_result=DetectionResult([], [], 0, 0),
+        monotony_result=MonotonyResult([], {}, 0, 0.0),
+        template_result=TemplateResult([], {}, 0, 0, 0.0),
+        not_but_result=[],
+        structural_repetition_result=StructuralResult(
+            is_repetitive=True,
+            min_similarity=0.9,
+            mean_similarity=0.9,
+            shared_skeleton=["narration", "dialogue"],
+            messages=[
+                MessageStructure(index=0, signature=["narration", "dialogue"]),
+                MessageStructure(index=1, signature=["narration", "dialogue"]),
+            ],
+        ),
+    )
+
+
+def _rewrite_message(text: str) -> dict:
+    """Build a fake LLM message that calls editor_rewrite."""
+    return {
+        "tool_calls": [
+            {
+                "id": "tc_rw",
+                "type": "function",
+                "function": {
+                    "name": "editor_rewrite",
+                    "arguments": json.dumps({"rewritten_text": text}),
+                },
+            }
+        ]
+    }
 
 
 def _patch_message(search: str, replace: str) -> dict:
@@ -236,3 +276,109 @@ class TesteditorLoopTermination:
         assert (
             done["draft"] is not None
         ), "Draft should be changed after patches were applied"
+
+
+class TestEditorLoopToolSwitching:
+    """Verify the loop dynamically switches tools and instructions based on post-action audits."""
+
+    async def test_switches_to_apply_patch_after_rewrite_leaves_slop(self):
+        """When editor_rewrite is forced by structural repetition but the rewritten
+        text still has non-structural audit issues, the next iteration must use
+        editor_apply_patch — both in the available tool list, the tool_choice, and
+        the instruction text sent to the model."""
+
+        # Draft that survives the rewrite and still contains a word we can patch.
+        REWRITTEN_DRAFT = "alpha bravo charlie delta with a cliche."
+
+        audit_side_effects = iter(
+            [
+                (
+                    _structural_dirty_report(),
+                    "structural issues",
+                ),  # initial → forces rewrite
+                (_dirty_report(1), "1 cliche issue"),  # post-rewrite → forces patch
+                (AuditReport.clean(), "clean"),  # post-patch → done
+            ]
+        )
+
+        responses = [
+            _rewrite_message(REWRITTEN_DRAFT),
+            _patch_message("cliche", "fresh word"),
+        ]
+        call_idx = [0]
+        captured: list[dict] = []
+
+        async def _complete_capture(**kwargs):
+            captured.append(
+                {
+                    "tool_names": {t["function"]["name"] for t in kwargs["tools"]},
+                    "tool_choice": kwargs["tool_choice"],
+                    "last_user_content": kwargs["messages"][-1]["content"],
+                }
+            )
+            idx = call_idx[0]
+            call_idx[0] += 1
+            yield {"type": "done", "message": responses[idx]}
+
+        client = MagicMock()
+        client.complete = MagicMock(side_effect=_complete_capture)
+
+        with patch(
+            "backend.passes.editor.editor._run_contextual_audit",
+            side_effect=lambda *a, **kw: next(audit_side_effects),
+        ):
+            events = [
+                event
+                async for event in editor_pass(
+                    client=client,
+                    prefix=[],
+                    effective_msg="Write something.",
+                    draft=DRAFT,
+                    settings=SETTINGS,
+                    phrase_bank=[],
+                    audit_enabled=True,
+                    enabled_tools={"editor_apply_patch": True, "editor_rewrite": True},
+                    reasoning_on=False,
+                )
+            ]
+
+        assert len(captured) == 2, "Expected exactly 2 LLM calls"
+
+        # ── Iteration 0: must force editor_rewrite ────────────────────────────
+        iter0 = captured[0]
+        assert iter0["tool_choice"] == {
+            "type": "function",
+            "function": {"name": "editor_rewrite"},
+        }, "First call must force editor_rewrite via tool_choice"
+        assert (
+            "editor_rewrite" in iter0["tool_names"]
+        ), "editor_rewrite must be available in iteration 0"
+
+        # ── Iteration 1: must switch to editor_apply_patch ────────────────────
+        iter1 = captured[1]
+        assert iter1["tool_choice"] == {
+            "type": "function",
+            "function": {"name": "editor_apply_patch"},
+        }, "Second call must force editor_apply_patch via tool_choice"
+        assert (
+            "editor_apply_patch" in iter1["tool_names"]
+        ), "editor_apply_patch must be available in iteration 1"
+        assert (
+            "editor_rewrite" not in iter1["tool_names"]
+        ), "editor_rewrite must NOT be available in iteration 1"
+
+        # ── Instruction text also switched ────────────────────────────────────
+        prompt1 = iter1["last_user_content"]
+        assert (
+            "editor_apply_patch" in prompt1
+        ), "Iteration 1 prompt must reference editor_apply_patch"
+        assert (
+            "editor_rewrite" not in prompt1
+        ), "Iteration 1 prompt must not reference editor_rewrite"
+
+        # ── Final draft reflects both transformations ─────────────────────────
+        done = next(e for e in events if e["type"] == "done")
+        assert done["draft"] is not None, "Draft must be marked as changed"
+        assert (
+            "fresh word" in done["draft"]
+        ), "Patch must have been applied to the rewritten draft"
