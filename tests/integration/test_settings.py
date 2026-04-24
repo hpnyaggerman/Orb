@@ -72,3 +72,22 @@ async def test_show_editor_diff_default_and_roundtrip(client, db):
 
     resp = await client.put("/api/settings", json={"show_editor_diff": True})
     assert resp.json()["show_editor_diff"] == 1
+
+
+async def test_hide_streaming_until_baked_default_and_roundtrip(client, db):
+    resp = await client.get("/api/settings")
+    assert resp.status_code == 200
+    assert resp.json()["hide_streaming_until_baked"] == 0
+
+    resp = await client.put("/api/settings", json={"hide_streaming_until_baked": True})
+    assert resp.status_code == 200
+    assert resp.json()["hide_streaming_until_baked"] == 1
+
+    async with db.execute(
+        "SELECT hide_streaming_until_baked FROM settings WHERE id = 1"
+    ) as cur:
+        row = await cur.fetchone()
+    assert row["hide_streaming_until_baked"] == 1
+
+    resp = await client.put("/api/settings", json={"hide_streaming_until_baked": False})
+    assert resp.json()["hide_streaming_until_baked"] == 0
