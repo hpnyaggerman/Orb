@@ -530,10 +530,15 @@ body {
 
 .chat-title-edit {
   opacity: 0;
-  padding: 2px 6px;
-  font-size: 12px;
+  padding: 3px;
+  background: none;
+  border: none;
   color: var(--text-muted);
   flex-shrink: 0;
+  cursor: pointer;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
   transition: opacity .15s, color .15s;
 }
 
