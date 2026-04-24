@@ -46,7 +46,7 @@ The three-pass design's viability depends on the LLM caching the prefix across p
 
 - `director.py` -- tool-calling loop. Primary tool is `direct_scene` (see `tool_defs.py`), returning moods, keywords, plot_summary, next_event, writing_direction, detected_repetitions, user_intent.
 - `writer.py` -- streams tokens for the roleplay response.
-- `editor/` -- multi-file subpackage. `editor.py` is the ReAct driver. `slop_detector.py`, `opening_monotony.py`, `template_repetition.py`, `contrastive_negation.py` are programmatic audits. `audit.py` aggregates findings. The LLM only writes sentence replacements -- detection is code, not model.
+- `editor/` -- multi-file subpackage. `editor.py` is the ReAct driver. `slop_detector.py`, `opening_monotony.py`, `template_repetition.py`, `contrastive_negation.py`, `structural_repetition.py` are programmatic audits. `audit.py` aggregates findings. The LLM only writes sentence replacements -- detection is code, not model.
 
 ### Data -- `backend/database.py` + `backend/migrations/`
 
@@ -56,10 +56,12 @@ Messages form a **branching tree** via `parent_id`. Conversations track their `a
 
 **Endpoints + model configs (save-slot storage).** Two normalized tables sit alongside the flat `settings` row:
 
-- `endpoints(id, url, api_key)` -- saved backend connection slots.
+- `endpoints(id, url, api_key, active_model_config_id)` -- saved backend connection slots. `active_model_config_id` remembers the last-used model per endpoint so switching endpoints restores that endpoint's chosen model.
 - `model_configs(id, endpoint_id, model_name, system_prompt, temperature, min_p, top_k, top_p, repetition_penalty, max_tokens)` -- saved model configurations, each tied to one endpoint.
 
-`settings.active_endpoint_id` / `settings.active_model_config_id` reference the currently-selected records. The flat `settings.endpoint_url` / `settings.api_key` / `settings.model_name` / hyperparam columns remain the **runtime source of truth** (what the orchestrator reads per request); the normalized tables are save slots the UI cascades to/from when the user switches between configurations. Dual-write: `update_settings()` writes the flat row, and the frontend `saveSetting()` cascade mirrors the change into the relevant `endpoints` / `model_configs` row via `syncEndpointRecord()` / `syncModelConfigRecord()`. CRUD helpers live in `database.py` (`get_endpoints`, `create_endpoint`, `update_endpoint`, `delete_endpoint`, `get_model_configs`, `create_model_config`, `update_model_config`, `delete_model_config`).
+`settings.active_endpoint_id` references the currently-selected endpoint row; its `active_model_config_id` selects the currently-selected model config. The flat `settings.endpoint_url` / `settings.api_key` / `settings.model_name` / hyperparam columns remain the **runtime source of truth** (what the orchestrator reads per request); the normalized tables are save slots the UI cascades to/from when the user switches between configurations. Dual-write: `update_settings()` writes the flat row, and the frontend `saveSetting()` cascade mirrors the change into the relevant `endpoints` / `model_configs` row via `syncEndpointRecord()` / `syncModelConfigRecord()`. CRUD helpers live in `database.py` (`get_endpoints`, `create_endpoint`, `update_endpoint`, `delete_endpoint`, `get_model_configs`, `create_model_config`, `update_model_config`, `delete_model_config`).
+
+**System prompt composition.** `settings.shared_system_prompt` is a global prompt; `model_configs.system_prompt` is per-model. `resolve_char_context()` in `database.py` combines them (shared first, then model-specific, `\n\n`-joined). A character card's `system_prompt`, if present, completely overrides both.
 
 ### Character cards -- `backend/tavern_cards.py`
 
@@ -67,17 +69,22 @@ Tavern Card v2 spec (PNG with base64 JSON in a `tEXt` chunk). Exported cards inc
 
 ### HTTP layer -- `backend/main.py`
 
-Single FastAPI app. Frontend served as static files from `frontend/`. Streaming endpoints use `StreamingResponse` over SSE. `_active_clients` dict (keyed by conversation ID) tracks in-flight LLM generations so `/stop` can cancel them mid-stream.
+Single FastAPI app. Frontend served as static files from `frontend/`. Streaming endpoints use `StreamingResponse` over SSE. `_active_clients` dict (keyed by conversation ID) tracks in-flight LLM generations so `POST /api/conversations/{cid}/stop` can cancel them mid-stream.
 
 Notable routes beyond the obvious CRUD:
 
 - `/api/endpoints`, `/api/endpoints/{id}`, `/api/endpoints/{id}/models` -- endpoint save-slot CRUD.
 - `/api/models/{id}` -- model-config save-slot update / delete.
 - `POST /api/conversations/{cid}/continue` -- generate an assistant turn for the current user message **without** appending a new user message. Used when the frontend detects the last message is already a user turn (e.g. after edit-without-regen, or after an aborted prior generation). Internally calls `handle_turn(..., skip_user_persist=True)`.
+- `PUT /api/conversations/{cid}` -- rename a conversation (title edit).
+
+### Backend request translation -- `backend/endpoint_profiles.py`
+
+Some OpenAI-compatible backends reject unknown body fields (e.g. DeepSeek drops `min_p`, `top_k`, `repetition_penalty`) or reject forced tool_choice dicts when thinking is enabled. `endpoint_profiles.py` defines per-(endpoint_url, model) `ModelProfile` policies that mutate the request body before it leaves `LLMClient.complete()`. Two-level lookup: known endpoint + known model -> model-specific profile; known endpoint + blank model -> endpoint default; unknown endpoint -> pass-through. Typed knobs (`allow_extra`, `allow_forced_tool_choice`) cover common cases; `custom=` callables are the escape hatch.
 
 ### Frontend -- `frontend/`
 
-Vanilla JS, no build step, no framework. `state.js` exports a single global `S` object mutated directly by other modules. `api.js` is the fetch wrapper (all calls are same-origin `/api/*`). `chat.js` handles message rendering + SSE stream parsing. `library.js` handles character management.
+Vanilla JS, no build step, no framework. `state.js` exports a single global `S` object mutated directly by other modules. `api.js` is the fetch wrapper (all calls are same-origin `/api/*`). `chat.js` handles message rendering + SSE stream parsing. `library.js` handles character management. `tabLock.js` uses `BroadcastChannel` to coordinate a single-writer lock across open tabs -- only the active tab can send; others are read-only to prevent racing edits. `mobile.js` + `mobile.css` drive the sub-900px responsive layout (burger menu, collapsible sidebar, mobile action dropdowns).
 
 **Hybrid combobox (`settings.js`).** The `endpoint_url` and `model_name` settings fields render as "hybrid" inputs: a free-text field plus a dropdown of saved options (with per-item delete). A shared `initCombobox()` engine drives both. `saveSetting()` cascades: changing `endpoint_url` triggers `syncEndpointRecord()` (find or create an `endpoints` row, activate it, reload models); changing `model_name` triggers `syncModelConfigRecord()` (same pattern at the model_config level). Hyperparameter edits on the flat form flow through via `PUT /api/models/{id}`. Dropdown selection (`onHybridInput`) loads the chosen record's fields into the flat UI.
 
