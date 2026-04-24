@@ -134,7 +134,7 @@ def build_tool_prompt(
             f"* [{f['id']}] - use in case: {f['description']}" for f in mood_fragments
         )
         parts.append(
-            f"Currently active moods: {moods}\n\nAvailable writing moods:\n{frags}"
+            f"Previously active moods: {moods}\n\nAvailable writing moods:\n{frags}"
         )
         parts.append(
             f'User\'s next message (for context, take this into account when directing):\n"""{user_message}"""'
