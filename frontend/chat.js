@@ -119,15 +119,16 @@ function finalizeStreamingDiv(lastMsg) {
   div.setAttribute("data-msg-id", lastMsg.id);
   body.removeAttribute("id");
 
-  const bodyHtml = S.pendingRefineDiff
-    ? formatProseWithDiff(S.pendingRefineDiff.ops)
-    : formatProse(resolvePlaceholders(lastMsg.content));
+  const bodyHtml =
+    S.pendingRefineDiff && S.showEditorDiff
+      ? formatProseWithDiff(S.pendingRefineDiff.ops)
+      : formatProse(resolvePlaceholders(lastMsg.content));
   smoothUpdateBody(body, bodyHtml, () => scrollToBottom(true));
 
   const tb = div.querySelector(".msg-toolbar");
   if (tb) {
     const diffBtn =
-      S.pendingRefineDiff?.msgId && lastMsg.id === S.pendingRefineDiff.msgId
+      S.pendingRefineDiff?.msgId && lastMsg.id === S.pendingRefineDiff.msgId && S.showEditorDiff
         ? `<button onclick="clearRefineDiff()" title="Clear diff highlights" class="btn-clear-diff">✕ Diff</button>`
         : "";
     const editBtn = S.hasMultipleTabs
@@ -487,7 +488,7 @@ export function renderMessages() {
           ? `<button onclick="deleteMessage(${m.id})" title="Delete message, siblings, and all children" class="msg-btn-del">${ICON_DEL}</button>`
           : `<button disabled class="msg-btn-del">${ICON_DEL}</button>`;
         const diffBtn =
-          S.pendingRefineDiff?.msgId && m.id === S.pendingRefineDiff.msgId
+          S.pendingRefineDiff?.msgId && m.id === S.pendingRefineDiff.msgId && S.showEditorDiff
             ? `<button onclick="clearRefineDiff()" title="Clear diff highlights" class="btn-clear-diff">${ICON_CLEAR}</button>`
             : "";
         const toolbar = isEditing
@@ -506,7 +507,7 @@ export function renderMessages() {
           </div>
         </div>`
           : `<div class="msg-body">${
-              S.pendingRefineDiff?.msgId && m.id === S.pendingRefineDiff.msgId
+              S.pendingRefineDiff?.msgId && m.id === S.pendingRefineDiff.msgId && S.showEditorDiff
                 ? formatProseWithDiff(S.pendingRefineDiff.ops)
                 : formatProse(resolvePlaceholders(m.content))
             }</div>`;
@@ -833,7 +834,10 @@ async function processSSEStream(resp, container, msgDiv, signal) {
             rewrittenResponse = text;
             S.streamingContent = text;
             if (S.streamingBodyEl) {
-              const html = S.pendingRefineDiff ? formatProseWithDiff(S.pendingRefineDiff.ops) : formatProse(text);
+              const html =
+                S.pendingRefineDiff && S.showEditorDiff
+                  ? formatProseWithDiff(S.pendingRefineDiff.ops)
+                  : formatProse(text);
               smoothUpdateBody(S.streamingBodyEl, html, scrollToBottom);
             } else {
               scrollToBottom();

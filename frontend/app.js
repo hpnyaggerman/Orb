@@ -16,6 +16,7 @@ import {
   toggleLengthGuard,
   saveLengthGuardConfig,
   toggleLengthGuardEnforce,
+  toggleShowEditorDiff,
   showPhraseBankModal,
   showAddPhraseGroupModal,
   showPersonaEditModal,
@@ -235,6 +236,7 @@ Object.assign(window, {
   toggleLengthGuard,
   saveLengthGuardConfig,
   toggleLengthGuardEnforce,
+  toggleShowEditorDiff,
   // phrase bank
   showPhraseBankModal,
   showAddPhraseGroupModal,

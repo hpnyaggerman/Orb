@@ -3,6 +3,7 @@ import { $, esc, toast } from "./utils.js";
 import { api } from "./api.js";
 import { showModal, closeModal, showConfirmModal } from "./modal.js";
 import { validate } from "./validate.js";
+import { renderMessages } from "./chat.js";
 
 // ── Theme
 const THEMES = [
@@ -78,6 +79,9 @@ export async function loadSettings() {
   if (S.settings.length_guard_max_paragraphs) S.lengthGuardMaxParagraphs = S.settings.length_guard_max_paragraphs;
   if (S.settings.reasoning_enabled_passes)
     S.reasoningEnabled = { ...S.reasoningEnabled, ...S.settings.reasoning_enabled_passes };
+
+  if (typeof S.settings.show_editor_diff === "number") S.showEditorDiff = S.settings.show_editor_diff !== 0;
+  else if (typeof S.settings.show_editor_diff === "boolean") S.showEditorDiff = S.settings.show_editor_diff;
 
   // Expand Settings section if endpoint_url is empty
   const settingsSection = $("settings-section");
@@ -785,6 +789,17 @@ export async function toggleLengthGuardEnforce(on) {
   }
 }
 
+export async function toggleShowEditorDiff(on) {
+  S.showEditorDiff = on;
+  renderMessages();
+  renderToolsPanel();
+  try {
+    S.settings = await api.put("/settings", { show_editor_diff: on });
+  } catch (e) {
+    toast("Failed to save editor diff setting", true);
+  }
+}
+
 export async function saveLengthGuardConfig() {
   const words = parseInt($("lg-max-words").value, 10);
   const paras = parseInt($("lg-max-paragraphs").value, 10);
@@ -859,7 +874,14 @@ export function renderToolsPanel() {
     ${lgConfig}
   </div>`;
 
-  $("tools-list").innerHTML = toolCards + lengthGuardCard;
+  const showEditorDiffCard = `<div class="tool-card">
+    <label class="lg-enforce-label" title="Highlight edited sentences with green/red strikethrough when the editor pass rewrites the writer's output.">
+      <input type="checkbox" ${S.showEditorDiff ? "checked" : ""} onchange="toggleShowEditorDiff(this.checked)">
+      Show editor diff highlights
+    </label>
+  </div>`;
+
+  $("tools-list").innerHTML = toolCards + lengthGuardCard + showEditorDiffCard;
 }
 
 // ── Phrase Bank

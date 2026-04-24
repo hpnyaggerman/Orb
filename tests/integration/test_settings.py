@@ -55,3 +55,20 @@ async def test_update_enabled_tools_json_field(client, db):
     async with db.execute("SELECT enabled_tools FROM settings WHERE id = 1") as cur:
         row = await cur.fetchone()
     assert json.loads(row["enabled_tools"]) == tools
+
+
+async def test_show_editor_diff_default_and_roundtrip(client, db):
+    resp = await client.get("/api/settings")
+    assert resp.status_code == 200
+    assert resp.json()["show_editor_diff"] == 1
+
+    resp = await client.put("/api/settings", json={"show_editor_diff": False})
+    assert resp.status_code == 200
+    assert resp.json()["show_editor_diff"] == 0
+
+    async with db.execute("SELECT show_editor_diff FROM settings WHERE id = 1") as cur:
+        row = await cur.fetchone()
+    assert row["show_editor_diff"] == 0
+
+    resp = await client.put("/api/settings", json={"show_editor_diff": True})
+    assert resp.json()["show_editor_diff"] == 1
