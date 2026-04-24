@@ -1180,6 +1180,30 @@ async def touch_conversation(cid: str) -> bool:
         await db.close()
 
 
+async def update_conversation(cid: str, data: dict) -> dict | None:
+    db = await get_db()
+    try:
+        allowed = ["title"]
+        sets = []
+        vals = []
+        for k in allowed:
+            if k in data:
+                sets.append(f"{k} = ?")
+                vals.append(data[k])
+        if sets:
+            sets.append("updated_at = ?")
+            vals.append(datetime.now(timezone.utc).isoformat())
+            vals.append(cid)
+            await db.execute(
+                f"UPDATE conversations SET {', '.join(sets)} WHERE id = ?",
+                vals,
+            )
+            await db.commit()
+        return await get_conversation(cid)
+    finally:
+        await db.close()
+
+
 # --- Messages ---
 
 

@@ -79,6 +79,10 @@ import {
   clearRefineDiff,
   showAvatarPopup,
   hideAvatarPopup,
+  startEditTitle,
+  saveTitleEdit,
+  cancelTitleEdit,
+  handleTitleEditKey,
 } from "./chat.js";
 import { closeModal, switchTab, showConfirmModal, runConfirmCb, closeCropModal } from "./modal.js";
 
@@ -268,6 +272,11 @@ Object.assign(window, {
   selectConversation,
   deleteConversationFromModal,
   showConvHistoryModal,
+  // title edit
+  startEditTitle,
+  saveTitleEdit,
+  cancelTitleEdit,
+  handleTitleEditKey,
   // messages
   startEdit,
   cancelEdit,

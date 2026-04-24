@@ -340,6 +340,87 @@ export async function showConvHistoryModal() {
     <div class="modal-actions"><button class="btn" onclick="closeModal()">Close</button></div>`);
 }
 
+// ── Title Edit
+let _titleEditBackup = "";
+
+export function startEditTitle() {
+  if (!S.activeConvId) return;
+  const conv = S.conversations.find((c) => c.id === S.activeConvId);
+  if (!conv) return;
+  const area = $("chat-title-text");
+  if (!area) return;
+  _titleEditBackup = area.textContent;
+
+  const input = document.createElement("input");
+  input.type = "text";
+  input.id = "chat-title-input";
+  input.className = "chat-title-input";
+  input.value = _titleEditBackup;
+  input.addEventListener("keydown", handleTitleEditKey);
+  input.addEventListener("blur", saveTitleEdit);
+
+  area.replaceWith(input);
+  input.focus();
+  input.select();
+}
+
+export function handleTitleEditKey(e) {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    saveTitleEdit();
+  }
+  if (e.key === "Escape") {
+    e.preventDefault();
+    cancelTitleEdit();
+  }
+}
+
+export async function saveTitleEdit() {
+  const inp = $("chat-title-input");
+  if (!inp) return;
+  const newTitle = inp.value.trim();
+  if (!newTitle) {
+    cancelTitleEdit();
+    return;
+  }
+  const validation = validate.validateConversationTitle(newTitle);
+  if (!validation.valid) {
+    toast(validation.error, true);
+    cancelTitleEdit();
+    return;
+  }
+  if (newTitle === _titleEditBackup) {
+    cancelTitleEdit();
+    return;
+  }
+  try {
+    const updated = await api.put("/conversations/" + S.activeConvId, { title: newTitle });
+    const conv = S.conversations.find((c) => c.id === S.activeConvId);
+    if (conv) conv.title = updated.title;
+    const div = document.createElement("div");
+    div.className = "chat-title";
+    div.id = "chat-title-text";
+    div.textContent = updated.title || conv?.character_name || "";
+    inp.replaceWith(div);
+    _titleEditBackup = "";
+    toast("Title updated");
+  } catch (e) {
+    toast(e.message, true);
+    cancelTitleEdit();
+  }
+}
+
+export function cancelTitleEdit() {
+  const inp = $("chat-title-input");
+  if (!inp) return;
+  const div = document.createElement("div");
+  div.className = "chat-title";
+  div.id = "chat-title-text";
+  div.textContent = _titleEditBackup;
+  inp.replaceWith(div);
+  _titleEditBackup = "";
+}
+
 // ── Messages
 function getCharName() {
   const c = S.conversations.find((c) => c.id === S.activeConvId);
