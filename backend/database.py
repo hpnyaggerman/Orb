@@ -222,6 +222,7 @@ DEFAULT_SETTINGS = {
     "character_library_view": "grid",
     "character_library_sort": "time-added",
     "show_editor_diff": 1,
+    "hide_streaming_until_baked": 0,
 }
 
 SEED_PHRASE_BANK = [
@@ -344,7 +345,8 @@ async def init_db():
                 active_persona_id INTEGER REFERENCES user_personas(id) ON DELETE SET NULL,
                 character_library_view TEXT NOT NULL DEFAULT 'grid',
                 character_library_sort TEXT NOT NULL DEFAULT 'time-added',
-                show_editor_diff INTEGER NOT NULL DEFAULT 1
+                show_editor_diff INTEGER NOT NULL DEFAULT 1,
+                hide_streaming_until_baked INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS mood_fragments (
@@ -522,6 +524,10 @@ async def init_db():
         if "show_editor_diff" not in existing_cols:
             await db.execute(
                 "ALTER TABLE settings ADD COLUMN show_editor_diff INTEGER NOT NULL DEFAULT 1"
+            )
+        if "hide_streaming_until_baked" not in existing_cols:
+            await db.execute(
+                "ALTER TABLE settings ADD COLUMN hide_streaming_until_baked INTEGER NOT NULL DEFAULT 0"
             )
         endpoint_cols = {
             row[1] for row in await db.execute_fetchall("PRAGMA table_info(endpoints)")
@@ -747,6 +753,7 @@ async def update_settings(data: dict) -> dict:
             "character_library_sort",
             "active_endpoint_id",
             "show_editor_diff",
+            "hide_streaming_until_baked",
         ]
         json_fields = {"enabled_tools", "reasoning_enabled_passes"}
         sets = []

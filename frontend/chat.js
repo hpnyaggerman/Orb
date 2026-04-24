@@ -522,7 +522,7 @@ export function renderMessages() {
   if (badgeEl) ct.appendChild(badgeEl);
   // Don't show streaming box when editing a message (looks ugly)
   // Also hide for a short time after cancelling edit during streaming
-  if (streamingEl && !S.editingMsgId && !S.hideStreamingBox) ct.appendChild(streamingEl);
+  if (streamingEl && !S.editingMsgId && !S.hideStreamingBox && !S.hideUntilBaked) ct.appendChild(streamingEl);
   // Restore scroll position synchronously so the browser never paints a jump.
   // Near-bottom → snap to bottom; otherwise preserve distance from bottom.
   if (distFromBottom <= 50) {
@@ -822,7 +822,7 @@ async function processSSEStream(resp, container, msgDiv, signal) {
           () => {
             if (firstToken) {
               firstToken = false;
-              if (!msgDiv.isConnected) container.appendChild(msgDiv);
+              if (!msgDiv.isConnected && !S.hideUntilBaked) container.appendChild(msgDiv);
               if (S.streamingBodyEl) S.streamingBodyEl.innerHTML = "";
             }
             fullResponse += data.replace(/\\n/g, "\n");
@@ -966,7 +966,7 @@ export async function continueFromUser() {
   renderMessages();
   const ct = $("chat-messages");
   const msgDiv = createStreamingDiv();
-  ct.appendChild(msgDiv);
+  if (!S.hideUntilBaked) ct.appendChild(msgDiv);
   scrollToBottom();
   S.abortController = new AbortController();
   try {
@@ -1068,7 +1068,7 @@ export async function regenerate(msgId) {
 
   const ct = $("chat-messages");
   const msgDiv = createStreamingDiv();
-  ct.appendChild(msgDiv);
+  if (!S.hideUntilBaked) ct.appendChild(msgDiv);
   scrollToBottom();
   S.abortController = new AbortController();
   try {
