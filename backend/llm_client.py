@@ -21,11 +21,13 @@ def reasoning_cfg(on: bool) -> dict:
         {
             "reasoning": {"effort": "low", "enabled": True},
             "chat_template_kwargs": {"enable_thinking": True},
+            "thinking": {"type": "enabled"},
         }
         if on
         else {
             "reasoning": {"effort": "none", "enabled": False},
             "chat_template_kwargs": {"enable_thinking": False},
+            "thinking": {"type": "disabled"},
         }
     )
 
