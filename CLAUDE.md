@@ -16,7 +16,7 @@ Orb is an agentic roleplay frontend for LLMs. Single-page web app served by Fast
 - `./start_linux.sh` -- self-contained miniforge installer + launcher (isolated env under `./installer_files/`). `ORB_HOST` / `ORB_PORT` override defaults.
 - `./scripts/tests.sh [pytest args]` -- runs pytest. E.g. `./scripts/tests.sh tests/unit/test_editor_loop.py -v` for a single file.
 - `./scripts/lint.sh` -- flake8 on `backend/ tests/`.
-- `./scripts/format.sh` -- black (Python) + biome (JS).
+- `./scripts/format_backend.sh` -- black (Python). `./scripts/format_frontend.sh` -- biome (JS).
 - `./scripts/security_check.sh` -- pip-audit + bandit.
 - `./scripts/compatibility_test.sh` -- docker-based multi-Python test (3.9, 3.14).
 
@@ -120,7 +120,7 @@ Common prep categories:
 
 5. **Refresh `CLAUDE.md`.** Read main's tree (`git show main:...`) and document its architectural additions plus any repo-layout changes. Grounds the prose in what actually landed.
 
-6. **Run formatters last.** `./scripts/format.sh` (black + biome). Skipping this pollutes the merge-commit boundary with a trailing post-merge style commit.
+6. **Run formatters last.** `./scripts/format_backend.sh` (black) + `./scripts/format_frontend.sh` (biome). Skipping this pollutes the merge-commit boundary with a trailing post-merge style commit.
 
 ### Phase B: Merge
 
@@ -141,7 +141,7 @@ Manual merge is needed where both sides rewrote the same logic, and this is wher
 
 Run in order. The user pushes only after all pass; the agent does not push:
 
-1. `./scripts/lint.sh` (flake8). `./scripts/format.sh` (black + biome) -- should be a no-op post-Prep 4.
+1. `./scripts/lint.sh` (flake8). `./scripts/format_backend.sh` + `./scripts/format_frontend.sh` -- should be a no-op post-Prep 4.
 2. `./scripts/tests.sh` (full pytest). Integration tests covering main's new endpoints must pass.
 3. Fresh-DB smoke: delete `backend/data/app.db`, start the server, verify `schema_migrations` contains every migration in order and any new seed rows land.
 4. Server boot smoke: `curl` the canonical endpoints on both sides (branch's plus whichever routes main added).
