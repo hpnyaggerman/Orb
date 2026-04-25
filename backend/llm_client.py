@@ -51,6 +51,10 @@ class LLMClient:
         logger.info("Stop Generation button clicked — abort signal sent to LLM client")
         self._abort.set()
 
+    @property
+    def is_aborted(self) -> bool:
+        return self._abort.is_set()
+
     def _headers(self) -> dict:
         if self.api_key:
             return {"Authorization": f"Bearer {self.api_key}"}
