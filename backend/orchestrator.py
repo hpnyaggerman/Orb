@@ -136,6 +136,10 @@ async def _run_pipeline(
                 "data": {"refined_message": rewritten_msg},
             }
 
+    # Bail out if stop was clicked during the director pass
+    if client.is_aborted:
+        return
+
     # Style injection
     direct_scene_enabled = agent_on and bool(enabled_tools.get("direct_scene", False))
     inj_block = compute_style_injection_block(
@@ -198,6 +202,9 @@ async def _run_pipeline(
     }
 
     # --- Editor pass ---
+    if client.is_aborted:
+        return
+
     if do_edit and resp_text:
         logger.info(
             "Editor pass starting (draft=%d chars, phrase_bank=%d groups)",
