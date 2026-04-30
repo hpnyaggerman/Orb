@@ -435,6 +435,15 @@ export function showCompressModal() {
     </div>`);
 }
 
+export function cancelCompression() {
+  if (_compressAbort) {
+    _compressAbort.abort();
+    _compressAbort = null;
+  }
+  if (S.activeConvId) fetch(`/api/conversations/${S.activeConvId}/stop`, { method: "POST" }).catch(() => {});
+  closeModal();
+}
+
 export async function generateCompressionSummary() {
   if (_compressAbort) {
     _compressAbort.abort();
@@ -452,10 +461,12 @@ export async function generateCompressionSummary() {
     <p id="compress-status" style="color:var(--text-muted);margin-bottom:8px;font-size:0.9em">Generating summary…</p>
     <textarea id="compress-textarea" style="width:100%;box-sizing:border-box;height:280px;resize:vertical;font-family:inherit;font-size:0.9em;padding:10px;background:var(--bg-input,var(--bg-secondary));border:1px solid var(--border);border-radius:6px;color:var(--text)" spellcheck="false" placeholder="Summary will appear here…"></textarea>
     <div class="modal-actions">
-      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn" onclick="cancelCompression()">Cancel</button>
       <button class="btn" id="compress-regen-btn" onclick="generateCompressionSummary()" disabled>Regenerate</button>
       <button class="btn btn-accent" id="compress-apply-btn" onclick="applyCompression()" disabled>Create New Conversation</button>
     </div>`;
+  const overlayEl = modalEl.closest(".modal-overlay");
+  if (overlayEl) overlayEl.setAttribute("onclick", "if(event.target===this)cancelCompression()");
 
   const textarea = document.getElementById("compress-textarea");
   const statusEl = document.getElementById("compress-status");

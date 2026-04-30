@@ -947,7 +947,7 @@ async def api_summarize_conversation(cid: str, data: SummarizeRequest, request: 
             yield {"event": "error", "data": str(e)}
 
     return _CleanupStreamingResponse(
-        _sse_stream(_gen(), request, client_ref=client_ref),
+        _sse_stream(_gen(), request, client_ref=client_ref, cid=cid),
         media_type="text/event-stream",
     )
 

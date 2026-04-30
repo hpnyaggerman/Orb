@@ -67,6 +67,7 @@ import {
   showConvHistoryModal,
   showCompressModal,
   generateCompressionSummary,
+  cancelCompression,
   applyCompression,
   renderMessages,
   startEdit,
@@ -307,6 +308,7 @@ Object.assign(window, {
   showConvHistoryModal,
   showCompressModal,
   generateCompressionSummary,
+  cancelCompression,
   applyCompression,
   // title edit
   startEditTitle,
