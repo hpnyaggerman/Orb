@@ -744,6 +744,15 @@ export function renderMessages() {
   } else {
     ct.scrollTop = Math.max(0, ct.scrollHeight - ct.clientHeight - distFromBottom);
   }
+  if (!S.isStreaming) updateContextCounter();
+}
+
+function updateContextCounter() {
+  const el = document.getElementById("burger-context-counter");
+  if (!el) return;
+  const chars = (S.messages || []).reduce((sum, m) => sum + (m.content?.length || 0), 0);
+  const tokens = Math.round(chars / 4);
+  el.textContent = `Context: ~${tokens.toLocaleString()} tokens`;
 }
 
 export function startEdit(msgId) {
@@ -993,6 +1002,7 @@ async function afterStream() {
     // Streaming div already updated in-place — no full re-render needed.
     // Only patch the pending user message if one exists (sendMessage path).
     if (pendingUserMsg) patchPendingUserMessage(pendingUserMsg);
+    updateContextCounter();
   } else {
     renderMessages();
   }

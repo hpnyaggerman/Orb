@@ -970,6 +970,25 @@ body {
   color: var(--text-primary);
 }
 
+.burger-menu-sep {
+  height: 1px;
+  background: var(--border);
+  margin: 2px 0;
+}
+
+.burger-context-info {
+  cursor: default;
+  pointer-events: none;
+  font-size: 11px;
+  color: var(--text-muted);
+  padding: 7px 14px;
+}
+
+.burger-context-info:hover {
+  background: none;
+  color: var(--text-muted);
+}
+
 #chat-input {
   flex: 1;
   min-height: 42px;
