@@ -689,6 +689,7 @@ body {
 }
 
 .message:hover .msg-toolbar { opacity: 1; }
+.message:last-child .msg-toolbar { opacity: 1; }
 
 .msg-toolbar button {
   padding: 5px;
