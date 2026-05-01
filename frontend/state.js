@@ -47,4 +47,6 @@ export const S = {
   autoscrollEnabled: true, // whether to auto-scroll chat to bottom during streaming
   _programmaticScroll: false, // true while scrollToBottom() is executing — suppresses scroll listener
   hasMultipleTabs: false, // true if multiple tabs of the app are open
+  editingPendingUserMsg: false, // true when the pending (not-yet-persisted) user message is in edit mode
+  pendingUserMsgEdit: null, // stores edited content for a pending user message to apply after streaming
 };

@@ -594,6 +594,7 @@ async def handle_turn(
                 attachments=db_attachments,
             )
             await db.set_active_leaf(conversation_id, user_msg_id)
+            yield {"event": "user_message_created", "data": {"id": user_msg_id}}
 
         prefix = _build_prefix_from_ctx(ctx, history)
         asst_turn = next_turn + (0 if skip_user_persist else 1)

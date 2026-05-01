@@ -684,7 +684,7 @@ export function renderMessages() {
     }
     ct.innerHTML = msgs
       .map((m) => {
-        const isEditing = S.editingMsgId !== null && S.editingMsgId === m.id;
+        const isEditing = (S.editingMsgId !== null && S.editingMsgId === m.id) || (!m.id && S.editingPendingUserMsg);
         const bc = m.branch_count || 1;
         const bi = m.branch_index || 0;
         const branchHtml =
@@ -696,10 +696,9 @@ export function renderMessages() {
           <button onclick="event.stopPropagation();switchBranch(${m.next_branch_id})" ${!m.next_branch_id ? "disabled" : ""}>▶</button>
         </span>`
             : "";
-        const editBtn =
-          S.hasMultipleTabs || !m.id
-            ? `<button disabled title="${S.hasMultipleTabs ? "Close other tabs to edit" : ""}">${ICON_EDIT}</button>`
-            : `<button onclick="startEdit(${m.id})" title="Edit">${ICON_EDIT}</button>`;
+        const editBtn = S.hasMultipleTabs
+          ? `<button disabled title="Close other tabs to edit">${ICON_EDIT}</button>`
+          : `<button onclick="${m.id ? `startEdit(${m.id})` : `startEditPending()`}" title="Edit">${ICON_EDIT}</button>`;
         const childAssistant =
           m.role === "user" ? S.messages.find((child) => child.parent_id === m.id && child.role === "assistant") : null;
         const regenTargetId = m.role === "assistant" ? m.id : childAssistant?.id;
@@ -727,13 +726,14 @@ export function renderMessages() {
         <div class="msg-toolbar">
           ${editBtn}${regenBtn}${superRegenBtn}${delBtn}${diffBtn}
         </div>`;
+        const taId = m.id ? `edit-textarea-${m.id}` : `edit-textarea-pending`;
         const body = isEditing
           ? `
         <div class="msg-edit-area">
-          <textarea id="edit-textarea-${m.id}" rows="5">${esc(m.content)}</textarea>
+          <textarea id="${taId}" rows="5">${esc(m.content)}</textarea>
           <div class="msg-edit-actions">
-            <button class="btn btn-sm" onclick="cancelEdit()">Cancel</button>
-            <button class="btn btn-sm btn-accent" onclick="saveEdit(${m.id},'${m.role}')">Save</button>
+            <button class="btn btn-sm" onclick="${m.id ? `cancelEdit()` : `cancelEditPending()`}">Cancel</button>
+            <button class="btn btn-sm btn-accent" onclick="${m.id ? `saveEdit(${m.id},'${m.role}')` : `saveEditPending()`}">Save</button>
           </div>
         </div>`
           : `<div class="msg-body">${
@@ -772,6 +772,7 @@ function updateContextCounter() {
 
 export function startEdit(msgId) {
   S.editingMsgId = msgId;
+  S.editingPendingUserMsg = false;
   renderMessages();
   // If editing the latest message, scroll to bottom so it's at the bottom of view.
   // Otherwise, center-focus on the message being edited.
@@ -800,6 +801,7 @@ export function startEdit(msgId) {
 
 export function cancelEdit() {
   S.editingMsgId = null;
+  S.editingPendingUserMsg = false;
   renderMessages();
 }
 
@@ -871,6 +873,7 @@ export async function saveEdit(msgId, role) {
   }
   const trimmed = content.trim();
   S.editingMsgId = null;
+  S.editingPendingUserMsg = false;
 
   try {
     await api.post(convUrl(S.activeConvId, "messages", msgId, "edit"), { content, regenerate: false });
@@ -880,6 +883,68 @@ export async function saveEdit(msgId, role) {
   } catch (e) {
     toast(e.message, true);
   }
+}
+
+// ── Edit Pending Message
+export function startEditPending() {
+  S.editingPendingUserMsg = true;
+  S.editingMsgId = null;
+  renderMessages();
+  const ta = $("edit-textarea-pending");
+  if (ta) {
+    ta.addEventListener("keydown", (e) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        cancelEditPending();
+      }
+    });
+    ta.focus();
+    ta.selectionStart = ta.selectionEnd = ta.value.length;
+    ta.style.height = "auto";
+    const lineH = parseFloat(getComputedStyle(ta).lineHeight) || 20;
+    ta.style.height = Math.max(lineH * 3, ta.scrollHeight) + "px";
+  }
+}
+
+export async function saveEditPending() {
+  const ta = $("edit-textarea-pending");
+  if (!ta) return;
+  const content = ta.value;
+  const validation = validate.validateEditMessage(content);
+  if (!validation.valid) {
+    toast(validation.error, true);
+    return;
+  }
+  const trimmed = content.trim();
+  S.editingPendingUserMsg = false;
+
+  // Update the pending message in S.messages so the UI reflects the edit immediately
+  const pendingIdx = S.messages.findLastIndex((m) => m.role === "user" && !m.id);
+  if (pendingIdx >= 0) {
+    S.messages[pendingIdx].content = trimmed;
+  }
+
+  // If the message already has a backend ID, save immediately; otherwise queue for later
+  const lastUser = S.messages.findLast((m) => m.role === "user");
+  if (lastUser?.id) {
+    saveEdit(lastUser.id, "user");
+    return;
+  }
+  S.pendingUserMsgEdit = trimmed;
+
+  renderMessages();
+}
+
+export function cancelEditPending() {
+  S.editingPendingUserMsg = false;
+  renderMessages();
+}
+
+function updateUserMessageBody(msgId, content) {
+  const div = document.querySelector(`.message.user[data-msg-id="${msgId}"]`);
+  if (!div) return;
+  const body = div.querySelector(".msg-body");
+  if (body) body.innerHTML = formatProse(resolvePlaceholders(content));
 }
 
 // ── Streaming Helpers
@@ -980,8 +1045,14 @@ async function afterStream() {
 
   if (pendingUserMsg) {
     const hasUserMsg = S.messages.some((m) => m.role === "user" && m.content === pendingUserMsg.content);
-    if (!hasUserMsg) S.messages.push(pendingUserMsg);
+    if (!hasUserMsg) {
+      if (S.pendingUserMsgEdit) {
+        pendingUserMsg.content = S.pendingUserMsgEdit;
+      }
+      S.messages.push(pendingUserMsg);
+    }
   }
+  S.pendingUserMsgEdit = null;
 
   if (preservedContent?.trim()) {
     const lastMsg = S.messages[S.messages.length - 1];
@@ -1187,6 +1258,58 @@ function handleSSEEvent(event, data, container, msgDiv, onToken, onRewrite) {
           if (!S.lastDirectorData) S.lastDirectorData = {};
           S.lastDirectorData.tool_calls = [...(S.lastDirectorData.tool_calls || []), ...d.tool_calls];
           renderInspector();
+        }
+      } catch (_) {}
+      break;
+    }
+    case "user_message_created": {
+      try {
+        const d = JSON.parse(data);
+        const realId = d.id;
+        if (!realId) break;
+        // Find the pending user message (most recent user message without an id)
+        const pendingIdx = S.messages.findLastIndex((m) => m.role === "user" && !m.id);
+        if (pendingIdx >= 0) {
+          S.messages[pendingIdx].id = realId;
+        }
+        if (S.pendingUserMsg) {
+          S.pendingUserMsg.id = realId;
+        }
+        // If the user is currently editing the pending message, transition to normal edit mode
+        if (S.editingPendingUserMsg) {
+          S.editingPendingUserMsg = false;
+          S.editingMsgId = realId;
+          renderMessages();
+          const ta = $("edit-textarea-" + realId);
+          if (ta) {
+            ta.focus();
+            ta.selectionStart = ta.selectionEnd = ta.value.length;
+          }
+        } else {
+          // Patch the DOM element's data-msg-id and toolbar
+          const div = document.querySelector('.message.user[data-msg-id="null"]');
+          if (div) {
+            div.setAttribute("data-msg-id", realId);
+            const tb = div.querySelector(".msg-toolbar");
+            if (tb) {
+              tb.innerHTML = `<button onclick="startEdit(${realId})" title="Edit">${ICON_EDIT}</button><button onclick="continueFromUser()" title="Regenerate">${ICON_REGEN}</button><button onclick="deleteMessage(${realId})" title="Delete message, siblings, and all children" class="msg-btn-del">${ICON_DEL}</button>`;
+            }
+          }
+        }
+        // If an edit was already queued before the ID arrived, apply it now
+        if (S.pendingUserMsgEdit) {
+          api
+            .post(convUrl(S.activeConvId, "messages", realId, "edit"), {
+              content: S.pendingUserMsgEdit,
+              regenerate: false,
+            })
+            .catch((e) => toast("Failed to save pending edit: " + e.message, true));
+          // Optimistically update local content
+          if (pendingIdx >= 0) {
+            S.messages[pendingIdx].content = S.pendingUserMsgEdit;
+            updateUserMessageBody(realId, S.pendingUserMsgEdit);
+          }
+          S.pendingUserMsgEdit = null;
         }
       } catch (_) {}
       break;
