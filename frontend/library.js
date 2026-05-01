@@ -495,10 +495,11 @@ export async function handleImportFile(inp) {
 }
 
 export async function deleteCharacter(id) {
+  const charName = (S.allCharacters || S.characters || []).find((c) => c.id === id)?.name;
   showConfirmModal(
     {
       title: "Delete Character",
-      message: "Are you sure you want to delete this character card?",
+      message: `Are you sure you want to delete ${charName ? `"${charName}"` : "this character card"}?`,
       confirmText: "Delete",
       extraHtml: `
       <div class="field">
