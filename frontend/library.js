@@ -773,7 +773,7 @@ export async function showCharEditModal(idOrData) {
     <div class="modal-actions">
       ${!isNew ? `<button class="btn btn-danger btn-sm" onclick="deleteCharacter('${c.id}')">Delete</button>` : ""}
       <div style="flex:1"></div>
-      ${!isNew ? `<button class="btn btn-sm" onclick="exportCharacter('${c.id}','${esc(c.name)}')">Export PNG</button>` : ""}
+      ${!isNew ? `<button class="btn btn-sm" onclick="saveCharEdit('${c.id}', true)">Export PNG</button>` : ""}
       <button class="btn" onclick="closeModal()">Cancel</button>
       ${
         isNew
@@ -783,7 +783,7 @@ export async function showCharEditModal(idOrData) {
     </div>`);
 }
 
-export async function saveCharEdit(id) {
+export async function saveCharEdit(id, exportAfter = false) {
   const name = $("ce-name").value.trim();
   const nameValidation = validate.validateCharacterName(name);
   if (!nameValidation.valid) {
@@ -878,6 +878,7 @@ export async function saveCharEdit(id) {
       if (titleEl) titleEl.textContent = activeConv.title || activeConv.character_name || "";
     }
     toast("Saved");
+    if (exportAfter) exportCharacter(id, name);
   } catch (e) {
     toast(e.message, true);
   }
