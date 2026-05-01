@@ -56,6 +56,9 @@ import {
   setCharBrowserSort,
   toggleTagSelection,
   refreshCharacters,
+  charTagKeydown,
+  charTagInput,
+  charTagRemoveChip,
 } from "./library.js";
 import {
   loadConversations,
@@ -299,6 +302,9 @@ Object.assign(window, {
   setCharBrowserSort,
   toggleTagSelection,
   refreshCharacters,
+  charTagKeydown,
+  charTagInput,
+  charTagRemoveChip,
   // crop modal
   closeCropModal,
   // conversations
