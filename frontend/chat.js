@@ -751,7 +751,7 @@ function updateContextCounter() {
   const el = document.getElementById("burger-context-counter");
   if (!el) return;
   const chars = (S.messages || []).reduce((sum, m) => sum + (m.content?.length || 0), 0);
-  const tokens = Math.round(chars / 4);
+  const tokens = Math.round(chars / 3.5);
   el.textContent = `Context: ~${tokens.toLocaleString()} tokens`;
 }
 
