@@ -750,9 +750,8 @@ export function renderMessages() {
       .join("");
   }
   if (badgeEl) ct.appendChild(badgeEl);
-  // Don't show streaming box when editing a message (looks ugly)
-  // Also hide for a short time after cancelling edit during streaming
-  if (streamingEl && !S.editingMsgId && !S.hideStreamingBox && !S.hideUntilBaked) ct.appendChild(streamingEl);
+  // Keep streaming box visible while editing; only hide if explicitly flagged
+  if (streamingEl && !S.hideStreamingBox && !S.hideUntilBaked) ct.appendChild(streamingEl);
   // Restore scroll position synchronously so the browser never paints a jump.
   // Near-bottom → snap to bottom; otherwise preserve distance from bottom.
   if (distFromBottom <= 50) {
@@ -800,14 +799,6 @@ export function startEdit(msgId) {
 }
 
 export function cancelEdit() {
-  // If streaming is active, hide the streaming box for a short time after cancelling edit
-  if (S.isStreaming) {
-    S.hideStreamingBox = true;
-    // Clear the flag after 2 seconds or when streaming ends (whichever comes first)
-    setTimeout(() => {
-      S.hideStreamingBox = false;
-    }, 2000);
-  }
   S.editingMsgId = null;
   renderMessages();
 }
