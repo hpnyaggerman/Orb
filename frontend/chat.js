@@ -1276,10 +1276,11 @@ export async function sendMessage() {
   S.messages.push(userMsg);
   S.pendingUserMsg = userMsg;
   renderMessages();
-  scrollToBottom();
 
   const ct = $("chat-messages");
   const msgDiv = createStreamingDiv();
+  if (!S.hideUntilBaked) ct.appendChild(msgDiv);
+  scrollToBottom();
 
   S.abortController = new AbortController();
   try {
