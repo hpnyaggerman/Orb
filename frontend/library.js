@@ -622,6 +622,11 @@ function charFormTabs(prefix, d, isEdit, worlds = []) {
       isEdit
         ? `
     <div id="${prefix}-tmisc" class="tab-content">
+      <div class="field">
+        <label>Tags</label>
+        <div class="lb-chip-wrap" id="${prefix}-tag-wrap" onclick="document.getElementById('${prefix}-tag-text')?.focus()"></div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:4px">, or Enter to add · Backspace to remove</div>
+      </div>
       <div class="field"><label>Linked Lorebook</label>
         <select id="${prefix}-world-id">
           <option value="">${noneLabel}</option>
@@ -722,6 +727,59 @@ export async function createCharacter() {
   }
 }
 
+// ── Character tag chip helpers
+function _renderCharTagChips(prefix) {
+  const wrap = document.getElementById(`${prefix}-tag-wrap`);
+  if (!wrap) return;
+  const tags = _pendingTags || [];
+  wrap.innerHTML =
+    tags
+      .map(
+        (t, i) =>
+          `<span class="lb-chip">${esc(t)}<button class="lb-chip-remove" onclick="charTagRemoveChip(${i})">×</button></span>`,
+      )
+      .join("") +
+    `<input id="${prefix}-tag-text" class="lb-chip-text" placeholder="${tags.length ? "" : "Add tag…"}" onkeydown="charTagKeydown(event)" oninput="charTagInput(this)">`;
+}
+
+export function charTagKeydown(e) {
+  const input = e.target;
+  if ((e.key === "Enter" || e.key === ",") && input.value.trim()) {
+    e.preventDefault();
+    const val = input.value.replace(/,$/, "").trim();
+    if (val && !_pendingTags.includes(val)) {
+      _pendingTags = [..._pendingTags, val];
+      _renderCharTagChips("ce");
+      setTimeout(() => document.getElementById("ce-tag-text")?.focus(), 0);
+    }
+    return;
+  }
+  if (e.key === "Backspace" && !input.value && _pendingTags.length) {
+    _pendingTags = _pendingTags.slice(0, -1);
+    _renderCharTagChips("ce");
+    setTimeout(() => document.getElementById("ce-tag-text")?.focus(), 0);
+  }
+}
+
+export function charTagInput(input) {
+  if (input.value.endsWith(",")) {
+    const val = input.value.slice(0, -1).trim();
+    if (val && !_pendingTags.includes(val)) {
+      _pendingTags = [..._pendingTags, val];
+      _renderCharTagChips("ce");
+      setTimeout(() => document.getElementById("ce-tag-text")?.focus(), 0);
+    } else {
+      input.value = "";
+    }
+  }
+}
+
+export function charTagRemoveChip(i) {
+  _pendingTags = _pendingTags.filter((_, j) => j !== i);
+  _renderCharTagChips("ce");
+  setTimeout(() => document.getElementById("ce-tag-text")?.focus(), 0);
+}
+
 export async function showCharEditModal(idOrData) {
   _pendingAvatar = null;
   const isNew = typeof idOrData === "object";
@@ -743,7 +801,7 @@ export async function showCharEditModal(idOrData) {
     _pendingCharacterBook = c.character_book || null;
     console.log("showCharEditModal import tags:", c.tags, "pending:", _pendingTags);
   } else {
-    _pendingTags = null;
+    _pendingTags = c.tags || [];
     _pendingCharacterBook = null;
     console.log("showCharEditModal edit tags:", c.tags, "pending:", _pendingTags);
   }
@@ -782,6 +840,7 @@ export async function showCharEditModal(idOrData) {
           : `<button class="btn btn-accent" onclick="saveCharEdit('${c.id}')">Save</button>`
       }
     </div>`);
+  _renderCharTagChips("ce");
 }
 
 export async function saveCharEdit(id, exportAfter = false) {
@@ -849,9 +908,6 @@ export async function saveCharEdit(id, exportAfter = false) {
     alternate_greetings: _readAltGreetings("ce"),
     world_id: $("ce-world-id")?.value || null,
   };
-  if (_pendingTags === null) {
-    delete d.tags;
-  }
   console.log("saveCharEdit payload:", d);
   if (_pendingAvatar) {
     d.avatar_b64 = _pendingAvatar.b64;
