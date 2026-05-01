@@ -923,6 +923,14 @@ function createStreamingDiv() {
   return div;
 }
 
+function patchParentUserMessage(assistantMsg) {
+  if (!assistantMsg?.parent_id || S.hasMultipleTabs) return;
+  const userDiv = document.querySelector(`.message.user[data-msg-id="${assistantMsg.parent_id}"]`);
+  if (!userDiv) return;
+  const regenBtn = userDiv.querySelector('.msg-toolbar [title="Regenerate"]');
+  if (regenBtn) regenBtn.setAttribute("onclick", `regenerate(${assistantMsg.id})`);
+}
+
 function patchPendingUserMessage(pendingMsg) {
   const freshMsg = S.messages.find((m) => m.role === "user" && m.id && m.content === pendingMsg.content);
   if (!freshMsg) return;
@@ -1018,6 +1026,7 @@ async function afterStream() {
     // Streaming div already updated in-place — no full re-render needed.
     // Only patch the pending user message if one exists (sendMessage path).
     if (pendingUserMsg) patchPendingUserMessage(pendingUserMsg);
+    patchParentUserMessage(lastMsg);
     updateContextCounter();
   } else {
     renderMessages();
