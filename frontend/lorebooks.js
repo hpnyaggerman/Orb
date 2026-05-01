@@ -5,6 +5,10 @@ import { showConfirmModal, showModal, closeModal } from "./modal.js";
 // ── Module state
 let _worlds = [];
 let _lorebookOpen = false;
+
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && _lorebookOpen) closeLorebook();
+});
 let _focusWorldId = null;
 let _entries = {}; // worldId -> entry[]
 let _selectedEntryId = null;

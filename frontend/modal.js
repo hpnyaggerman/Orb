@@ -3,6 +3,12 @@ import { $ } from "./utils.js";
 // ── Crop modal state
 let _cs = null; // { img, scale, onConfirm, aspect, cx, cy, cw, ch, drag }
 
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape") return;
+  if ($("modal-crop-root")?.innerHTML) { closeCropModal(); return; }
+  if ($("modal-root")?.innerHTML) closeModal();
+});
+
 export function showModal(html) {
   $("modal-root").innerHTML = `<div class="modal-overlay" onclick="if(event.target===this)closeModal()">
        <div class="modal">${html}</div>
