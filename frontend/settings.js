@@ -11,10 +11,9 @@ const THEMES = [
   "halloween",
   "dark_forest",
   "ocean_depths",
-  "ghostly",
-  "pastel_neon",
   "vintage_wood",
-  "newspaper",
+  "parchment",
+  "deep_space",
 ];
 
 export function applyTheme(name) {

@@ -4,7 +4,7 @@
   --text-primary:#b8d8ee;--text-secondary:#5888a8;--text-muted:#305870;
   --accent:#3aaad8;--accent-dim:#1e6fa0;--accent-glow:rgba(58,170,216,0.13);
   --red:#c45d88;
-  --font-prose:'Palatino Linotype',Palatino,Georgia,serif;--font-ui:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
+  --font-prose:'Lora','Palatino Linotype',Palatino,Georgia,serif;--font-ui:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
   --font-mono:'SF Mono','Menlo','Consolas',monospace;--radius:6px;
   --sidebar-width:300px;--inspector-width:340px;--tools-width:260px;
 }
