@@ -422,6 +422,13 @@ class UserPersonaUpdate(BaseModel):
 # Settings ──
 
 
+@app.get("/api/themes")
+async def api_get_themes():
+    themes_dir = os.path.join(FRONTEND_DIR, "themes")
+    names = sorted(f[:-4] for f in os.listdir(themes_dir) if f.endswith(".css"))
+    return {"themes": names}
+
+
 @app.get("/api/settings")
 async def api_get_settings():
     return await get_settings()

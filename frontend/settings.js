@@ -6,10 +6,10 @@ import { validate } from "./validate.js";
 import { renderMessages } from "./chat.js";
 
 // ── Theme
-const THEMES = ["dark", "halloween", "dark_forest", "ocean_depths", "vintage_wood", "parchment", "deep_space"];
+let _themes = null;
 
 export function applyTheme(name) {
-  if (!THEMES.includes(name)) name = "dark";
+  if (_themes && !_themes.includes(name)) name = "dark";
   $("theme-link").href = "/static/themes/" + name + ".css";
   localStorage.setItem("ar-theme", name);
   const sel = $("theme-select");
@@ -18,6 +18,18 @@ export function applyTheme(name) {
 
 export function initTheme() {
   applyTheme(localStorage.getItem("ar-theme") || "dark");
+}
+
+export async function initThemeList() {
+  const { themes } = await api.get("/themes");
+  _themes = themes;
+  const sel = $("theme-select");
+  if (!sel) return;
+  const current = localStorage.getItem("ar-theme") || "dark";
+  sel.innerHTML = themes
+    .map((t) => `<option value="${t}">${t.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())}</option>`)
+    .join("");
+  sel.value = _themes.includes(current) ? current : "dark";
 }
 
 // ── Settings

@@ -4,6 +4,7 @@ import { validate } from "./validate.js";
 import { initTabLock, setLockStateChangeCallback } from "./tabLock.js";
 import {
   initTheme,
+  initThemeList,
   loadSettings,
   saveSetting,
   onHybridInput,
@@ -419,6 +420,7 @@ function initAutoscroll() {
 
 // ── Init
 initTheme();
+initThemeList();
 initAutoscroll();
 initTabLock();
 // Re-render messages when tab lock state changes to update toolbar buttons
