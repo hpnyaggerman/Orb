@@ -641,14 +641,14 @@ function charFormTabs(prefix, d, isEdit, worlds = []) {
 export function showCharCreateModal() {
   _pendingAvatar = null;
   showModal(`
-    <div style="display:flex;gap:16px;align-items:flex-start;margin-bottom:16px;">
+    <div class="modal-char-header">
       <div id="cc-avatar-preview" class="char-avatar-lg" onclick="triggerAvatarCrop('cc')"
            title="Click to set avatar" style="cursor:pointer">👤</div>
       <div style="flex:1">
         <div class="field" style="margin-bottom:4px">
           <input id="cc-name" placeholder="Character name…" style="font-size:18px;font-weight:600;width:100%">
         </div>
-        <div style="font-size:12px;color:var(--text-muted);margin-top:6px">New character · click portrait to set avatar</div>
+        <div class="modal-char-hint">New character · click portrait to set avatar</div>
       </div>
     </div>
     ${charFormTabs("cc", {}, false)}
@@ -759,7 +759,7 @@ export async function showCharEditModal(idOrData) {
   }
 
   showModal(`
-    <div style="display:flex;gap:16px;align-items:flex-start;margin-bottom:16px;">
+    <div class="modal-char-header">
       <div id="ce-avatar-preview" class="char-avatar-lg" onclick="triggerAvatarCrop('ce')"
            title="Click to change avatar" style="cursor:pointer">${av}</div>
       <div style="flex:1">

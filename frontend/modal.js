@@ -69,11 +69,11 @@ function _openCropEditor(dataUrl, onConfirm, aspect) {
   const root = $("modal-crop-root");
   root.innerHTML = `
     <div class="modal-overlay">
-      <div class="modal" style="align-items:center;gap:12px">
+      <div class="modal modal-crop">
         <h2>Crop Avatar</h2>
         <canvas id="crop-canvas"></canvas>
         <div style="font-size:11px;color:var(--text-muted)">Drag to move &middot; Drag corners to resize</div>
-        <div class="modal-actions" style="width:100%;margin-top:0">
+        <div class="modal-actions">
           <button class="btn" onclick="closeCropModal()">Cancel</button>
           <button class="btn btn-accent" onclick="confirmCrop()">Use Image</button>
         </div>

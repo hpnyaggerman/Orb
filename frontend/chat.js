@@ -396,7 +396,7 @@ export async function showConvHistoryModal() {
     .join("");
   showModal(`
     <h2>Conversations — ${esc(charName)}</h2>
-    <div style="margin:-8px -24px 0;max-height:60vh;overflow-y:auto;">${items}</div>
+    <div class="modal-list">${items}</div>
     <div class="modal-actions"><button class="btn" onclick="closeModal()">Close</button></div>`);
 }
 
@@ -419,7 +419,7 @@ export function showCompressModal() {
   const defaultKeep = validOptions.includes(_compressKeepCount) ? _compressKeepCount : validOptions[validOptions.length - 1];
   showModal(`
     <h2>Compress History</h2>
-    <p style="color:var(--text-muted);margin-bottom:16px;font-size:0.92em">Summarize the story so far into a new conversation, carrying over the most recent messages.</p>
+    <p class="modal-subtitle">Summarize the story so far into a new conversation, carrying over the most recent messages.</p>
     <div style="margin-bottom:20px">
       <label style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:0.95em">
         Keep last
@@ -458,8 +458,8 @@ export async function generateCompressionSummary() {
   if (!modalEl) return;
   modalEl.innerHTML = `
     <h2>Review Summary</h2>
-    <p id="compress-status" style="color:var(--text-muted);margin-bottom:8px;font-size:0.9em">Generating summary…</p>
-    <textarea id="compress-textarea" style="width:100%;box-sizing:border-box;height:280px;resize:vertical;font-family:inherit;font-size:0.9em;padding:10px;background:var(--bg-input,var(--bg-secondary));border:1px solid var(--border);border-radius:6px;color:var(--text)" spellcheck="false" placeholder="Summary will appear here…"></textarea>
+    <p id="compress-status" class="modal-subtitle">Generating summary…</p>
+    <textarea id="compress-textarea" class="modal-textarea-lg" spellcheck="false" placeholder="Summary will appear here…"></textarea>
     <div class="modal-actions">
       <button class="btn" onclick="cancelCompression()">Cancel</button>
       <button class="btn" id="compress-regen-btn" onclick="generateCompressionSummary()" disabled>Regenerate</button>

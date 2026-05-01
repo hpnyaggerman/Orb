@@ -663,7 +663,7 @@ export function showPersonaEditModal(personaId) {
       <label>Description <span style="font-weight:400;text-transform:none;letter-spacing:0">(injected into system prompt)</span></label>
       <textarea id="persona-desc-input" placeholder="Describe yourself — appearance, personality, background…" rows="4" style="resize:vertical;min-height:90px">${esc(persona?.description || "")}</textarea>
     </div>
-    <label class="modal-checkbox-label" style="margin-bottom:1.25rem">
+    <label class="modal-checkbox-label">
       <input type="checkbox" id="persona-active-checkbox" ${!personaId || personaId === S.activePersonaId ? "checked" : ""} style="width:14px;height:14px;margin:0;flex-shrink:0">
       <span style="font-size:13px;text-transform:none;letter-spacing:0;font-weight:400">Set as active persona after saving</span>
     </label>
@@ -996,7 +996,7 @@ export function showAddPhraseGroupModal(editId = null, initialVariants = []) {
 
   const deleteButton = isEdit
     ? `
-    <button class="btn btn-danger" onclick="deletePhraseGroup(${editId})" style="margin-right: auto;">Delete</button>
+    <button class="btn btn-danger" onclick="deletePhraseGroup(${editId})">Delete</button>
   `
     : "";
 
