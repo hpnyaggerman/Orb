@@ -881,7 +881,9 @@ async def api_update_conversation(cid: str, data: ConversationUpdate):
 
 
 @app.post("/api/conversations/{cid}/summarize")
-async def api_summarize_conversation(cid: str, data: SummarizeRequest, request: Request):
+async def api_summarize_conversation(
+    cid: str, data: SummarizeRequest, request: Request
+):
     """Stream a narrative summary of the conversation history, excluding the last keep_count messages."""
     if data.keep_count not in (2, 4, 6, 8):
         raise HTTPException(400, "keep_count must be one of 2, 4, 6, 8")
@@ -933,12 +935,21 @@ async def api_summarize_conversation(cid: str, data: SummarizeRequest, request: 
 
         params = {
             k: v
-            for k in ["temperature", "max_tokens", "top_p", "min_p", "top_k", "repetition_penalty"]
+            for k in [
+                "temperature",
+                "max_tokens",
+                "top_p",
+                "min_p",
+                "top_k",
+                "repetition_penalty",
+            ]
             if (v := settings.get(k)) is not None
         }
 
         try:
-            async for chunk in client.complete(llm_messages, settings.get("model_name", ""), **params):
+            async for chunk in client.complete(
+                llm_messages, settings.get("model_name", ""), **params
+            ):
                 if chunk["type"] == "content":
                     yield {"event": "token", "data": chunk["delta"]}
             yield {"event": "done", "data": ""}
@@ -1003,7 +1014,12 @@ async def api_compress_conversation(cid: str, data: CompressRequest):
             else None
         )
         prev_id = await add_message(
-            new_cid, msg["role"], msg["content"], i + 1, parent_id=prev_id, attachments=att_list
+            new_cid,
+            msg["role"],
+            msg["content"],
+            i + 1,
+            parent_id=prev_id,
+            attachments=att_list,
         )
         await set_active_leaf(new_cid, prev_id)
 

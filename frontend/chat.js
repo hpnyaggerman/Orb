@@ -314,7 +314,10 @@ export async function selectConversation(id) {
 async function deleteConversation(id) {
   const conv = S.conversations.find((c) => c.id === id);
   const msgCount = conv?.message_count ?? (S.activeConvId === id ? S.messages.length : null);
-  const countNote = msgCount != null ? `<p style="color:var(--text-muted);font-size:0.88em;margin-top:8px">${msgCount} message${msgCount !== 1 ? "s" : ""} in this conversation</p>` : "";
+  const countNote =
+    msgCount != null
+      ? `<p style="color:var(--text-muted);font-size:0.88em;margin-top:8px">${msgCount} message${msgCount !== 1 ? "s" : ""} in this conversation</p>`
+      : "";
   showConfirmModal(
     {
       title: "Delete Conversation",
@@ -343,7 +346,10 @@ async function deleteConversation(id) {
 export async function deleteConversationFromModal(id) {
   const conv = S.conversations.find((c) => c.id === id);
   const msgCount = conv?.message_count ?? null;
-  const countNote = msgCount != null ? `<p style="color:var(--text-muted);font-size:0.88em;margin-top:8px">${msgCount} message${msgCount !== 1 ? "s" : ""} in this conversation</p>` : "";
+  const countNote =
+    msgCount != null
+      ? `<p style="color:var(--text-muted);font-size:0.88em;margin-top:8px">${msgCount} message${msgCount !== 1 ? "s" : ""} in this conversation</p>`
+      : "";
   showConfirmModal(
     {
       title: "Delete Conversation",
@@ -423,8 +429,10 @@ export function showCompressModal() {
     return;
   }
   const totalMsgs = (S.messages || []).length;
-  const validOptions = [2, 4, 6, 8].filter(n => n < totalMsgs);
-  const defaultKeep = validOptions.includes(_compressKeepCount) ? _compressKeepCount : validOptions[validOptions.length - 1];
+  const validOptions = [2, 4, 6, 8].filter((n) => n < totalMsgs);
+  const defaultKeep = validOptions.includes(_compressKeepCount)
+    ? _compressKeepCount
+    : validOptions[validOptions.length - 1];
   showModal(`
     <h2>Compress History</h2>
     <p class="modal-subtitle">Summarize the story so far into a new conversation, carrying over the most recent messages.</p>
@@ -432,7 +440,7 @@ export function showCompressModal() {
       <label style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:0.95em">
         Keep last
         <select id="compress-keep-select" style="padding:4px 8px;border-radius:4px;border:1px solid var(--border);background:var(--bg-input,var(--bg-secondary));color:var(--text)">
-          ${validOptions.map(n => `<option value="${n}"${defaultKeep===n?' selected':''}>${n} messages</option>`).join('')}
+          ${validOptions.map((n) => `<option value="${n}"${defaultKeep === n ? " selected" : ""}>${n} messages</option>`).join("")}
         </select>
       </label>
       <p style="color:var(--text-muted);font-size:0.88em;margin-top:8px">${totalMsgs} messages in this conversation</p>
