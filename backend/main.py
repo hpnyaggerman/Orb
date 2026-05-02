@@ -8,7 +8,7 @@ import tempfile
 from contextlib import asynccontextmanager
 
 from typing import Annotated, Any, Optional, List
-from fastapi import FastAPI, HTTPException, Request, UploadFile, File
+from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile, File
 from fastapi.responses import StreamingResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
@@ -473,14 +473,14 @@ async def api_create_endpoint(data: EndpointCreate):
 async def api_update_endpoint(endpoint_id: int, data: EndpointUpdate):
     result = await update_endpoint(endpoint_id, data.model_dump(exclude_unset=True))
     if not result:
-        raise HTTPException(404, "Endpoint not found")
+        raise HTTPException(status_code=404, detail="Endpoint not found")
     return result
 
 
 @app.delete("/api/endpoints/{endpoint_id}")
 async def api_delete_endpoint(endpoint_id: int):
     if not await delete_endpoint(endpoint_id):
-        raise HTTPException(404, "Endpoint not found")
+        raise HTTPException(status_code=404, detail="Endpoint not found")
     return {"ok": True}
 
 
@@ -495,7 +495,7 @@ async def api_create_model_config(endpoint_id: int, data: ModelConfigCreate):
         return await create_model_config(endpoint_id, data.model_dump())
     except Exception as e:
         if "FOREIGN KEY constraint failed" in str(e):
-            raise HTTPException(404, "Endpoint not found")
+            raise HTTPException(status_code=404, detail="Endpoint not found")
         raise
 
 
@@ -503,14 +503,14 @@ async def api_create_model_config(endpoint_id: int, data: ModelConfigCreate):
 async def api_update_model_config(config_id: int, data: ModelConfigUpdate):
     result = await update_model_config(config_id, data.model_dump(exclude_unset=True))
     if not result:
-        raise HTTPException(404, "Model config not found")
+        raise HTTPException(status_code=404, detail="Model config not found")
     return result
 
 
 @app.delete("/api/models/{config_id}")
 async def api_delete_model_config(config_id: int):
     if not await delete_model_config(config_id):
-        raise HTTPException(404, "Model config not found")
+        raise HTTPException(status_code=404, detail="Model config not found")
     return {"ok": True}
 
 
@@ -526,7 +526,9 @@ async def api_list_mood_fragments():
 async def api_create_mood_fragment(data: MoodFragmentCreate):
     existing = await get_mood_fragment(data.id)
     if existing:
-        raise HTTPException(400, "Mood fragment with this ID already exists")
+        raise HTTPException(
+            status_code=400, detail="Mood fragment with this ID already exists"
+        )
     return await create_mood_fragment(data.model_dump())
 
 
@@ -534,14 +536,16 @@ async def api_create_mood_fragment(data: MoodFragmentCreate):
 async def api_update_mood_fragment(fid: str, data: MoodFragmentUpdate):
     result = await update_mood_fragment(fid, data.model_dump(exclude_none=True))
     if not result:
-        raise HTTPException(404, "Mood fragment not found")
+        raise HTTPException(status_code=404, detail="Mood fragment not found")
     return result
 
 
 @app.delete("/api/fragments/{fid}")
 async def api_delete_mood_fragment(fid: str):
     if not await delete_mood_fragment(fid):
-        raise HTTPException(404, "Mood fragment not found or is built-in")
+        raise HTTPException(
+            status_code=404, detail="Mood fragment not found or is built-in"
+        )
     return {"ok": True}
 
 
@@ -557,10 +561,14 @@ async def api_list_director_fragments():
 async def api_create_director_fragment(data: DirectorFragmentCreate):
     existing = await get_director_fragment(data.id)
     if existing:
-        raise HTTPException(400, "Director fragment with this ID already exists")
+        raise HTTPException(
+            status_code=400, detail="Director fragment with this ID already exists"
+        )
     result = await create_director_fragment(data.model_dump())
     if not result:
-        raise HTTPException(500, "Failed to create director fragment")
+        raise HTTPException(
+            status_code=500, detail="Failed to create director fragment"
+        )
     return result
 
 
@@ -568,14 +576,14 @@ async def api_create_director_fragment(data: DirectorFragmentCreate):
 async def api_update_director_fragment(fid: str, data: DirectorFragmentUpdate):
     result = await update_director_fragment(fid, data.model_dump(exclude_none=True))
     if not result:
-        raise HTTPException(404, "Director fragment not found")
+        raise HTTPException(status_code=404, detail="Director fragment not found")
     return result
 
 
 @app.delete("/api/director-fragments/{fid}")
 async def api_delete_director_fragment(fid: str):
     if not await delete_director_fragment(fid):
-        raise HTTPException(404, "Director fragment not found")
+        raise HTTPException(status_code=404, detail="Director fragment not found")
     return {"ok": True}
 
 
@@ -596,73 +604,74 @@ async def api_create_world(data: WorldCreate):
 async def api_update_world(world_id: str, data: WorldUpdate):
     result = await update_world(world_id, data.model_dump(exclude_unset=True))
     if not result:
-        raise HTTPException(404, "World not found")
+        raise HTTPException(status_code=404, detail="World not found")
     return result
 
 
 @app.delete("/api/worlds/{world_id}")
 async def api_delete_world(world_id: str):
     if not await delete_world(world_id):
-        raise HTTPException(404, "World not found")
+        raise HTTPException(status_code=404, detail="World not found")
     return {"ok": True}
 
 
 # Lorebook Entries ──
 
 
-@app.get("/api/worlds/{world_id}/entries")
-async def api_list_lorebook_entries(world_id: str):
+async def require_world(world_id: str) -> dict:
     world = await get_world(world_id)
     if not world:
-        raise HTTPException(404, "World not found")
-    return await get_lorebook_entries(world_id)
+        raise HTTPException(status_code=404, detail="World not found")
+    return world
+
+
+async def require_lorebook_entry(
+    entry_id: int, world: dict = Depends(require_world)  # noqa: B008
+) -> dict:
+    entry = await get_lorebook_entry(entry_id)
+    if not entry or entry.get("world_id") != world["id"]:
+        raise HTTPException(status_code=404, detail="Entry not found")
+    return entry
+
+
+@app.get("/api/worlds/{world_id}/entries")
+async def api_list_lorebook_entries(world: dict = Depends(require_world)):  # noqa: B008
+    return await get_lorebook_entries(world["id"])
 
 
 @app.post("/api/worlds/{world_id}/entries")
-async def api_create_lorebook_entry(world_id: str, data: LorebookEntryCreate):
-    world = await get_world(world_id)
-    if not world:
-        raise HTTPException(404, "World not found")
-    return await create_lorebook_entry(world_id, data.model_dump())
+async def api_create_lorebook_entry(
+    data: LorebookEntryCreate, world: dict = Depends(require_world)  # noqa: B008
+):
+    return await create_lorebook_entry(world["id"], data.model_dump())
 
 
 @app.get("/api/worlds/{world_id}/entries/{entry_id}")
-async def api_get_lorebook_entry(world_id: str, entry_id: int):
-    world = await get_world(world_id)
-    if not world:
-        raise HTTPException(404, "World not found")
-    entry = await get_lorebook_entry(entry_id)
-    if not entry or entry.get("world_id") != world_id:
-        raise HTTPException(404, "Entry not found")
+async def api_get_lorebook_entry(
+    entry: dict = Depends(require_lorebook_entry),
+):  # noqa: B008
     return entry
 
 
 @app.put("/api/worlds/{world_id}/entries/{entry_id}")
 async def api_update_lorebook_entry(
-    world_id: str, entry_id: int, data: LorebookEntryUpdate
+    data: LorebookEntryUpdate,
+    entry: dict = Depends(require_lorebook_entry),  # noqa: B008
 ):
-    world = await get_world(world_id)
-    if not world:
-        raise HTTPException(404, "World not found")
-    entry = await get_lorebook_entry(entry_id)
-    if not entry or entry.get("world_id") != world_id:
-        raise HTTPException(404, "Entry not found")
-    result = await update_lorebook_entry(entry_id, data.model_dump(exclude_unset=True))
+    result = await update_lorebook_entry(
+        entry["id"], data.model_dump(exclude_unset=True)
+    )
     if not result:
-        raise HTTPException(404, "Entry not found")
+        raise HTTPException(status_code=404, detail="Entry not found")
     return result
 
 
 @app.delete("/api/worlds/{world_id}/entries/{entry_id}")
-async def api_delete_lorebook_entry(world_id: str, entry_id: int):
-    world = await get_world(world_id)
-    if not world:
-        raise HTTPException(404, "World not found")
-    entry = await get_lorebook_entry(entry_id)
-    if not entry or entry.get("world_id") != world_id:
-        raise HTTPException(404, "Entry not found")
-    if not await delete_lorebook_entry(entry_id):
-        raise HTTPException(404, "Entry not found")
+async def api_delete_lorebook_entry(
+    entry: dict = Depends(require_lorebook_entry),
+):  # noqa: B008
+    if not await delete_lorebook_entry(entry["id"]):
+        raise HTTPException(status_code=404, detail="Entry not found")
     return {"ok": True}
 
 
@@ -692,7 +701,7 @@ def _normalise_lorebook_entry(item: dict) -> dict:
 async def api_import_lorebook(world_id: str, payload: LorebookImportPayload):
     world = await get_world(world_id)
     if not world:
-        raise HTTPException(404, "World not found")
+        raise HTTPException(status_code=404, detail="World not found")
 
     raw_entries = payload.entries
     # Normalise both formats into a flat list of dicts
@@ -703,7 +712,9 @@ async def api_import_lorebook(world_id: str, payload: LorebookImportPayload):
         # Tavern V2 character_book: [...]
         items = raw_entries
     else:
-        raise HTTPException(422, "entries must be an object or array")
+        raise HTTPException(
+            status_code=422, detail="entries must be an object or array"
+        )
 
     created = []
     for item in items:
@@ -733,11 +744,13 @@ async def api_get_phrase_bank():
 async def api_create_phrase_group(data: PhraseGroupCreate):
     """Create a new phrase variant group."""
     if not data.variants or len(data.variants) == 0:
-        raise HTTPException(400, "At least one variant is required")
+        raise HTTPException(status_code=400, detail="At least one variant is required")
     # Validate all variants are strings
     for v in data.variants:
         if not isinstance(v, str) or not v.strip():
-            raise HTTPException(400, "All variants must be non-empty strings")
+            raise HTTPException(
+                status_code=400, detail="All variants must be non-empty strings"
+            )
     group_id = await add_phrase_group(data.variants)
     return {"id": group_id, "variants": data.variants}
 
@@ -746,14 +759,16 @@ async def api_create_phrase_group(data: PhraseGroupCreate):
 async def api_update_phrase_group(group_id: int, data: PhraseGroupUpdate):
     """Update an existing phrase variant group."""
     if not data.variants or len(data.variants) == 0:
-        raise HTTPException(400, "At least one variant is required")
+        raise HTTPException(status_code=400, detail="At least one variant is required")
     # Validate all variants are strings
     for v in data.variants:
         if not isinstance(v, str) or not v.strip():
-            raise HTTPException(400, "All variants must be non-empty strings")
+            raise HTTPException(
+                status_code=400, detail="All variants must be non-empty strings"
+            )
     success = await update_phrase_group(group_id, data.variants)
     if not success:
-        raise HTTPException(404, "Phrase group not found")
+        raise HTTPException(status_code=404, detail="Phrase group not found")
     return {"ok": True, "id": group_id, "variants": data.variants}
 
 
@@ -762,7 +777,7 @@ async def api_delete_phrase_group(group_id: int):
     """Delete a phrase variant group."""
     success = await delete_phrase_group(group_id)
     if not success:
-        raise HTTPException(404, "Phrase group not found")
+        raise HTTPException(status_code=404, detail="Phrase group not found")
     return {"ok": True}
 
 
@@ -783,7 +798,7 @@ async def api_create_user_persona(data: UserPersonaCreate):
 async def api_update_user_persona(persona_id: int, data: UserPersonaUpdate):
     result = await update_user_persona(persona_id, data.model_dump(exclude_none=True))
     if not result:
-        raise HTTPException(404, "User persona not found")
+        raise HTTPException(status_code=404, detail="User persona not found")
     return result
 
 
@@ -791,7 +806,7 @@ async def api_update_user_persona(persona_id: int, data: UserPersonaUpdate):
 async def api_delete_user_persona(persona_id: int):
     success = await delete_user_persona(persona_id)
     if not success:
-        raise HTTPException(404, "User persona not found")
+        raise HTTPException(status_code=404, detail="User persona not found")
     return {"ok": True}
 
 
@@ -806,7 +821,7 @@ class ResetConfirm(BaseModel):
 async def api_reset(data: ResetConfirm):
     """Reset mood_fragments, director_fragments, phrase_bank, and settings to defaults."""
     if not data.confirm:
-        raise HTTPException(400, "Confirmation required")
+        raise HTTPException(status_code=400, detail="Confirmation required")
     await reset_to_defaults()
     return {"ok": True}
 
@@ -834,7 +849,7 @@ async def api_create_conversation(data: ConversationCreate):
     if card_id:
         card = await get_character_card(card_id)
         if not card:
-            raise HTTPException(404, "Character card not found")
+            raise HTTPException(status_code=404, detail="Character card not found")
         char_name = card["name"]
         char_scenario = card.get("scenario", "")
         first_mes = card.get("first_mes", "")
@@ -876,14 +891,14 @@ async def api_create_conversation(data: ConversationCreate):
 @app.delete("/api/conversations/{cid}")
 async def api_delete_conversation(cid: str):
     if not await delete_conversation(cid):
-        raise HTTPException(404, "Conversation not found")
+        raise HTTPException(status_code=404, detail="Conversation not found")
     return {"ok": True}
 
 
 @app.post("/api/conversations/{cid}/touch")
 async def api_touch_conversation(cid: str):
     if not await touch_conversation(cid):
-        raise HTTPException(404, "Conversation not found")
+        raise HTTPException(status_code=404, detail="Conversation not found")
     return {"ok": True}
 
 
@@ -891,7 +906,7 @@ async def api_touch_conversation(cid: str):
 async def api_update_conversation(cid: str, data: ConversationUpdate):
     conv = await get_conversation(cid)
     if not conv:
-        raise HTTPException(404, "Conversation not found")
+        raise HTTPException(status_code=404, detail="Conversation not found")
     result = await update_conversation(cid, data.model_dump(exclude_unset=True))
     return result
 
@@ -902,17 +917,19 @@ async def api_summarize_conversation(
 ):
     """Stream a narrative summary of the conversation history, excluding the last keep_count messages."""
     if data.keep_count not in (2, 4, 6, 8):
-        raise HTTPException(400, "keep_count must be one of 2, 4, 6, 8")
+        raise HTTPException(
+            status_code=400, detail="keep_count must be one of 2, 4, 6, 8"
+        )
 
     conv = await get_conversation(cid)
     if not conv:
-        raise HTTPException(404, "Conversation not found")
+        raise HTTPException(status_code=404, detail="Conversation not found")
 
     messages = await get_messages_with_branch_info(cid)
     history_slice = messages[: max(0, len(messages) - data.keep_count)]
 
     if not history_slice:
-        raise HTTPException(400, "Not enough messages to summarize")
+        raise HTTPException(status_code=400, detail="Not enough messages to summarize")
 
     settings = await get_settings()
     char_name = conv.get("character_name", "Character") or "Character"
@@ -983,13 +1000,15 @@ async def api_summarize_conversation(
 async def api_compress_conversation(cid: str, data: CompressRequest):
     """Create a new conversation seeded with a summary, then re-append the last keep_count messages."""
     if data.keep_count not in (2, 4, 6, 8):
-        raise HTTPException(400, "keep_count must be one of 2, 4, 6, 8")
+        raise HTTPException(
+            status_code=400, detail="keep_count must be one of 2, 4, 6, 8"
+        )
     if not data.summary.strip():
-        raise HTTPException(400, "summary must not be empty")
+        raise HTTPException(status_code=400, detail="summary must not be empty")
 
     conv = await get_conversation(cid)
     if not conv:
-        raise HTTPException(404, "Conversation not found")
+        raise HTTPException(status_code=404, detail="Conversation not found")
 
     messages = await get_messages_with_branch_info(cid)
     tail = messages[max(0, len(messages) - data.keep_count) :]
@@ -1076,14 +1095,16 @@ async def api_create_character(data: CharacterCardCreate):
     try:
         return await create_character_card(card_data)
     except ValueError as e:
-        raise HTTPException(400, str(e)) from e
+        raise HTTPException(status_code=400, detail=str(e)) from e
 
 
 @app.post("/api/characters/import")
 async def api_import_character(file: Annotated[UploadFile, File(...)]):
     """Import a SillyTavern-compatible character card PNG."""
     if not file.filename or not file.filename.lower().endswith(".png"):
-        raise HTTPException(400, "Only .png character card files are supported")
+        raise HTTPException(
+            status_code=400, detail="Only .png character card files are supported"
+        )
 
     # Save to temp file for the parser
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
@@ -1098,10 +1119,12 @@ async def api_import_character(file: Annotated[UploadFile, File(...)]):
         card = tavern_cards.parse(tmp_path)
         card_dict = tavern_cards.card_to_dict(card)
     except ValueError as e:
-        raise HTTPException(400, str(e)) from e
+        raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         logger.exception("Failed to parse tavern card")
-        raise HTTPException(400, f"Failed to parse character card: {e}") from e
+        raise HTTPException(
+            status_code=400, detail=f"Failed to parse character card: {e}"
+        ) from e
     finally:
         os.unlink(tmp_path)
 
@@ -1127,7 +1150,7 @@ async def api_import_character(file: Annotated[UploadFile, File(...)]):
 async def api_get_character(card_id: str):
     card = await get_character_card(card_id)
     if not card:
-        raise HTTPException(404, "Character card not found")
+        raise HTTPException(status_code=404, detail="Character card not found")
     return card
 
 
@@ -1140,7 +1163,7 @@ async def api_update_character(card_id: str, data: CharacterCardUpdate):
         update_data["world_id"] = data.world_id
     result = await update_character_card(card_id, update_data)
     if not result:
-        raise HTTPException(404, "Character card not found")
+        raise HTTPException(status_code=404, detail="Character card not found")
     old_name = old_card["name"] if old_card and "name" in update_data else None
     await sync_conversations_for_card(card_id, result, old_name=old_name)
     return result
@@ -1149,7 +1172,7 @@ async def api_update_character(card_id: str, data: CharacterCardUpdate):
 @app.delete("/api/characters/{card_id}")
 async def api_delete_character(card_id: str, delete_conversations: bool = False):
     if not await delete_character_card(card_id, delete_conversations):
-        raise HTTPException(404, "Character card not found")
+        raise HTTPException(status_code=404, detail="Character card not found")
     return {"ok": True}
 
 
@@ -1157,7 +1180,7 @@ async def api_delete_character(card_id: str, delete_conversations: bool = False)
 async def api_get_avatar(card_id: str):
     result = await get_character_avatar(card_id)
     if not result:
-        raise HTTPException(404, "No avatar found")
+        raise HTTPException(status_code=404, detail="No avatar found")
     image_bytes, mime_type = result
     return Response(content=image_bytes, media_type=mime_type or "image/png")
 
@@ -1167,7 +1190,7 @@ async def api_export_character(card_id: str):
     """Export a character card as a SillyTavern V2-compatible PNG."""
     card = await get_character_card(card_id, include_avatar=True)
     if not card:
-        raise HTTPException(404, "Character not found")
+        raise HTTPException(status_code=404, detail="Character not found")
 
     avatar_bytes: bytes | None = None
     if card.get("avatar_b64"):
@@ -1319,7 +1342,7 @@ async def api_stop_generation(cid: str):
 async def api_get_messages(cid: str):
     conv = await get_conversation(cid)
     if not conv:
-        raise HTTPException(404, "Conversation not found")
+        raise HTTPException(status_code=404, detail="Conversation not found")
     return await get_messages_with_branch_info(cid)
 
 
@@ -1329,11 +1352,11 @@ async def api_edit_message(cid: str, msg_id: int, data: EditMessage, request: Re
     If editing a user message and regenerate=True, streams a new assistant response."""
     conv = await get_conversation(cid)
     if not conv:
-        raise HTTPException(404, "Conversation not found")
+        raise HTTPException(status_code=404, detail="Conversation not found")
 
     original = await get_message_by_id(msg_id)
     if not original or original["conversation_id"] != cid:
-        raise HTTPException(404, "Message not found")
+        raise HTTPException(status_code=404, detail="Message not found")
 
     # For edits with no regeneration, just update the content in-place
     if not data.regenerate:
@@ -1392,9 +1415,9 @@ async def api_delete_message(cid: str, msg_id: int):
     """Delete a message and all its descendants. Returns updated message list."""
     conv = await get_conversation(cid)
     if not conv:
-        raise HTTPException(404, "Conversation not found")
+        raise HTTPException(status_code=404, detail="Conversation not found")
     if not await delete_message_with_descendants(cid, msg_id):
-        raise HTTPException(404, "Message not found")
+        raise HTTPException(status_code=404, detail="Message not found")
     return await get_messages_with_branch_info(cid)
 
 
@@ -1403,10 +1426,10 @@ async def api_switch_branch(cid: str, msg_id: int):
     """Switch to the branch containing msg_id (sets active leaf to deepest descendant)."""
     conv = await get_conversation(cid)
     if not conv:
-        raise HTTPException(404, "Conversation not found")
+        raise HTTPException(status_code=404, detail="Conversation not found")
     success = await switch_to_branch(cid, msg_id)
     if not success:
-        raise HTTPException(404, "Message not found")
+        raise HTTPException(status_code=404, detail="Message not found")
     return await get_messages_with_branch_info(cid)
 
 
@@ -1417,7 +1440,7 @@ async def api_regenerate_msg(
     """Regenerate a specific assistant message as a new sibling branch."""
     conv = await get_conversation(cid)
     if not conv:
-        raise HTTPException(404, "Conversation not found")
+        raise HTTPException(status_code=404, detail="Conversation not found")
 
     client_ref: list = []
     return _CleanupStreamingResponse(
@@ -1438,7 +1461,7 @@ async def api_super_regenerate_msg(
     """Super-regenerate: keeps prior response as context, asks model for a different direction."""
     conv = await get_conversation(cid)
     if not conv:
-        raise HTTPException(404, "Conversation not found")
+        raise HTTPException(status_code=404, detail="Conversation not found")
 
     client_ref: list = []
     return _CleanupStreamingResponse(
@@ -1459,7 +1482,7 @@ async def api_magic_rewrite_msg(
     """Magic rewrite: calls the LLM directly with a user-supplied direction, no agent passes."""
     conv = await get_conversation(cid)
     if not conv:
-        raise HTTPException(404, "Conversation not found")
+        raise HTTPException(status_code=404, detail="Conversation not found")
 
     client_ref: list = []
     return _CleanupStreamingResponse(
@@ -1477,7 +1500,7 @@ async def api_magic_rewrite_msg(
 async def api_get_director_state(cid: str):
     conv = await get_conversation(cid)
     if not conv:
-        raise HTTPException(404, "Conversation not found")
+        raise HTTPException(status_code=404, detail="Conversation not found")
     return await get_director_state(cid)
 
 
@@ -1485,7 +1508,7 @@ async def api_get_director_state(cid: str):
 async def api_get_logs(cid: str):
     conv = await get_conversation(cid)
     if not conv:
-        raise HTTPException(404, "Conversation not found")
+        raise HTTPException(status_code=404, detail="Conversation not found")
     return await get_conversation_logs(cid)
 
 
@@ -1496,7 +1519,7 @@ async def api_get_logs(cid: str):
 async def api_send_message(cid: str, data: SendMessage, request: Request):
     conv = await get_conversation(cid)
     if not conv:
-        raise HTTPException(404, "Conversation not found")
+        raise HTTPException(status_code=404, detail="Conversation not found")
 
     attachments = [a.dict() for a in data.attachments]
     client_ref: list = []
@@ -1520,10 +1543,12 @@ async def api_continue_from_user(
     """Generate an assistant response for the current user turn without creating a new message."""
     conv = await get_conversation(cid)
     if not conv:
-        raise HTTPException(404, "Conversation not found")
+        raise HTTPException(status_code=404, detail="Conversation not found")
     messages = await get_messages(cid)
     if not messages or messages[-1]["role"] != "user":
-        raise HTTPException(400, "Last message is not a user message")
+        raise HTTPException(
+            status_code=400, detail="Last message is not a user message"
+        )
     user_content = messages[-1]["content"]
     client_ref: list = []
     return _CleanupStreamingResponse(

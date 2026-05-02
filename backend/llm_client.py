@@ -3,6 +3,7 @@ import asyncio
 import httpx
 import json
 import logging
+import re
 from typing import AsyncIterator
 
 from .endpoint_profiles import ModelProfile
@@ -254,6 +255,16 @@ def _sanitize_args(obj):
     return obj
 
 
+def _make_tool_call(name: str, arguments) -> dict:
+    """Build a normalised tool-call dict, parsing arguments if they arrive as a JSON string."""
+    if isinstance(arguments, str):
+        try:
+            arguments = json.loads(arguments)
+        except json.JSONDecodeError:
+            arguments = {}
+    return {"name": name, "arguments": _sanitize_args(arguments)}
+
+
 def parse_tool_calls(message: dict) -> list[dict]:
     """Extract tool calls from a completion message.
 
@@ -261,20 +272,15 @@ def parse_tool_calls(message: dict) -> list[dict]:
     model outputs JSON in the content body (common with some local servers).
     Also handles Gemma-style <tool_call>...</tool_call> tags.
     """
-    import re
-
     tool_calls = []
 
     # Standard OpenAI tool_calls format
     if "tool_calls" in message and message["tool_calls"]:
         for tc in message["tool_calls"]:
             fn = tc.get("function", {})
-            name = fn.get("name", "")
-            try:
-                args = json.loads(fn.get("arguments", "{}"))
-            except json.JSONDecodeError:
-                args = {}
-            tool_calls.append({"name": name, "arguments": _sanitize_args(args)})
+            tool_calls.append(
+                _make_tool_call(fn.get("name", ""), fn.get("arguments", "{}"))
+            )
         return tool_calls
 
     # Fallback: try to parse JSON from content
@@ -288,10 +294,7 @@ def parse_tool_calls(message: dict) -> list[dict]:
             parsed = json.loads(match.group(1).strip())
             if isinstance(parsed, dict) and "name" in parsed:
                 tool_calls.append(
-                    {
-                        "name": parsed["name"],
-                        "arguments": _sanitize_args(parsed.get("arguments", {})),
-                    }
+                    _make_tool_call(parsed["name"], parsed.get("arguments", {}))
                 )
         except json.JSONDecodeError:
             pass
@@ -303,7 +306,6 @@ def parse_tool_calls(message: dict) -> list[dict]:
         start = content.find(start_char)
         if start == -1:
             continue
-        # Find matching close
         depth = 0
         for i in range(start, len(content)):
             if content[i] == start_char:
@@ -313,27 +315,17 @@ def parse_tool_calls(message: dict) -> list[dict]:
             if depth == 0:
                 try:
                     parsed = json.loads(content[start : i + 1])
-                    # If it's a single object with 'name' and 'arguments', treat as one tool call
                     if isinstance(parsed, dict) and "name" in parsed:
                         tool_calls.append(
-                            {
-                                "name": parsed["name"],
-                                "arguments": _sanitize_args(
-                                    parsed.get("arguments", {})
-                                ),
-                            }
+                            _make_tool_call(parsed["name"], parsed.get("arguments", {}))
                         )
-                    # If it's an array of tool calls
                     elif isinstance(parsed, list):
                         for item in parsed:
                             if isinstance(item, dict) and "name" in item:
                                 tool_calls.append(
-                                    {
-                                        "name": item["name"],
-                                        "arguments": _sanitize_args(
-                                            item.get("arguments", {})
-                                        ),
-                                    }
+                                    _make_tool_call(
+                                        item["name"], item.get("arguments", {})
+                                    )
                                 )
                     if tool_calls:
                         return tool_calls

@@ -1,4 +1,5 @@
 from __future__ import annotations
+from contextlib import asynccontextmanager
 from typing import List, Optional
 import aiosqlite
 import sqlite3
@@ -292,18 +293,38 @@ SEED_PHRASE_BANK = [
 ]
 
 
-async def get_db() -> aiosqlite.Connection:
+@asynccontextmanager
+async def get_db():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     db = await aiosqlite.connect(DB_PATH)
     db.row_factory = aiosqlite.Row
     await db.execute("PRAGMA journal_mode=WAL")
     await db.execute("PRAGMA foreign_keys=ON")
-    return db
+    try:
+        yield db
+    finally:
+        await db.close()
+
+
+def _build_set_clause(
+    allowed: list[str], data: dict, json_fields: set[str] = frozenset()
+) -> tuple[list[str], list]:
+    """Build the SET clause lists for a parameterised UPDATE query.
+
+    Returns (sets, vals) where sets is a list of 'col = ?' strings and vals
+    holds the corresponding values. Columns in json_fields are JSON-serialised.
+    """
+    sets: list[str] = []
+    vals: list = []
+    for k in allowed:
+        if k in data:
+            sets.append(f"{k} = ?")
+            vals.append(json.dumps(data[k]) if k in json_fields else data[k])
+    return sets, vals
 
 
 async def init_db():
-    db = await get_db()
-    try:
+    async with get_db() as db:
         await db.executescript(
             """
             CREATE TABLE IF NOT EXISTS settings (
@@ -679,47 +700,35 @@ async def init_db():
                 )
 
         await db.commit()
-    finally:
-        await db.close()
 
 
 # --- Worlds ---
 
 
 async def get_worlds() -> list[dict]:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         rows = await db.execute_fetchall("SELECT * FROM worlds ORDER BY created_at ASC")
         return [dict(r) for r in rows]
-    finally:
-        await db.close()
 
 
 async def get_world(world_id: str) -> dict | None:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         rows = await db.execute_fetchall(
             "SELECT * FROM worlds WHERE id = ?", (world_id,)
         )
         return dict(rows[0]) if rows else None
-    finally:
-        await db.close()
 
 
 async def get_world_by_name(name: str) -> dict | None:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         rows = await db.execute_fetchall(
             "SELECT * FROM worlds WHERE name = ? LIMIT 1", (name,)
         )
         return dict(rows[0]) if rows else None
-    finally:
-        await db.close()
 
 
 async def create_world(data: dict) -> dict:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         now = datetime.now(timezone.utc).isoformat()
         world_id = data.get("id") or str(uuid.uuid4())
         await db.execute(
@@ -734,20 +743,12 @@ async def create_world(data: dict) -> dict:
         )
         await db.commit()
         return await get_world(world_id)
-    finally:
-        await db.close()
 
 
 async def update_world(world_id: str, data: dict) -> dict | None:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         allowed = ["name", "enabled"]
-        sets = []
-        vals = []
-        for k in allowed:
-            if k in data:
-                sets.append(f"{k} = ?")
-                vals.append(data[k])
+        sets, vals = _build_set_clause(allowed, data)
         if sets:
             sets.append("updated_at = ?")
             vals.append(datetime.now(timezone.utc).isoformat())
@@ -758,58 +759,43 @@ async def update_world(world_id: str, data: dict) -> dict | None:
             )
             await db.commit()
         return await get_world(world_id)
-    finally:
-        await db.close()
 
 
 async def delete_world(world_id: str) -> bool:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         cur = await db.execute("DELETE FROM worlds WHERE id = ?", (world_id,))
         await db.commit()
         return cur.rowcount > 0
-    finally:
-        await db.close()
 
 
 # --- Lorebook Entries ---
 
 
+def _parse_lorebook_entry(row) -> dict:
+    d = dict(row)
+    d["keywords"] = json.loads(d["keywords"]) if d.get("keywords") else []
+    return d
+
+
 async def get_lorebook_entries(world_id: str) -> list[dict]:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         rows = await db.execute_fetchall(
             "SELECT * FROM lorebook_entries WHERE world_id = ? ORDER BY sort_order ASC, id ASC",
             (world_id,),
         )
-        result = []
-        for r in rows:
-            d = dict(r)
-            d["keywords"] = json.loads(d["keywords"]) if d.get("keywords") else []
-            result.append(d)
-        return result
-    finally:
-        await db.close()
+        return [_parse_lorebook_entry(r) for r in rows]
 
 
 async def get_lorebook_entry(entry_id: int) -> dict | None:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         rows = await db.execute_fetchall(
             "SELECT * FROM lorebook_entries WHERE id = ?", (entry_id,)
         )
-        if not rows:
-            return None
-        d = dict(rows[0])
-        d["keywords"] = json.loads(d["keywords"]) if d.get("keywords") else []
-        return d
-    finally:
-        await db.close()
+        return _parse_lorebook_entry(rows[0]) if rows else None
 
 
 async def create_lorebook_entry(world_id: str, data: dict) -> dict:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         now = datetime.now(timezone.utc).isoformat()
         cur = await db.execute(
             "INSERT INTO lorebook_entries (world_id, name, content, keywords, case_insensitive, priority, enabled, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
@@ -828,13 +814,10 @@ async def create_lorebook_entry(world_id: str, data: dict) -> dict:
         )
         await db.commit()
         return await get_lorebook_entry(cur.lastrowid)
-    finally:
-        await db.close()
 
 
 async def update_lorebook_entry(entry_id: int, data: dict) -> dict | None:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         allowed = [
             "name",
             "content",
@@ -844,15 +827,7 @@ async def update_lorebook_entry(entry_id: int, data: dict) -> dict | None:
             "enabled",
             "sort_order",
         ]
-        sets = []
-        vals = []
-        for k in allowed:
-            if k in data:
-                sets.append(f"{k} = ?")
-                if k == "keywords":
-                    vals.append(json.dumps(data[k]))
-                else:
-                    vals.append(data[k])
+        sets, vals = _build_set_clause(allowed, data, json_fields={"keywords"})
         if sets:
             sets.append("updated_at = ?")
             vals.append(datetime.now(timezone.utc).isoformat())
@@ -863,24 +838,18 @@ async def update_lorebook_entry(entry_id: int, data: dict) -> dict | None:
             )
             await db.commit()
         return await get_lorebook_entry(entry_id)
-    finally:
-        await db.close()
 
 
 async def delete_lorebook_entry(entry_id: int) -> bool:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         cur = await db.execute("DELETE FROM lorebook_entries WHERE id = ?", (entry_id,))
         await db.commit()
         return cur.rowcount > 0
-    finally:
-        await db.close()
 
 
 async def get_active_lorebook_entries() -> list[dict]:
     """Return all enabled entries from enabled worlds, ordered by priority DESC, sort_order ASC."""
-    db = await get_db()
-    try:
+    async with get_db() as db:
         rows = await db.execute_fetchall(
             """
             SELECT le.* FROM lorebook_entries le
@@ -895,16 +864,13 @@ async def get_active_lorebook_entries() -> list[dict]:
             d["keywords"] = json.loads(d["keywords"]) if d.get("keywords") else []
             result.append(d)
         return result
-    finally:
-        await db.close()
 
 
 # --- Settings ---
 
 
 async def get_settings() -> dict:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         rows = await db.execute_fetchall("SELECT * FROM settings WHERE id = 1")
         if not rows:
             return DEFAULT_SETTINGS
@@ -952,13 +918,10 @@ async def get_settings() -> dict:
                         if mc.get("system_prompt") is not None:
                             s["system_prompt"] = mc["system_prompt"]
         return s
-    finally:
-        await db.close()
 
 
 async def update_settings(data: dict) -> dict:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         allowed = [
             "endpoint_url",
             "api_key",
@@ -985,14 +948,9 @@ async def update_settings(data: dict) -> dict:
             "show_editor_diff",
             "hide_streaming_until_baked",
         ]
-        json_fields = {"enabled_tools", "reasoning_enabled_passes"}
-        sets = []
-        vals = []
-
-        for k in allowed:
-            if k in data:
-                sets.append(f"{k} = ?")
-                vals.append(json.dumps(data[k]) if k in json_fields else data[k])
+        sets, vals = _build_set_clause(
+            allowed, data, json_fields={"enabled_tools", "reasoning_enabled_passes"}
+        )
         if sets:
             await db.execute(
                 f"UPDATE settings SET {', '.join(sets)} WHERE id = 1",
@@ -1000,39 +958,30 @@ async def update_settings(data: dict) -> dict:
             )
             await db.commit()
         return await get_settings()
-    finally:
-        await db.close()
 
 
 # --- Endpoints ---
 
 
 async def get_endpoints() -> list[dict]:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         rows = await db.execute_fetchall(
             "SELECT id, url, api_key, active_model_config_id FROM endpoints ORDER BY id ASC"
         )
         return [dict(r) for r in rows]
-    finally:
-        await db.close()
 
 
 async def get_endpoint(endpoint_id: int) -> dict | None:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         rows = await db.execute_fetchall(
             "SELECT id, url, api_key, active_model_config_id FROM endpoints WHERE id = ?",
             (endpoint_id,),
         )
         return dict(rows[0]) if rows else None
-    finally:
-        await db.close()
 
 
 async def create_endpoint(url: str, api_key: str = "") -> dict:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         cur = await db.execute(
             "INSERT INTO endpoints (url, api_key) VALUES (?, ?)", (url, api_key)
         )
@@ -1041,19 +990,12 @@ async def create_endpoint(url: str, api_key: str = "") -> dict:
             "SELECT id, url FROM endpoints WHERE id = ?", (cur.lastrowid,)
         )
         return dict(rows[0])
-    finally:
-        await db.close()
 
 
 async def update_endpoint(endpoint_id: int, data: dict) -> dict | None:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         allowed = ["url", "api_key", "active_model_config_id"]
-        sets, vals = [], []
-        for k in allowed:
-            if k in data:
-                sets.append(f"{k} = ?")
-                vals.append(data[k])
+        sets, vals = _build_set_clause(allowed, data)
         if sets:
             vals.append(endpoint_id)
             await db.execute(
@@ -1066,38 +1008,29 @@ async def update_endpoint(endpoint_id: int, data: dict) -> dict | None:
             (endpoint_id,),
         )
         return dict(rows[0]) if rows else None
-    finally:
-        await db.close()
 
 
 async def delete_endpoint(endpoint_id: int) -> bool:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         cur = await db.execute("DELETE FROM endpoints WHERE id = ?", (endpoint_id,))
         await db.commit()
         return cur.rowcount > 0
-    finally:
-        await db.close()
 
 
 # --- Model Configs ---
 
 
 async def get_model_configs(endpoint_id: int) -> list[dict]:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         rows = await db.execute_fetchall(
             "SELECT * FROM model_configs WHERE endpoint_id = ? ORDER BY id ASC",
             (endpoint_id,),
         )
         return [dict(r) for r in rows]
-    finally:
-        await db.close()
 
 
 async def create_model_config(endpoint_id: int, data: dict) -> dict:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         cur = await db.execute(
             "INSERT INTO model_configs (endpoint_id, model_name, system_prompt, temperature, min_p, top_k, top_p, repetition_penalty, max_tokens) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
@@ -1117,13 +1050,10 @@ async def create_model_config(endpoint_id: int, data: dict) -> dict:
             "SELECT * FROM model_configs WHERE id = ?", (cur.lastrowid,)
         )
         return dict(rows[0])
-    finally:
-        await db.close()
 
 
 async def update_model_config(config_id: int, data: dict) -> dict | None:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         allowed = [
             "model_name",
             "system_prompt",
@@ -1134,11 +1064,7 @@ async def update_model_config(config_id: int, data: dict) -> dict | None:
             "repetition_penalty",
             "max_tokens",
         ]
-        sets, vals = [], []
-        for k in allowed:
-            if k in data:
-                sets.append(f"{k} = ?")
-                vals.append(data[k])
+        sets, vals = _build_set_clause(allowed, data)
         if sets:
             vals.append(config_id)
             await db.execute(
@@ -1150,48 +1076,36 @@ async def update_model_config(config_id: int, data: dict) -> dict | None:
             "SELECT * FROM model_configs WHERE id = ?", (config_id,)
         )
         return dict(rows[0]) if rows else None
-    finally:
-        await db.close()
 
 
 async def delete_model_config(config_id: int) -> bool:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         cur = await db.execute("DELETE FROM model_configs WHERE id = ?", (config_id,))
         await db.commit()
         return cur.rowcount > 0
-    finally:
-        await db.close()
 
 
 # --- Mood Fragments ---
 
 
 async def get_mood_fragments() -> list[dict]:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         rows = await db.execute_fetchall(
             "SELECT * FROM mood_fragments ORDER BY label ASC"
         )
         return [dict(r) for r in rows]
-    finally:
-        await db.close()
 
 
 async def get_mood_fragment(fid: str) -> dict | None:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         rows = await db.execute_fetchall(
             "SELECT * FROM mood_fragments WHERE id = ?", (fid,)
         )
         return dict(rows[0]) if rows else None
-    finally:
-        await db.close()
 
 
 async def create_mood_fragment(data: dict) -> dict:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         enabled = data.get("enabled", 1)
         await db.execute(
             "INSERT INTO mood_fragments (id, label, description, prompt_text, negative_prompt, enabled) VALUES (?, ?, ?, ?, ?, ?)",
@@ -1206,20 +1120,12 @@ async def create_mood_fragment(data: dict) -> dict:
         )
         await db.commit()
         return await get_mood_fragment(data["id"])
-    finally:
-        await db.close()
 
 
 async def update_mood_fragment(fid: str, data: dict) -> dict | None:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         allowed = ["label", "description", "prompt_text", "negative_prompt", "enabled"]
-        sets = []
-        vals = []
-        for k in allowed:
-            if k in data:
-                sets.append(f"{k} = ?")
-                vals.append(data[k])
+        sets, vals = _build_set_clause(allowed, data)
         if sets:
             vals.append(fid)
             await db.execute(
@@ -1228,48 +1134,36 @@ async def update_mood_fragment(fid: str, data: dict) -> dict | None:
             )
             await db.commit()
         return await get_mood_fragment(fid)
-    finally:
-        await db.close()
 
 
 async def delete_mood_fragment(fid: str) -> bool:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         cur = await db.execute("DELETE FROM mood_fragments WHERE id = ?", (fid,))
         await db.commit()
         return cur.rowcount > 0
-    finally:
-        await db.close()
 
 
 # --- Director Fragments ---
 
 
 async def get_director_fragments() -> list[dict]:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         rows = await db.execute_fetchall(
             "SELECT * FROM director_fragments ORDER BY sort_order ASC, label ASC"
         )
         return [dict(r) for r in rows]
-    finally:
-        await db.close()
 
 
 async def get_director_fragment(fid: str) -> dict | None:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         rows = await db.execute_fetchall(
             "SELECT * FROM director_fragments WHERE id = ?", (fid,)
         )
         return dict(rows[0]) if rows else None
-    finally:
-        await db.close()
 
 
 async def create_director_fragment(data: dict) -> dict | None:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         await db.execute(
             "INSERT INTO director_fragments (id, label, description, field_type, required, enabled, injection_label, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
@@ -1285,13 +1179,10 @@ async def create_director_fragment(data: dict) -> dict | None:
         )
         await db.commit()
         return await get_director_fragment(data["id"])
-    finally:
-        await db.close()
 
 
 async def update_director_fragment(fid: str, data: dict) -> dict | None:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         allowed = [
             "label",
             "description",
@@ -1301,12 +1192,7 @@ async def update_director_fragment(fid: str, data: dict) -> dict | None:
             "injection_label",
             "sort_order",
         ]
-        sets = []
-        vals = []
-        for k in allowed:
-            if k in data:
-                sets.append(f"{k} = ?")
-                vals.append(data[k])
+        sets, vals = _build_set_clause(allowed, data)
         if sets:
             vals.append(fid)
             await db.execute(
@@ -1315,26 +1201,20 @@ async def update_director_fragment(fid: str, data: dict) -> dict | None:
             )
             await db.commit()
         return await get_director_fragment(fid)
-    finally:
-        await db.close()
 
 
 async def delete_director_fragment(fid: str) -> bool:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         cur = await db.execute("DELETE FROM director_fragments WHERE id = ?", (fid,))
         await db.commit()
         return cur.rowcount > 0
-    finally:
-        await db.close()
 
 
 # --- Conversations ---
 
 
 async def list_conversations() -> list[dict]:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         rows = await db.execute_fetchall(
             """
             SELECT c.*,
@@ -1348,19 +1228,14 @@ async def list_conversations() -> list[dict]:
         """
         )
         return [dict(r) for r in rows]
-    finally:
-        await db.close()
 
 
 async def get_conversation(cid: str) -> dict | None:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         rows = await db.execute_fetchall(
             "SELECT * FROM conversations WHERE id = ?", (cid,)
         )
         return dict(rows[0]) if rows else None
-    finally:
-        await db.close()
 
 
 async def create_conversation(
@@ -1372,8 +1247,7 @@ async def create_conversation(
     post_history_instructions: str = "",
     character_card_id: str | None = None,
 ) -> dict:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         now = datetime.now(timezone.utc).isoformat()
         await db.execute(
             """INSERT INTO conversations
@@ -1398,44 +1272,30 @@ async def create_conversation(
         )
         await db.commit()
         return await get_conversation(cid)
-    finally:
-        await db.close()
 
 
 async def delete_conversation(cid: str) -> bool:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         cur = await db.execute("DELETE FROM conversations WHERE id = ?", (cid,))
         await db.commit()
         return cur.rowcount > 0
-    finally:
-        await db.close()
 
 
 async def touch_conversation(cid: str) -> bool:
     """Update conversation's updated_at to current time."""
-    db = await get_db()
-    try:
+    async with get_db() as db:
         now = datetime.now(timezone.utc).isoformat()
         cur = await db.execute(
             "UPDATE conversations SET updated_at = ? WHERE id = ?", (now, cid)
         )
         await db.commit()
         return cur.rowcount > 0
-    finally:
-        await db.close()
 
 
 async def update_conversation(cid: str, data: dict) -> dict | None:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         allowed = ["title"]
-        sets = []
-        vals = []
-        for k in allowed:
-            if k in data:
-                sets.append(f"{k} = ?")
-                vals.append(data[k])
+        sets, vals = _build_set_clause(allowed, data)
         if sets:
             sets.append("updated_at = ?")
             vals.append(datetime.now(timezone.utc).isoformat())
@@ -1446,8 +1306,6 @@ async def update_conversation(cid: str, data: dict) -> dict | None:
             )
             await db.commit()
         return await get_conversation(cid)
-    finally:
-        await db.close()
 
 
 # --- Messages ---
@@ -1455,8 +1313,7 @@ async def update_conversation(cid: str, data: dict) -> dict | None:
 
 async def _get_path_to_leaf(cid: str, leaf_id: int) -> list[dict]:
     """Walk parent_id chain from leaf to root, return ordered root→leaf."""
-    db = await get_db()
-    try:
+    async with get_db() as db:
         path = []
         current_id = leaf_id
         while current_id is not None:
@@ -1471,8 +1328,6 @@ async def _get_path_to_leaf(cid: str, leaf_id: int) -> list[dict]:
             current_id = msg.get("parent_id")
         path.reverse()
         return path
-    finally:
-        await db.close()
 
 
 async def get_messages(cid: str) -> list[dict]:
@@ -1495,8 +1350,7 @@ async def get_messages_with_branch_info(cid: str) -> list[dict]:
     messages = await get_messages(cid)
     if not messages:
         return []
-    db = await get_db()
-    try:
+    async with get_db() as db:
         for msg in messages:
             parent_id = msg.get("parent_id")
             if parent_id is None:
@@ -1521,8 +1375,6 @@ async def get_messages_with_branch_info(cid: str) -> list[dict]:
         for msg in messages:
             msg["attachments"] = await get_attachments_for_message(msg["id"])
         return messages
-    finally:
-        await db.close()
 
 
 async def add_message(
@@ -1541,8 +1393,7 @@ async def add_message(
     - filename (optional str)
     - size (optional int)
     """
-    db = await get_db()
-    try:
+    async with get_db() as db:
         now = datetime.now(timezone.utc).isoformat()
         try:
             cur = await db.execute(
@@ -1572,51 +1423,39 @@ async def add_message(
         )
         await db.commit()
         return message_id
-    finally:
-        await db.close()
 
 
 async def get_attachments_for_message(message_id: int) -> List[dict]:
     """Retrieve all attachments for a message."""
-    db = await get_db()
-    try:
+    async with get_db() as db:
         rows = await db.execute_fetchall(
             "SELECT id, mime_type, data_b64, filename, size, created_at FROM message_attachments WHERE message_id = ? ORDER BY id",
             (message_id,),
         )
         return [dict(r) for r in rows]
-    finally:
-        await db.close()
 
 
 async def update_message_content(msg_id: int, content: str) -> None:
     """Update the content of an existing message."""
-    db = await get_db()
-    try:
+    async with get_db() as db:
         await db.execute(
             "UPDATE messages SET content = ? WHERE id = ?", (content, msg_id)
         )
         await db.commit()
-    finally:
-        await db.close()
 
 
 async def get_message_by_id(msg_id: int) -> dict | None:
     """Fetch a single message by its primary key."""
-    db = await get_db()
-    try:
+    async with get_db() as db:
         rows = await db.execute_fetchall(
             "SELECT * FROM messages WHERE id = ?", (msg_id,)
         )
         return dict(rows[0]) if rows else None
-    finally:
-        await db.close()
 
 
 async def set_active_leaf(cid: str, leaf_id: int | None):
     """Update the active_leaf_id for a conversation."""
-    db = await get_db()
-    try:
+    async with get_db() as db:
         if leaf_id is not None:
             rows = await db.execute_fetchall(
                 "SELECT id FROM messages WHERE id = ? AND conversation_id = ?",
@@ -1630,14 +1469,11 @@ async def set_active_leaf(cid: str, leaf_id: int | None):
             "UPDATE conversations SET active_leaf_id = ? WHERE id = ?", (leaf_id, cid)
         )
         await db.commit()
-    finally:
-        await db.close()
 
 
 async def get_deepest_descendant(cid: str, message_id: int) -> int:
     """Return the deepest descendant of message_id (most recently added child chain)."""
-    db = await get_db()
-    try:
+    async with get_db() as db:
         current_id = message_id
         while True:
             rows = await db.execute_fetchall(
@@ -1648,8 +1484,6 @@ async def get_deepest_descendant(cid: str, message_id: int) -> int:
                 break
             current_id = rows[0]["id"]
         return current_id
-    finally:
-        await db.close()
 
 
 async def switch_to_branch(cid: str, message_id: int) -> bool:
@@ -1664,8 +1498,7 @@ async def switch_to_branch(cid: str, message_id: int) -> bool:
 
 async def create_swipe(cid: str, turn_index: int, content: str) -> dict:
     """Create a new swipe at a given turn_index. Deactivates old swipes, activates the new one."""
-    db = await get_db()
-    try:
+    async with get_db() as db:
         # Get the role and next swipe_index
         rows = await db.execute_fetchall(
             "SELECT role, MAX(swipe_index) as max_si FROM messages WHERE conversation_id = ? AND turn_index = ?",
@@ -1692,14 +1525,11 @@ async def create_swipe(cid: str, turn_index: int, content: str) -> dict:
         await db.commit()
 
         return {"turn_index": turn_index, "swipe_index": new_si, "role": role}
-    finally:
-        await db.close()
 
 
 async def switch_swipe(cid: str, turn_index: int, target_swipe_index: int) -> bool:
     """Switch the active swipe at a given turn_index."""
-    db = await get_db()
-    try:
+    async with get_db() as db:
         # Verify the target exists
         rows = await db.execute_fetchall(
             "SELECT id FROM messages WHERE conversation_id = ? AND turn_index = ? AND swipe_index = ?",
@@ -1719,14 +1549,11 @@ async def switch_swipe(cid: str, turn_index: int, target_swipe_index: int) -> bo
         )
         await db.commit()
         return True
-    finally:
-        await db.close()
 
 
 async def truncate_after_turn(cid: str, turn_index: int):
     """Delete all messages with turn_index > the given value."""
-    db = await get_db()
-    try:
+    async with get_db() as db:
         await db.execute(
             "DELETE FROM messages WHERE conversation_id = ? AND turn_index > ?",
             (cid, turn_index),
@@ -1737,8 +1564,6 @@ async def truncate_after_turn(cid: str, turn_index: int):
             (cid, turn_index),
         )
         await db.commit()
-    finally:
-        await db.close()
 
 
 async def get_next_turn_index(cid: str) -> int:
@@ -1757,8 +1582,7 @@ async def get_next_turn_index(cid: str) -> int:
 
 
 async def get_director_state(cid: str) -> dict:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         rows = await db.execute_fetchall(
             "SELECT * FROM director_state WHERE conversation_id = ?", (cid,)
         )
@@ -1772,15 +1596,12 @@ async def get_director_state(cid: str) -> dict:
                 r["keywords"] = []
             return r
         return {"conversation_id": cid, "active_moods": [], "keywords": []}
-    finally:
-        await db.close()
 
 
 async def update_director_state(
     cid: str, active_moods: list, keywords: list | None = None
 ):
-    db = await get_db()
-    try:
+    async with get_db() as db:
         if keywords is not None:
             await db.execute(
                 "UPDATE director_state SET active_moods = ?, keywords = ? WHERE conversation_id = ?",
@@ -1792,8 +1613,6 @@ async def update_director_state(
                 (json.dumps(active_moods), cid),
             )
         await db.commit()
-    finally:
-        await db.close()
 
 
 # --- Conversation Logs ---
@@ -1808,8 +1627,7 @@ async def add_conversation_log(
     injection: str,
     latency_ms: int,
 ):
-    db = await get_db()
-    try:
+    async with get_db() as db:
         now = datetime.now(timezone.utc).isoformat()
         await db.execute(
             "INSERT INTO conversation_logs (conversation_id, turn_index, agent_raw_output, tool_calls, active_moods_after, injection_block, agent_latency_ms, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
@@ -1825,14 +1643,11 @@ async def add_conversation_log(
             ),
         )
         await db.commit()
-    finally:
-        await db.close()
 
 
 async def get_moods_before_turn(cid: str, turn_index: int) -> list[str]:
     """Return active_moods_after from the most recent log entry before turn_index."""
-    db = await get_db()
-    try:
+    async with get_db() as db:
         rows = await db.execute_fetchall(
             "SELECT active_moods_after FROM conversation_logs WHERE conversation_id = ? AND turn_index < ? ORDER BY turn_index DESC LIMIT 1",
             (cid, turn_index),
@@ -1840,13 +1655,10 @@ async def get_moods_before_turn(cid: str, turn_index: int) -> list[str]:
         if rows and rows[0]["active_moods_after"]:
             return json.loads(rows[0]["active_moods_after"])
         return []
-    finally:
-        await db.close()
 
 
 async def get_conversation_logs(cid: str) -> list[dict]:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         rows = await db.execute_fetchall(
             "SELECT * FROM conversation_logs WHERE conversation_id = ? ORDER BY turn_index ASC",
             (cid,),
@@ -1860,8 +1672,6 @@ async def get_conversation_logs(cid: str) -> list[dict]:
             )
             result.append(d)
         return result
-    finally:
-        await db.close()
 
 
 # --- Phrase Bank ---
@@ -1869,93 +1679,71 @@ async def get_conversation_logs(cid: str) -> list[dict]:
 
 async def get_phrase_bank() -> list[list[str]]:
     """Return phrase bank as list of variant groups (list of lists)."""
-    db = await get_db()
-    try:
+    async with get_db() as db:
         rows = await db.execute_fetchall(
             "SELECT variants FROM phrase_bank ORDER BY id ASC"
         )
         return [json.loads(r["variants"]) for r in rows]
-    finally:
-        await db.close()
 
 
 async def get_phrase_bank_rows() -> list[dict]:
     """Return phrase bank rows with ids for UI management."""
-    db = await get_db()
-    try:
+    async with get_db() as db:
         rows = await db.execute_fetchall(
             "SELECT id, variants FROM phrase_bank ORDER BY id ASC"
         )
         return [{"id": r["id"], "variants": json.loads(r["variants"])} for r in rows]
-    finally:
-        await db.close()
 
 
 async def add_phrase_group(variants: list[str]) -> int:
     """Add a new phrase variant group. Returns the new row id."""
-    db = await get_db()
-    try:
+    async with get_db() as db:
         cur = await db.execute(
             "INSERT INTO phrase_bank (variants) VALUES (?)", (json.dumps(variants),)
         )
         await db.commit()
         return cur.lastrowid
-    finally:
-        await db.close()
 
 
 async def update_phrase_group(group_id: int, variants: list[str]) -> bool:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         cur = await db.execute(
             "UPDATE phrase_bank SET variants = ? WHERE id = ?",
             (json.dumps(variants), group_id),
         )
         await db.commit()
         return cur.rowcount > 0
-    finally:
-        await db.close()
 
 
 async def delete_phrase_group(group_id: int) -> bool:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         cur = await db.execute("DELETE FROM phrase_bank WHERE id = ?", (group_id,))
         await db.commit()
         return cur.rowcount > 0
-    finally:
-        await db.close()
 
 
 # --- User Personas ---
 
 
 async def get_user_personas() -> list[dict]:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         rows = await db.execute_fetchall(
             "SELECT id, name, description, avatar_color, created_at, updated_at FROM user_personas ORDER BY name ASC"
         )
         return [dict(r) for r in rows]
-    finally:
-        await db.close()
 
 
 async def get_user_persona(persona_id: int) -> dict | None:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         rows = await db.execute_fetchall(
             "SELECT id, name, description, avatar_color, created_at, updated_at FROM user_personas WHERE id = ?",
             (persona_id,),
         )
         return dict(rows[0]) if rows else None
-    finally:
-        await db.close()
 
 
 async def create_user_persona(data: dict) -> dict:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         now = datetime.now(timezone.utc).isoformat()
         cur = await db.execute(
             "INSERT INTO user_personas (name, description, avatar_color, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
@@ -1970,20 +1758,12 @@ async def create_user_persona(data: dict) -> dict:
         persona_id = cur.lastrowid
         await db.commit()
         return await get_user_persona(persona_id)
-    finally:
-        await db.close()
 
 
 async def update_user_persona(persona_id: int, data: dict) -> dict | None:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         allowed = ["name", "description", "avatar_color"]
-        sets = []
-        vals = []
-        for k in allowed:
-            if k in data:
-                sets.append(f"{k} = ?")
-                vals.append(data[k])
+        sets, vals = _build_set_clause(allowed, data)
         if sets:
             sets.append("updated_at = ?")
             vals.append(datetime.now(timezone.utc).isoformat())
@@ -1994,26 +1774,20 @@ async def update_user_persona(persona_id: int, data: dict) -> dict | None:
             )
             await db.commit()
         return await get_user_persona(persona_id)
-    finally:
-        await db.close()
 
 
 async def delete_user_persona(persona_id: int) -> bool:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         cur = await db.execute("DELETE FROM user_personas WHERE id = ?", (persona_id,))
         await db.commit()
         return cur.rowcount > 0
-    finally:
-        await db.close()
 
 
 # --- Character Cards ---
 
 
 async def list_character_cards() -> list[dict]:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         rows = await db.execute_fetchall(
             "SELECT id, name, description, personality, scenario, first_mes, creator_notes, system_prompt, tags, creator, source_format, created_at, updated_at, avatar_mime, world_id FROM character_cards ORDER BY updated_at DESC"
         )
@@ -2025,13 +1799,10 @@ async def list_character_cards() -> list[dict]:
             del d["avatar_mime"]
             result.append(d)
         return result
-    finally:
-        await db.close()
 
 
 async def get_character_card(card_id: str, include_avatar: bool = False) -> dict | None:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         cols = (
             "*"
             if include_avatar
@@ -2054,13 +1825,10 @@ async def get_character_card(card_id: str, include_avatar: bool = False) -> dict
         )
         d["has_avatar"] = d.get("avatar_mime") is not None
         return d
-    finally:
-        await db.close()
 
 
 async def create_character_card(data: dict) -> dict:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         now = datetime.now(timezone.utc).isoformat()
         try:
             await db.execute(
@@ -2099,8 +1867,6 @@ async def create_character_card(data: dict) -> dict:
             ) from exc
         await db.commit()
         return await get_character_card(data["id"])
-    finally:
-        await db.close()
 
 
 async def insert_alternate_greeting_swipes(
@@ -2116,8 +1882,7 @@ async def insert_alternate_greeting_swipes(
     """
     if not alternate_greetings:
         return 0
-    db = await get_db()
-    try:
+    async with get_db() as db:
         now = datetime.now(timezone.utc).isoformat()
         swipe_index = 0
         for greeting in alternate_greetings:
@@ -2132,13 +1897,10 @@ async def insert_alternate_greeting_swipes(
         if swipe_index:
             await db.commit()
         return swipe_index
-    finally:
-        await db.close()
 
 
 async def update_character_card(card_id: str, data: dict) -> dict | None:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         allowed = [
             "name",
             "description",
@@ -2153,12 +1915,7 @@ async def update_character_card(card_id: str, data: dict) -> dict | None:
             "character_version",
             "world_id",
         ]
-        sets = []
-        vals = []
-        for k in allowed:
-            if k in data:
-                sets.append(f"{k} = ?")
-                vals.append(data[k])
+        sets, vals = _build_set_clause(allowed, data)
         # JSON fields
         if "tags" in data:
             sets.append("tags = ?")
@@ -2183,8 +1940,6 @@ async def update_character_card(card_id: str, data: dict) -> dict | None:
             )
             await db.commit()
         return await get_character_card(card_id)
-    finally:
-        await db.close()
 
 
 async def sync_conversations_for_card(
@@ -2199,8 +1954,7 @@ async def sync_conversations_for_card(
     If ``old_name`` is provided, conversation titles that still match the old
     name are updated to the new name so they don't become stale.
     """
-    db = await get_db()
-    try:
+    async with get_db() as db:
         await db.execute(
             """UPDATE conversations
                SET character_name = ?,
@@ -2223,15 +1977,12 @@ async def sync_conversations_for_card(
                 (card.get("name", ""), card_id, old_name),
             )
         await db.commit()
-    finally:
-        await db.close()
 
 
 async def delete_character_card(
     card_id: str, delete_conversations: bool = False
 ) -> bool:
-    db = await get_db()
-    try:
+    async with get_db() as db:
         if delete_conversations:
             await db.execute(
                 "DELETE FROM conversations WHERE character_card_id = ?", (card_id,)
@@ -2243,14 +1994,11 @@ async def delete_character_card(
         cur = await db.execute("DELETE FROM character_cards WHERE id = ?", (card_id,))
         await db.commit()
         return cur.rowcount > 0
-    finally:
-        await db.close()
 
 
 async def delete_message_with_descendants(cid: str, msg_id: int) -> bool:
     """Delete a message, all its siblings, and all their descendants. Updates active_leaf_id if the active branch is affected."""
-    db = await get_db()
-    try:
+    async with get_db() as db:
         rows = await db.execute_fetchall(
             "SELECT parent_id FROM messages WHERE id = ? AND conversation_id = ?",
             (msg_id, cid),
@@ -2338,8 +2086,6 @@ async def delete_message_with_descendants(cid: str, msg_id: int) -> bool:
 
         await db.commit()
         return True
-    finally:
-        await db.close()
 
 
 async def resolve_char_context(conv: dict, settings: dict) -> tuple[str, str, str]:
@@ -2375,8 +2121,7 @@ async def resolve_char_context(conv: dict, settings: dict) -> tuple[str, str, st
 
 async def get_character_avatar(card_id: str) -> tuple[bytes, str] | None:
     """Returns (image_bytes, mime_type) or None."""
-    db = await get_db()
-    try:
+    async with get_db() as db:
         rows = await db.execute_fetchall(
             "SELECT avatar_b64, avatar_mime FROM character_cards WHERE id = ?",
             (card_id,),
@@ -2386,8 +2131,6 @@ async def get_character_avatar(card_id: str) -> tuple[bytes, str] | None:
         import base64
 
         return base64.b64decode(rows[0]["avatar_b64"]), rows[0]["avatar_mime"]
-    finally:
-        await db.close()
 
 
 # --- Reset to Defaults ---
@@ -2395,8 +2138,7 @@ async def get_character_avatar(card_id: str) -> tuple[bytes, str] | None:
 
 async def reset_to_defaults() -> None:
     """Delete all user-modified data and re-seed tables to defaults."""
-    db = await get_db()
-    try:
+    async with get_db() as db:
         await db.execute("DELETE FROM settings WHERE id = 1")
         await db.execute("DELETE FROM mood_fragments")
         await db.execute("DELETE FROM director_fragments")
@@ -2489,5 +2231,3 @@ async def reset_to_defaults() -> None:
             )
 
         await db.commit()
-    finally:
-        await db.close()
