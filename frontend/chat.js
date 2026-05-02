@@ -1502,12 +1502,28 @@ export async function superRegenerate(msgId) {
 export function toggleMagicInput(msgId) {
   S.magicInputMsgId = S.magicInputMsgId === msgId ? null : msgId;
   renderMessages();
-  if (S.magicInputMsgId === msgId) {
-    requestAnimationFrame(() => {
-      const el = document.getElementById(`magic-input-${msgId}`);
-      if (el) el.focus();
-    });
-  }
+  if (S.magicInputMsgId !== msgId) return;
+
+  requestAnimationFrame(() => {
+    const el = document.getElementById(`magic-input-${msgId}`);
+    if (el) el.focus();
+  });
+
+  const onMouseDown = (e) => {
+    const el = document.getElementById(`magic-input-${msgId}`);
+    if (el?.contains(e.target)) return;
+    // If the magic button itself was clicked, its onclick will handle the toggle.
+    if (e.target.closest(`[onclick="toggleMagicInput(${msgId})"]`)) {
+      document.removeEventListener("mousedown", onMouseDown);
+      return;
+    }
+    document.removeEventListener("mousedown", onMouseDown);
+    if (S.magicInputMsgId === msgId) {
+      S.magicInputMsgId = null;
+      renderMessages();
+    }
+  };
+  document.addEventListener("mousedown", onMouseDown);
 }
 
 export function handleMagicKey(event, msgId) {
