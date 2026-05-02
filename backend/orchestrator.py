@@ -10,7 +10,7 @@ import logging
 from typing import AsyncIterator, List, Optional
 
 from . import database as db
-from .llm_client import LLMClient
+from .llm_client import LLMClient, reasoning_cfg
 from .endpoint_profiles import profile_for
 from .tool_defs import TOOLS, POST_WRITER_TOOLS
 from .prompt_builder import (
@@ -825,3 +825,87 @@ async def handle_super_regenerate(
     except Exception as e:
         logger.exception("Super-regenerate error")
         yield {"event": "error", "data": str(e)}
+
+
+async def handle_magic_rewrite(
+    conversation_id: str,
+    assistant_msg_id: int,
+    direction: str,
+    client_ref: list | None = None,
+) -> AsyncIterator[dict]:
+    try:
+        ctx = await _load_pipeline_context(conversation_id)
+        if ctx is None:
+            yield {"event": "error", "data": "Conversation not found"}
+            return
+
+        if client_ref is not None:
+            client_ref.append(ctx["client"])
+
+        settings = ctx["settings"]
+        target = await db.get_message_by_id(assistant_msg_id)
+        if (
+            not target
+            or target["conversation_id"] != conversation_id
+            or target["role"] != "assistant"
+        ):
+            yield {"event": "error", "data": "Invalid target message"}
+            return
+
+        user_msg_id = target["parent_id"]
+        user_msg = await db.get_message_by_id(user_msg_id) if user_msg_id else None
+        if not user_msg:
+            yield {"event": "error", "data": "Parent user message not found"}
+            return
+
+        history = (
+            await db._get_path_to_leaf(conversation_id, user_msg.get("parent_id"))
+            if user_msg.get("parent_id")
+            else []
+        )
+
+        extended_history = history + [
+            {"role": "user", "content": user_msg["content"]},
+            {"role": "assistant", "content": target["content"]},
+        ]
+        prefix = _build_prefix_from_ctx(ctx, extended_history)
+
+        direction_msg = f"[OOC: Rewrite the above response. Direction: {direction}]"
+        msgs = prefix + [{"role": "user", "content": direction_msg}]
+
+        params = {
+            k: v
+            for k in [
+                "temperature",
+                "max_tokens",
+                "top_p",
+                "min_p",
+                "top_k",
+                "repetition_penalty",
+            ]
+            if (v := settings.get(k)) is not None
+        }
+
+        writer_reasoning_on = bool(
+            (settings.get("reasoning_enabled_passes") or {}).get("writer", False)
+        )
+        extra = reasoning_cfg(writer_reasoning_on)
+
+        accumulated = ""
+        async for item in ctx["client"].complete(
+            messages=msgs, model=settings["model_name"], **extra, **params
+        ):
+            if item["type"] == "done":
+                break
+            if item["type"] == "content":
+                accumulated += item["delta"]
+                yield {"event": "token", "data": item["delta"]}
+
+        if accumulated.strip():
+            await db.update_message_content(assistant_msg_id, accumulated)
+
+    except Exception as e:
+        logger.exception("Magic rewrite error")
+        yield {"event": "error", "data": str(e)}
+
+    yield {"event": "done"}

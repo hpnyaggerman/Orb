@@ -25,6 +25,7 @@ export const S = {
   lengthGuardMaxParagraphs: 4,
   lengthGuardEnforce: false,
   editingMsgId: null,
+  magicInputMsgId: null,
   abortController: null,
   streamingContent: null,
   pendingUserMsg: null,

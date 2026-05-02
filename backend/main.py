@@ -85,7 +85,12 @@ from .database import (
     get_active_lorebook_entries,
 )
 import asyncio
-from .orchestrator import handle_turn, handle_regenerate, handle_super_regenerate
+from .orchestrator import (
+    handle_turn,
+    handle_regenerate,
+    handle_super_regenerate,
+    handle_magic_rewrite,
+)
 from .llm_client import LLMClient
 from .endpoint_profiles import profile_for
 from . import tavern_cards
@@ -397,6 +402,10 @@ class SwitchSwipe(BaseModel):
 
 class RegenerateMsg(BaseModel):
     enable_agent: bool = True
+
+
+class MagicRewriteMsg(BaseModel):
+    direction: str
 
 
 class PhraseGroupCreate(BaseModel):
@@ -1435,6 +1444,27 @@ async def api_super_regenerate_msg(
     return _CleanupStreamingResponse(
         _sse_stream(
             handle_super_regenerate(cid, msg_id, client_ref=client_ref),
+            request,
+            client_ref=client_ref,
+            cid=cid,
+        ),
+        media_type="text/event-stream",
+    )
+
+
+@app.post("/api/conversations/{cid}/messages/{msg_id}/magic_rewrite")
+async def api_magic_rewrite_msg(
+    cid: str, msg_id: int, request: Request, data: MagicRewriteMsg
+):
+    """Magic rewrite: calls the LLM directly with a user-supplied direction, no agent passes."""
+    conv = await get_conversation(cid)
+    if not conv:
+        raise HTTPException(404, "Conversation not found")
+
+    client_ref: list = []
+    return _CleanupStreamingResponse(
+        _sse_stream(
+            handle_magic_rewrite(cid, msg_id, data.direction, client_ref=client_ref),
             request,
             client_ref=client_ref,
             cid=cid,

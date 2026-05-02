@@ -43,6 +43,57 @@ const ICON_REGEN = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" s
 const ICON_DEL = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>`;
 const ICON_CLEAR = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/></svg>`;
 const ICON_SUPER_REGEN = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>`;
+const ICON_MAGIC = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><path d="M15 4V2"/><path d="M15 16v-2"/><path d="M8 9h2"/><path d="M20 9h2"/><path d="M17.8 11.8 19 13"/><path d="M15 9h.01"/><path d="M17.8 6.2 19 5"/><path d="m3 21 9-9"/><path d="M12.2 6.2 11 5"/></svg>`;
+
+function buildMsgToolbar(m) {
+  const isAssistant = m.role === "assistant";
+  const isGreeting = isAssistant && !m.parent_id;
+  const childAssistant = !isAssistant ? S.messages.find((c) => c.parent_id === m.id && c.role === "assistant") : null;
+  const regenTargetId = isAssistant ? m.id : childAssistant?.id;
+  const canRegen = !isGreeting && (isAssistant || !!childAssistant || !!m.id);
+
+  const editBtn = S.hasMultipleTabs
+    ? `<button disabled title="Close other tabs to edit">${ICON_EDIT}</button>`
+    : `<button onclick="${m.id ? `startEdit(${m.id})` : `startEditPending()`}" title="Edit">${ICON_EDIT}</button>`;
+
+  const regenBtn = isGreeting
+    ? ""
+    : S.hasMultipleTabs || !canRegen
+      ? `<button disabled title="${S.hasMultipleTabs ? "Close other tabs to regenerate" : ""}">${ICON_REGEN}</button>`
+      : `<button onclick="${regenTargetId ? `regenerate(${regenTargetId})` : `continueFromUser()`}" title="Regenerate">${ICON_REGEN}</button>`;
+
+  const superRegenBtn =
+    isAssistant && m.id && !isGreeting
+      ? S.hasMultipleTabs
+        ? `<button disabled title="Close other tabs to regenerate">${ICON_SUPER_REGEN}</button>`
+        : `<button onclick="superRegenerate(${m.id})" title="Super Regenerate">${ICON_SUPER_REGEN}</button>`
+      : "";
+
+  const magicBtn =
+    isAssistant && m.id && !isGreeting
+      ? S.hasMultipleTabs
+        ? `<button disabled title="Close other tabs to use Magic">${ICON_MAGIC}</button>`
+        : `<button onclick="toggleMagicInput(${m.id})" title="Magic Rewrite">${ICON_MAGIC}</button>`
+      : "";
+
+  const magicInput =
+    isAssistant && m.id && !isGreeting && S.magicInputMsgId === m.id
+      ? `<input class="magic-input" type="text" placeholder="Direction…" id="magic-input-${m.id}" onkeydown="handleMagicKey(event,${m.id})" autofocus>`
+      : "";
+
+  const delBtn = !m.id
+    ? `<button disabled class="msg-btn-del">${ICON_DEL}</button>`
+    : isGreeting
+      ? ""
+      : `<button onclick="deleteMessage(${m.id})" title="Delete message, siblings, and all children" class="msg-btn-del">${ICON_DEL}</button>`;
+
+  const diffBtn =
+    S.pendingRefineDiff?.msgId && m.id === S.pendingRefineDiff.msgId && S.showEditorDiff
+      ? `<button onclick="clearRefineDiff()" title="Clear diff highlights" class="btn-clear-diff">${ICON_CLEAR}</button>`
+      : "";
+
+  return `${editBtn}${regenBtn}${superRegenBtn}${magicBtn}${magicInput}${delBtn}${diffBtn}`;
+}
 
 // ── Attachments rendering
 function formatBytes(bytes) {
@@ -147,20 +198,7 @@ function finalizeStreamingDiv(lastMsg) {
 
   const tb = div.querySelector(".msg-toolbar");
   if (tb) {
-    const diffBtn =
-      S.pendingRefineDiff?.msgId && lastMsg.id === S.pendingRefineDiff.msgId && S.showEditorDiff
-        ? `<button onclick="clearRefineDiff()" title="Clear diff highlights" class="btn-clear-diff">✕ Diff</button>`
-        : "";
-    const editBtn = S.hasMultipleTabs
-      ? `<button disabled title="Close other tabs to edit">${ICON_EDIT}</button>`
-      : `<button onclick="startEdit(${lastMsg.id})" title="Edit">${ICON_EDIT}</button>`;
-    const regenBtn = S.hasMultipleTabs
-      ? `<button disabled title="Close other tabs to regenerate">${ICON_REGEN}</button>`
-      : `<button onclick="regenerate(${lastMsg.id})" title="Regenerate">${ICON_REGEN}</button>`;
-    const superRegenBtn = S.hasMultipleTabs
-      ? `<button disabled title="Close other tabs to regenerate">${ICON_SUPER_REGEN}</button>`
-      : `<button onclick="superRegenerate(${lastMsg.id})" title="Super Regenerate">${ICON_SUPER_REGEN}</button>`;
-    tb.innerHTML = `${editBtn}${regenBtn}${superRegenBtn}<button onclick="deleteMessage(${lastMsg.id})" title="Delete message, siblings, and all children" class="msg-btn-del">${ICON_DEL}</button>${diffBtn}`;
+    tb.innerHTML = buildMsgToolbar(lastMsg);
   }
 
   const bc = lastMsg.branch_count || 1;
@@ -306,6 +344,7 @@ export async function selectConversation(id) {
   S.messages = normalizeMessages(await api.get(convUrl(id, "messages")));
   S.directorState = await api.get(convUrl(id, "director"));
   S.editingMsgId = null;
+  S.magicInputMsgId = null;
   renderMessages();
   renderInspector();
   scrollToBottom();
@@ -696,36 +735,7 @@ export function renderMessages() {
           <button onclick="event.stopPropagation();switchBranch(${m.next_branch_id})" ${!m.next_branch_id ? "disabled" : ""}>▶</button>
         </span>`
             : "";
-        const editBtn = S.hasMultipleTabs
-          ? `<button disabled title="Close other tabs to edit">${ICON_EDIT}</button>`
-          : `<button onclick="${m.id ? `startEdit(${m.id})` : `startEditPending()`}" title="Edit">${ICON_EDIT}</button>`;
-        const childAssistant =
-          m.role === "user" ? S.messages.find((child) => child.parent_id === m.id && child.role === "assistant") : null;
-        const regenTargetId = m.role === "assistant" ? m.id : childAssistant?.id;
-        const canRegen = m.role === "assistant" || childAssistant || (m.role === "user" && m.id);
-        const regenBtn =
-          S.hasMultipleTabs || !canRegen
-            ? `<button disabled title="${S.hasMultipleTabs ? "Close other tabs to regenerate" : ""}">${ICON_REGEN}</button>`
-            : `<button onclick="${regenTargetId ? `regenerate(${regenTargetId})` : `continueFromUser()`}" title="Regenerate">${ICON_REGEN}</button>`;
-        const superRegenBtn =
-          m.role === "assistant" && m.id
-            ? S.hasMultipleTabs
-              ? `<button disabled title="Close other tabs to regenerate">${ICON_SUPER_REGEN}</button>`
-              : `<button onclick="superRegenerate(${m.id})" title="Super Regenerate">${ICON_SUPER_REGEN}</button>`
-            : "";
-        const delBtn = m.id
-          ? `<button onclick="deleteMessage(${m.id})" title="Delete message, siblings, and all children" class="msg-btn-del">${ICON_DEL}</button>`
-          : `<button disabled class="msg-btn-del">${ICON_DEL}</button>`;
-        const diffBtn =
-          S.pendingRefineDiff?.msgId && m.id === S.pendingRefineDiff.msgId && S.showEditorDiff
-            ? `<button onclick="clearRefineDiff()" title="Clear diff highlights" class="btn-clear-diff">${ICON_CLEAR}</button>`
-            : "";
-        const toolbar = isEditing
-          ? ""
-          : `
-        <div class="msg-toolbar">
-          ${editBtn}${regenBtn}${superRegenBtn}${delBtn}${diffBtn}
-        </div>`;
+        const toolbar = isEditing ? "" : `<div class="msg-toolbar">${buildMsgToolbar(m)}</div>`;
         const taId = m.id ? `edit-textarea-${m.id}` : `edit-textarea-pending`;
         const body = isEditing
           ? `
@@ -994,14 +1004,7 @@ function patchPendingUserMessage(pendingMsg) {
   if (!div) return;
   div.setAttribute("data-msg-id", freshMsg.id);
   const tb = div.querySelector(".msg-toolbar");
-  if (tb) {
-    const childAssistant = S.messages.find((m) => m.parent_id === freshMsg.id && m.role === "assistant");
-    const regenTargetId = childAssistant?.id;
-    const regenBtn = S.hasMultipleTabs
-      ? `<button disabled title="Close other tabs to regenerate">${ICON_REGEN}</button>`
-      : `<button onclick="${regenTargetId ? `regenerate(${regenTargetId})` : `continueFromUser()`}" title="Regenerate">${ICON_REGEN}</button>`;
-    tb.innerHTML = `<button onclick="startEdit(${freshMsg.id})" title="Edit">${ICON_EDIT}</button>${regenBtn}<button onclick="deleteMessage(${freshMsg.id})" title="Delete message, siblings, and all children" class="msg-btn-del">${ICON_DEL}</button>`;
-  }
+  if (tb) tb.innerHTML = buildMsgToolbar(freshMsg);
 }
 
 async function afterStream() {
@@ -1291,9 +1294,7 @@ function handleSSEEvent(event, data, container, msgDiv, onToken, onRewrite) {
           if (div) {
             div.setAttribute("data-msg-id", realId);
             const tb = div.querySelector(".msg-toolbar");
-            if (tb) {
-              tb.innerHTML = `<button onclick="startEdit(${realId})" title="Edit">${ICON_EDIT}</button><button onclick="continueFromUser()" title="Regenerate">${ICON_REGEN}</button><button onclick="deleteMessage(${realId})" title="Delete message, siblings, and all children" class="msg-btn-del">${ICON_DEL}</button>`;
-            }
+            if (tb) tb.innerHTML = buildMsgToolbar({ id: realId, role: "user" });
           }
         }
         // If an edit was already queued before the ID arrived, apply it now
@@ -1484,6 +1485,69 @@ export async function superRegenerate(msgId) {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(agentPayload()),
+      signal: S.abortController.signal,
+    });
+    await processSSEStream(resp, ct, msgDiv, S.abortController.signal);
+  } catch (e) {
+    if (e.name === "AbortError") {
+      S.wasAborted = true;
+    } else {
+      toast("Error: " + e.message, true);
+    }
+  }
+  await afterStream();
+}
+
+// ── Magic Rewrite
+export function toggleMagicInput(msgId) {
+  S.magicInputMsgId = S.magicInputMsgId === msgId ? null : msgId;
+  renderMessages();
+  if (S.magicInputMsgId === msgId) {
+    requestAnimationFrame(() => {
+      const el = document.getElementById(`magic-input-${msgId}`);
+      if (el) el.focus();
+    });
+  }
+}
+
+export function handleMagicKey(event, msgId) {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    submitMagicRewrite(msgId);
+  } else if (event.key === "Escape") {
+    S.magicInputMsgId = null;
+    renderMessages();
+  }
+}
+
+export async function submitMagicRewrite(msgId) {
+  const input = document.getElementById(`magic-input-${msgId}`);
+  if (!input) return;
+  const direction = input.value.trim();
+  if (!direction) return;
+  if (!S.activeConvId || !canStartGeneration()) return;
+
+  S.magicInputMsgId = null;
+  setStreaming(true);
+  setGenerationPhase("pending");
+  $("send-btn").disabled = true;
+
+  const idx = S.messages.findIndex((m) => m.id === msgId);
+  S.streamCutoffIndex = idx >= 0 ? idx : S.messages.length;
+
+  renderMessages();
+
+  const ct = $("chat-messages");
+  const msgDiv = createStreamingDiv();
+  if (!S.hideUntilBaked) ct.appendChild(msgDiv);
+  S.autoscrollEnabled = true;
+  scrollToBottom();
+  S.abortController = new AbortController();
+  try {
+    const resp = await fetch("/api" + convUrl(S.activeConvId, "messages", msgId, "magic_rewrite"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ direction }),
       signal: S.abortController.signal,
     });
     await processSSEStream(resp, ct, msgDiv, S.abortController.signal);

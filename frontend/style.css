@@ -714,6 +714,20 @@ body {
 
 .message.user .msg-toolbar { justify-content: flex-end; }
 
+.magic-input {
+  flex: 1;
+  min-width: 0;
+  max-width: 240px;
+  padding: 3px 8px;
+  font-size: 12px;
+  background: var(--bg-input, var(--bg-secondary));
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  color: var(--text-primary);
+  outline: none;
+}
+.magic-input:focus { border-color: var(--accent); }
+
 /* Swipe navigation */
 .swipe-nav {
   display: inline-flex;
