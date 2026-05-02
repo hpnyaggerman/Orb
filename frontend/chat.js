@@ -2,6 +2,7 @@ import { S } from "./state.js";
 import {
   $,
   esc,
+  formatBytes,
   formatProse,
   formatProseWithDiff,
   sentenceDiff,
@@ -96,14 +97,6 @@ function buildMsgToolbar(m) {
 }
 
 // ── Attachments rendering
-function formatBytes(bytes) {
-  if (bytes === 0) return "0 B";
-  const k = 1024;
-  const sizes = ["B", "KB", "MB", "GB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + " " + sizes[i];
-}
-
 function renderAttachments(attachments) {
   if (!attachments || attachments.length === 0) return "";
   const items = attachments
@@ -350,9 +343,7 @@ export async function selectConversation(id) {
   scrollToBottom();
 }
 
-async function deleteConversation(id) {
-  const conv = S.conversations.find((c) => c.id === id);
-  const msgCount = conv?.message_count ?? (S.activeConvId === id ? S.messages.length : null);
+function confirmDeleteConversation(id, msgCount, afterDelete) {
   const countNote =
     msgCount != null
       ? `<p style="color:var(--text-muted);font-size:0.88em;margin-top:8px">${msgCount} message${msgCount !== 1 ? "s" : ""} in this conversation</p>`
@@ -374,7 +365,7 @@ async function deleteConversation(id) {
           $("send-btn").disabled = true;
           renderMessages();
         }
-        await loadConversations();
+        await afterDelete();
       } catch (e) {
         toast(e.message, true);
       }
@@ -382,36 +373,18 @@ async function deleteConversation(id) {
   );
 }
 
+async function deleteConversation(id) {
+  const conv = S.conversations.find((c) => c.id === id);
+  confirmDeleteConversation(
+    id,
+    conv?.message_count ?? (S.activeConvId === id ? S.messages.length : null),
+    loadConversations,
+  );
+}
+
 export async function deleteConversationFromModal(id) {
   const conv = S.conversations.find((c) => c.id === id);
-  const msgCount = conv?.message_count ?? null;
-  const countNote =
-    msgCount != null
-      ? `<p style="color:var(--text-muted);font-size:0.88em;margin-top:8px">${msgCount} message${msgCount !== 1 ? "s" : ""} in this conversation</p>`
-      : "";
-  showConfirmModal(
-    {
-      title: "Delete Conversation",
-      message: "Are you sure you want to delete this conversation?",
-      confirmText: "Delete",
-      extraHtml: countNote,
-    },
-    async () => {
-      try {
-        await api.del("/conversations/" + id);
-        if (S.activeConvId === id) {
-          S.activeConvId = null;
-          S.messages = [];
-          $("chat-input").disabled = true;
-          $("send-btn").disabled = true;
-          renderMessages();
-        }
-        await showConvHistoryModal();
-      } catch (e) {
-        toast(e.message, true);
-      }
-    },
-  );
+  confirmDeleteConversation(id, conv?.message_count ?? null, showConvHistoryModal);
 }
 
 export async function showConvHistoryModal() {
@@ -793,26 +766,28 @@ export function startEdit(msgId) {
   } else {
     scrollToMessage(msgId);
   }
-  const ta = $("edit-textarea-" + msgId);
-  if (ta) {
-    ta.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        cancelEdit();
-      }
-    });
-    ta.focus();
-    ta.selectionStart = ta.selectionEnd = ta.value.length;
-    ta.style.height = "auto";
-    const lineH = parseFloat(getComputedStyle(ta).lineHeight) || 20;
-    ta.style.height = Math.max(lineH * 3, ta.scrollHeight) + "px";
-  }
+  focusEditTextarea($("edit-textarea-" + msgId), cancelEdit);
 }
 
 export function cancelEdit() {
   S.editingMsgId = null;
   S.editingPendingUserMsg = false;
   renderMessages();
+}
+
+function focusEditTextarea(ta, onEscape) {
+  if (!ta) return;
+  ta.addEventListener("keydown", (e) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      onEscape();
+    }
+  });
+  ta.focus();
+  ta.selectionStart = ta.selectionEnd = ta.value.length;
+  ta.style.height = "auto";
+  const lineH = parseFloat(getComputedStyle(ta).lineHeight) || 20;
+  ta.style.height = Math.max(lineH * 3, ta.scrollHeight) + "px";
 }
 
 export async function deleteMessage(msgId) {
@@ -900,20 +875,7 @@ export function startEditPending() {
   S.editingPendingUserMsg = true;
   S.editingMsgId = null;
   renderMessages();
-  const ta = $("edit-textarea-pending");
-  if (ta) {
-    ta.addEventListener("keydown", (e) => {
-      if (e.key === "Escape") {
-        e.preventDefault();
-        cancelEditPending();
-      }
-    });
-    ta.focus();
-    ta.selectionStart = ta.selectionEnd = ta.value.length;
-    ta.style.height = "auto";
-    const lineH = parseFloat(getComputedStyle(ta).lineHeight) || 20;
-    ta.style.height = Math.max(lineH * 3, ta.scrollHeight) + "px";
-  }
+  focusEditTextarea($("edit-textarea-pending"), cancelEditPending);
 }
 
 export async function saveEditPending() {
@@ -1325,16 +1287,17 @@ function agentPayload() {
   return { enable_agent: S.agentEnabled };
 }
 
-export async function continueFromUser() {
-  if (!S.activeConvId || !canStartGeneration()) return;
-  const lastMsg = S.messages[S.messages.length - 1];
-  if (lastMsg?.role !== "user") {
-    toast("Last message is not a user message", true);
-    return;
-  }
+async function runStreamRequest(url, body, cutoffMsgId = null) {
   setStreaming(true);
   setGenerationPhase("pending");
   $("send-btn").disabled = true;
+
+  if (cutoffMsgId != null) {
+    const idx = S.messages.findIndex((m) => m.id === cutoffMsgId);
+    S.streamCutoffIndex = idx >= 0 ? idx : S.messages.length;
+    S.autoscrollEnabled = true;
+  }
+
   renderMessages();
   const ct = $("chat-messages");
   const msgDiv = createStreamingDiv();
@@ -1342,18 +1305,28 @@ export async function continueFromUser() {
   scrollToBottom();
   S.abortController = new AbortController();
   try {
-    const resp = await fetch("/api" + convUrl(S.activeConvId, "continue"), {
+    const resp = await fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(agentPayload()),
+      body: JSON.stringify(body),
       signal: S.abortController.signal,
     });
     await processSSEStream(resp, ct, msgDiv, S.abortController.signal);
   } catch (e) {
     if (e.name === "AbortError") S.wasAborted = true;
-    else toast("Connection error: " + e.message, true);
+    else toast("Error: " + e.message, true);
   }
   await afterStream();
+}
+
+export async function continueFromUser() {
+  if (!S.activeConvId || !canStartGeneration()) return;
+  const lastMsg = S.messages[S.messages.length - 1];
+  if (lastMsg?.role !== "user") {
+    toast("Last message is not a user message", true);
+    return;
+  }
+  await runStreamRequest("/api" + convUrl(S.activeConvId, "continue"), agentPayload());
 }
 
 // ── Send Message
@@ -1428,74 +1401,17 @@ export async function sendMessage() {
 // ── Regenerate
 export async function regenerate(msgId) {
   if (!S.activeConvId || !canStartGeneration()) return;
-  setStreaming(true);
-  setGenerationPhase("pending");
-  $("send-btn").disabled = true;
-
-  const idx = S.messages.findIndex((m) => m.id === msgId);
-  S.streamCutoffIndex = idx >= 0 ? idx : S.messages.length;
-
-  // Update UI to show only messages up to the regenerated message
-  renderMessages();
-
-  const ct = $("chat-messages");
-  const msgDiv = createStreamingDiv();
-  if (!S.hideUntilBaked) ct.appendChild(msgDiv);
-  S.autoscrollEnabled = true;
-  scrollToBottom();
-  S.abortController = new AbortController();
-  try {
-    const resp = await fetch("/api" + convUrl(S.activeConvId, "messages", msgId, "regenerate"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(agentPayload()),
-      signal: S.abortController.signal,
-    });
-    await processSSEStream(resp, ct, msgDiv, S.abortController.signal);
-  } catch (e) {
-    if (e.name === "AbortError") {
-      S.wasAborted = true;
-    } else {
-      toast("Error: " + e.message, true);
-    }
-  }
-  await afterStream();
+  await runStreamRequest("/api" + convUrl(S.activeConvId, "messages", msgId, "regenerate"), agentPayload(), msgId);
 }
 
 // ── Super Regenerate
 export async function superRegenerate(msgId) {
   if (!S.activeConvId || !canStartGeneration()) return;
-  setStreaming(true);
-  setGenerationPhase("pending");
-  $("send-btn").disabled = true;
-
-  const idx = S.messages.findIndex((m) => m.id === msgId);
-  S.streamCutoffIndex = idx >= 0 ? idx : S.messages.length;
-
-  renderMessages();
-
-  const ct = $("chat-messages");
-  const msgDiv = createStreamingDiv();
-  if (!S.hideUntilBaked) ct.appendChild(msgDiv);
-  S.autoscrollEnabled = true;
-  scrollToBottom();
-  S.abortController = new AbortController();
-  try {
-    const resp = await fetch("/api" + convUrl(S.activeConvId, "messages", msgId, "super_regenerate"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(agentPayload()),
-      signal: S.abortController.signal,
-    });
-    await processSSEStream(resp, ct, msgDiv, S.abortController.signal);
-  } catch (e) {
-    if (e.name === "AbortError") {
-      S.wasAborted = true;
-    } else {
-      toast("Error: " + e.message, true);
-    }
-  }
-  await afterStream();
+  await runStreamRequest(
+    "/api" + convUrl(S.activeConvId, "messages", msgId, "super_regenerate"),
+    agentPayload(),
+    msgId,
+  );
 }
 
 // ── Magic Rewrite
@@ -1542,39 +1458,8 @@ export async function submitMagicRewrite(msgId) {
   const direction = input.value.trim();
   if (!direction) return;
   if (!S.activeConvId || !canStartGeneration()) return;
-
   S.magicInputMsgId = null;
-  setStreaming(true);
-  setGenerationPhase("pending");
-  $("send-btn").disabled = true;
-
-  const idx = S.messages.findIndex((m) => m.id === msgId);
-  S.streamCutoffIndex = idx >= 0 ? idx : S.messages.length;
-
-  renderMessages();
-
-  const ct = $("chat-messages");
-  const msgDiv = createStreamingDiv();
-  if (!S.hideUntilBaked) ct.appendChild(msgDiv);
-  S.autoscrollEnabled = true;
-  scrollToBottom();
-  S.abortController = new AbortController();
-  try {
-    const resp = await fetch("/api" + convUrl(S.activeConvId, "messages", msgId, "magic_rewrite"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ direction }),
-      signal: S.abortController.signal,
-    });
-    await processSSEStream(resp, ct, msgDiv, S.abortController.signal);
-  } catch (e) {
-    if (e.name === "AbortError") {
-      S.wasAborted = true;
-    } else {
-      toast("Error: " + e.message, true);
-    }
-  }
-  await afterStream();
+  await runStreamRequest("/api" + convUrl(S.activeConvId, "messages", msgId, "magic_rewrite"), { direction }, msgId);
 }
 
 // ── Inspector — Reasoning stepper rail

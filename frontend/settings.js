@@ -769,6 +769,14 @@ const TOOL_DEFS = [
   },
 ];
 
+async function persistSettings(payload) {
+  try {
+    S.settings = await api.put("/settings", payload);
+  } catch (e) {
+    toast("Failed to save setting", true);
+  }
+}
+
 export function toggleToolsPanel() {
   const panel = $("tools-panel");
   const inspector = $("inspector");
@@ -796,65 +804,41 @@ export function toggleToolsPanel() {
 export async function setAgentEnabled(on) {
   S.agentEnabled = on;
   $("tools-panel-btn").style.opacity = on ? "1" : "0.5";
-  try {
-    S.settings = await api.put("/settings", { enable_agent: on });
-  } catch (e) {
-    toast("Failed to save agent state", true);
-  }
+  await persistSettings({ enable_agent: on });
 }
 
 export async function toggleToolEnabled(id, on) {
   S.enabledTools[id] = on;
   renderToolsPanel();
-  try {
-    S.settings = await api.put("/settings", { enabled_tools: S.enabledTools });
-  } catch (e) {
-    toast("Failed to save tool state", true);
-  }
+  await persistSettings({ enabled_tools: S.enabledTools });
 }
 
 export async function toggleLengthGuard(on) {
   S.lengthGuardEnabled = on;
   S.enabledTools.length_guard = on;
   renderToolsPanel();
-  try {
-    S.settings = await api.put("/settings", { enabled_tools: S.enabledTools });
-  } catch (e) {
-    toast("Failed to save length guard state", true);
-  }
+  await persistSettings({ enabled_tools: S.enabledTools });
 }
 
 export async function toggleLengthGuardEnforce(on) {
   S.lengthGuardEnforce = on;
   S.enabledTools.length_guard_enforce = on;
   renderToolsPanel();
-  try {
-    S.settings = await api.put("/settings", { enabled_tools: S.enabledTools });
-  } catch (e) {
-    toast("Failed to save length guard enforce state", true);
-  }
+  await persistSettings({ enabled_tools: S.enabledTools });
 }
 
 export async function toggleShowEditorDiff(on) {
   S.showEditorDiff = on;
   renderMessages();
   renderToolsPanel();
-  try {
-    S.settings = await api.put("/settings", { show_editor_diff: on });
-  } catch (e) {
-    toast("Failed to save editor diff setting", true);
-  }
+  await persistSettings({ show_editor_diff: on });
 }
 
 export async function toggleHideUntilBaked(on) {
   S.hideUntilBaked = on;
   renderMessages();
   renderSettings();
-  try {
-    S.settings = await api.put("/settings", { hide_streaming_until_baked: on });
-  } catch (e) {
-    toast("Failed to save hide-until-baked setting", true);
-  }
+  await persistSettings({ hide_streaming_until_baked: on });
 }
 
 export async function saveLengthGuardConfig() {
