@@ -516,7 +516,7 @@ body {
 
 #chat-header .chat-title {
   font-family: var(--font-prose);
-  font-size: 16px;
+  font-size: var(--font-prose-size);
   font-weight: 400;
   color: var(--text-secondary);
   white-space: nowrap;
@@ -555,7 +555,7 @@ body {
 
 .chat-title-input {
   font-family: var(--font-prose);
-  font-size: 16px;
+  font-size: var(--font-prose-size);
   font-weight: 400;
   color: var(--text-secondary);
   background: var(--bg-primary);
@@ -617,7 +617,7 @@ body {
 
 .message .msg-body {
   font-family: var(--font-prose);
-  font-size: 16px;
+  font-size: var(--font-prose-size);
   line-height: 1.65;
   color: var(--text-primary);
   padding: 12px 16px;
@@ -771,7 +771,7 @@ body {
 /* Inline edit mode */
 .msg-edit-area textarea {
   font-family: var(--font-prose);
-  font-size: 16px;
+  font-size: var(--font-prose-size);
   line-height: 1.65;
   min-height: 80px;
   background: var(--bg-surface);
@@ -1125,7 +1125,7 @@ body {
   height: 100%;
   color: var(--text-muted);
   font-family: var(--font-prose);
-  font-size: 16px;
+  font-size: var(--font-prose-size);
   gap: 8px;
 }
 
@@ -2965,7 +2965,7 @@ mark.cb-hl {
   border-radius: var(--radius);
   padding: 10px 12px;
   color: var(--text-primary);
-  font-size: 16px;
+  font-size: var(--font-prose-size);
   font-family: var(--font-prose);
   line-height: 1.65;
   resize: none;

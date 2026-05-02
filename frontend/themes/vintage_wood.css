@@ -6,5 +6,6 @@
   --red:#9e4642;
   --font-prose:'Lora',Georgia,'Palatino Linotype',Palatino,serif;--font-ui:Optima,Candara,'Segoe UI',system-ui,sans-serif;
   --font-mono:'Courier New',Courier,monospace;--radius:4px;
+  --font-prose-size:16px;
   --sidebar-width:300px;--inspector-width:340px;--tools-width:260px;
 }

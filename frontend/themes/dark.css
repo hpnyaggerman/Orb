@@ -6,5 +6,6 @@
   --red:#c45d5d;
   --font-prose:'Lora',Georgia,'Palatino Linotype',Palatino,serif;--font-ui:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
   --font-mono:'Menlo','Consolas','Courier New',monospace;--radius:6px;
+  --font-prose-size:16px;
   --sidebar-width:300px;--inspector-width:340px;--tools-width:260px;
 }

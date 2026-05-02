@@ -6,5 +6,6 @@
   --red:#ff4466;
   --font-prose:'Courier New',Courier,Consolas,monospace;--font-ui:'Courier New',Courier,Consolas,monospace;
   --font-mono:'Courier New',Courier,Consolas,monospace;--radius:2px;
+  --font-prose-size:15px;
   --sidebar-width:300px;--inspector-width:340px;--tools-width:260px;
 }
