@@ -40,6 +40,7 @@ async def _run_pipeline(
     attachments: Optional[List[dict]] = None,
     phrase_bank: list[list[str]] | None = None,
     lorebook_block: str = "",
+    editor_audit_msgs: list[str] | None = None,
 ) -> AsyncIterator[dict]:
     """Three-pass pipeline: director → writer → editor.
 
@@ -231,6 +232,7 @@ async def _run_pipeline(
                 enabled_tools,
                 kv_tracker=kv_tracker,
                 reasoning_on=editor_reasoning_on,
+                audit_context_msgs=editor_audit_msgs,
             ):
                 if event["type"] == "reasoning":
                     yield {
@@ -804,6 +806,14 @@ async def handle_super_regenerate(
             _char_name,
         )
 
+        # Collect audit context from history only — exclude target["content"] so
+        # the editor doesn't flag the new draft for repeating the message it replaced.
+        editor_audit_msgs = [
+            msg["content"]
+            for msg in reversed(history)
+            if msg.get("role") == "assistant"
+        ][:3]
+
         pipeline = _run_pipeline(
             ctx["client"],
             super_regen_settings,
@@ -815,6 +825,7 @@ async def handle_super_regenerate(
             attachments,
             ctx["phrase_bank"],
             lorebook_block=lorebook_block,
+            editor_audit_msgs=editor_audit_msgs,
         )
         # Save result as a sibling of the original: same parent_id and turn_index.
         async for event in _consume_pipeline(

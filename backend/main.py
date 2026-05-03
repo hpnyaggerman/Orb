@@ -648,8 +648,8 @@ async def api_create_lorebook_entry(
 
 @app.get("/api/worlds/{world_id}/entries/{entry_id}")
 async def api_get_lorebook_entry(
-    entry: dict = Depends(require_lorebook_entry),
-):  # noqa: B008
+    entry: dict = Depends(require_lorebook_entry),  # noqa: B008
+):
     return entry
 
 
@@ -668,8 +668,8 @@ async def api_update_lorebook_entry(
 
 @app.delete("/api/worlds/{world_id}/entries/{entry_id}")
 async def api_delete_lorebook_entry(
-    entry: dict = Depends(require_lorebook_entry),
-):  # noqa: B008
+    entry: dict = Depends(require_lorebook_entry),  # noqa: B008
+):
     if not await delete_lorebook_entry(entry["id"]):
         raise HTTPException(status_code=404, detail="Entry not found")
     return {"ok": True}

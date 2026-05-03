@@ -88,7 +88,7 @@ function _tokenizeSentences(text) {
 
     if (/[.!?]/.test(ch)) {
       let j = i + 1;
-      while (j < text.length && text[j] === ' ') j++;
+      while (j < text.length && text[j] === " ") j++;
       if (j < text.length && /[A-Z]/.test(text[j])) {
         const spaces = j - (i + 1);
         for (let k = 0; k < spaces; k++) {
@@ -100,7 +100,7 @@ function _tokenizeSentences(text) {
       }
     }
 
-    if (ch === '\n') {
+    if (ch === "\n") {
       tokens.push(current);
       current = "";
     }

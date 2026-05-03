@@ -39,6 +39,19 @@ function normalizeMessages(msgs) {
   return msgs;
 }
 
+// Safe replacement for S.messages from a server response.
+// During streaming, local-pending entries (id: null) are preserved because the
+// server doesn't know about them yet — replacing blindly drops them from the DOM.
+function setMessages(serverMsgs) {
+  const normalized = normalizeMessages(serverMsgs);
+  if (S.isStreaming) {
+    const pending = S.messages.filter((m) => !m.id);
+    S.messages = pending.length ? [...normalized, ...pending] : normalized;
+  } else {
+    S.messages = normalized;
+  }
+}
+
 const ICON_EDIT = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>`;
 const ICON_REGEN = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.5"/></svg>`;
 const ICON_DEL = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>`;
@@ -334,7 +347,7 @@ export async function selectConversation(id) {
     deactivateWorld(oldWorldId);
   }
 
-  S.messages = normalizeMessages(await api.get(convUrl(id, "messages")));
+  setMessages(await api.get(convUrl(id, "messages")));
   S.directorState = await api.get(convUrl(id, "director"));
   S.editingMsgId = null;
   S.magicInputMsgId = null;
@@ -800,7 +813,7 @@ export async function deleteMessage(msgId) {
     },
     async () => {
       try {
-        S.messages = normalizeMessages(await api.del(convUrl(S.activeConvId, "messages", msgId)));
+        setMessages(await api.del(convUrl(S.activeConvId, "messages", msgId)));
         S.lastDirectorData = null;
         // Re-fetch director state so moods are correct after deletion
         S.directorState = await api.get(convUrl(S.activeConvId, "director"));
@@ -827,7 +840,7 @@ export async function switchBranch(msgId) {
     const anchorOffset = anchorEl ? anchorEl.offsetTop - ct.scrollTop : null;
     const scrollTop = ct ? ct.scrollTop : 0;
 
-    S.messages = normalizeMessages(await api.post(convUrl(S.activeConvId, "messages", msgId, "switch-branch"), {}));
+    setMessages(await api.post(convUrl(S.activeConvId, "messages", msgId, "switch-branch"), {}));
     S.lastDirectorData = null;
     // Re-fetch director state so moods are correct for this branch
     S.directorState = await api.get(convUrl(S.activeConvId, "director"));
@@ -868,7 +881,7 @@ export async function saveEdit(msgId, role) {
       const idx = S.messages.findIndex((m) => m.id === msgId);
       if (idx >= 0) S.messages[idx].content = content;
     } else {
-      S.messages = normalizeMessages(await api.get(convUrl(S.activeConvId, "messages")));
+      setMessages(await api.get(convUrl(S.activeConvId, "messages")));
     }
     renderMessages();
     toast("Message edited");
@@ -1003,7 +1016,7 @@ async function afterStream() {
   }
 
   try {
-    S.messages = normalizeMessages(await api.get(convUrl(S.activeConvId, "messages")));
+    setMessages(await api.get(convUrl(S.activeConvId, "messages")));
     S.directorState = await api.get(convUrl(S.activeConvId, "director"));
     // Update the conversation's updated_at timestamp so refreshCharacters() can
     // correctly place the active character at the top of the recent list.

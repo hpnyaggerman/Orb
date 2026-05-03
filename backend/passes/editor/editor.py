@@ -276,6 +276,9 @@ async def editor_pass(
     enabled_tools: dict | None = None,
     kv_tracker=None,
     reasoning_on: bool = False,  # If true, use structured tool-use message format (role=tool) for iteration feedback; non-thinking models get a synthetic recap instead
+    audit_context_msgs: (
+        list[str] | None
+    ) = None,  # explicit previous-assistant list for repetition scanning; if None, derived from prefix
 ) -> AsyncIterator[dict]:
     """ReAct-style editor loop with optional audit and/or length guard.
 
@@ -286,14 +289,19 @@ async def editor_pass(
     t0 = time.monotonic()
     debug_parts: list[str] = []
 
-    # Collect previous assistant messages for cross-message context
+    # Collect previous assistant messages for cross-message context.
+    # audit_context_msgs lets callers override which messages are used, so that
+    # super-regenerate doesn't compare the new draft against the message it replaced.
     assistant_messages: list[str] = []
     if audit_enabled:
-        for msg in reversed(prefix):
-            if msg.get("role") == "assistant":
-                assistant_messages.append(msg.get("content", ""))
-                if len(assistant_messages) >= 3:
-                    break
+        if audit_context_msgs is not None:
+            assistant_messages = audit_context_msgs[:3]
+        else:
+            for msg in reversed(prefix):
+                if msg.get("role") == "assistant":
+                    assistant_messages.append(msg.get("content", ""))
+                    if len(assistant_messages) >= 3:
+                        break
 
     # ── Initial audit
     if audit_enabled:
