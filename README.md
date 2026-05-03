@@ -50,9 +50,10 @@ For optimal KV cache reuse, the following will remain consistent across passes:
 4. **Length Guard**: Actively or passively protect from length degradation as context grows
 
 ## Design Principles
-1. Only use agentic functionalities when absolutely needed
-2. Scanning should be algorithmic, avoid making LLMs eyeball for errors
-3. Keep agentic scope small, avoid giving the agent too much freedom of choice
+1. Prioritize small models - if a feature fails half of the time on Gemma-4-26B4A, it will be scrapped
+2. Only use agentic functionalities when absolutely needed
+3. Scanning should be algorithmic, avoid making LLMs eyeball for errors
+4. Keep agentic scopes small, avoid giving the agent too much freedom of choice
 
 ## Drawbacks
 
