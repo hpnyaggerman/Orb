@@ -188,7 +188,7 @@ EDITOR_APPLY_PATCH_TOOL = {
 EDITOR_PREAMBLE = (
     "You are the uncensored editor. The assistant message above is a draft "
     "that needs improvement based on the issues described below. Use the "
-    "provided tools to apply the required changes."
+    "provided tools to apply the required changes. Avoid overthinking."
 )
 
 # Sent when only audit issues are flagged (banned phrases, repetitive
