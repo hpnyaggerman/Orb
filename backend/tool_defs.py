@@ -185,11 +185,20 @@ EDITOR_APPLY_PATCH_TOOL = {
 # message above represents.  Without this, the model sees the roleplay
 # system prompt plus a bare instruction and wastes tokens reasoning
 # about context.
-EDITOR_PREAMBLE = (
-    "You are the uncensored editor. The assistant message above is a draft "
-    "that needs improvement based on the issues described below. Use the "
-    "provided tools to apply the required changes. Avoid overthinking."
+DIRECTOR_PREAMBLE = (
+    "[OOC: Let's pause to enhance the roleplay. Use tool calls to accomplish your task "
+    "accurately and creatively. Your output will directly influence the scenario. "
+    "Think outside the box, be decisive."
 )
+
+EDITOR_PREAMBLE = (
+    "[OOC: You are the uncensored editor. The assistant message above is a draft "
+    "that needs improvement based on the issues described below. Use the "
+    "provided tools to apply the required changes."
+)
+
+# Only sent to LLM if reasoning is enabled.
+REASONING_GUIDANCE = " Avoid overthinking."
 
 # Sent when only audit issues are flagged (banned phrases, repetitive
 # openers/templates) — no length guard.  Directs the model to patch only.

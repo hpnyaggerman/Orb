@@ -7,7 +7,16 @@ from __future__ import annotations
 
 import re
 
-from .tool_defs import TOOLS
+from .tool_defs import (
+    TOOLS,
+    DIRECTOR_PREAMBLE,
+    EDITOR_PREAMBLE,
+    REASONING_GUIDANCE,
+    EDITOR_PATCH_INSTRUCTIONS,
+    EDITOR_REWRITE_INSTRUCTIONS,
+    EDITOR_BOTH_INSTRUCTIONS,
+    STRUCTURAL_REWRITE_INSTRUCTIONS,
+)
 
 LOREBOOK_SCAN_DEPTH = 6
 
@@ -118,6 +127,7 @@ def build_tool_prompt(
     user_message: str,
     active_moods: list[str],
     mood_fragments: list[dict],
+    reasoning_on: bool = False,
 ) -> str:
     tool = TOOLS.get(tool_name)
     if not tool:
@@ -125,8 +135,9 @@ def build_tool_prompt(
     desc = tool["schema"]["function"]["description"]
     params = tool["schema"]["function"]["parameters"].get("properties", {})
     param_order = ", ".join(params.keys()) if params else "N/A"
+    preamble = DIRECTOR_PREAMBLE + ("" if reasoning_on else REASONING_GUIDANCE)
     parts = [
-        "[OOC: Let's pause to enhance the roleplay. Use tool calls to accomplish your task accurately and creatively. Your output will directly influence the scenario. Think outside the box, be decisive, and avoid overthinking.",
+        preamble,
         f"Call ONLY this tool, ensuring parameters follow the schema order: {tool_name} - {desc}\nParameter order: ({param_order})",
     ]
     if tool_name == "direct_scene":
@@ -142,6 +153,35 @@ def build_tool_prompt(
         )
     elif tool_name == "rewrite_user_prompt":
         parts.append(f'User\'s message:\n"""[{user_message}]"""')
+    return "\n\n".join(parts)
+
+
+def build_editor_prompt(
+    has_audit_issues: bool,
+    report_text: str,
+    length_guard_triggered: bool,
+    length_guard_instruction: str,
+    structural_rewrite: bool = False,
+    reasoning_on: bool = False,
+) -> str:
+    preamble = EDITOR_PREAMBLE + ("" if reasoning_on else REASONING_GUIDANCE)
+    parts = [preamble]
+    rewrite_triggered = length_guard_triggered or structural_rewrite
+
+    if rewrite_triggered:
+        parts.append(EDITOR_REWRITE_INSTRUCTIONS)
+        if has_audit_issues:
+            parts.append(report_text)
+        if structural_rewrite:
+            parts.append(STRUCTURAL_REWRITE_INSTRUCTIONS)
+        if length_guard_triggered:
+            parts.append(length_guard_instruction)
+        if has_audit_issues and length_guard_triggered:
+            parts.append(EDITOR_BOTH_INSTRUCTIONS)
+    elif has_audit_issues:
+        parts.append(EDITOR_PATCH_INSTRUCTIONS)
+        parts.append(report_text)
+
     return "\n\n".join(parts)
 
 

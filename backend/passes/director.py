@@ -130,7 +130,9 @@ async def _director_pass(
 
     t0 = time.monotonic()
     for name in tool_names:
-        tool_tail = build_tool_prompt(name, user_message, active_moods, mood_fragments)
+        tool_tail = build_tool_prompt(
+            name, user_message, active_moods, mood_fragments, reasoning_on=reasoning_on
+        )
         tail = (
             "___\n\n" + lorebook_block + "\n\n" if lorebook_block else ""
         ) + tool_tail
@@ -156,10 +158,8 @@ async def _director_pass(
             kv_tracker.record(f"director:{name}", msgs, tool_schemas)
         resp: dict = {}
         try:
-            reasoning_params = (
-                reasoning_cfg(False)
-                if not reasoning_on or name == "rewrite_user_prompt"
-                else reasoning_cfg(True)
+            reasoning_params = reasoning_cfg(
+                reasoning_on and name != "rewrite_user_prompt"
             )
             async for event in client.complete(
                 messages=msgs,

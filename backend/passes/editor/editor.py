@@ -19,15 +19,11 @@ from ...tool_defs import (
     TOOLS,
     EDITOR_APPLY_PATCH_TOOL,
     EDITOR_REWRITE_TOOL,
-    EDITOR_PREAMBLE,
-    EDITOR_PATCH_INSTRUCTIONS,
-    EDITOR_REWRITE_INSTRUCTIONS,
-    EDITOR_BOTH_INSTRUCTIONS,
-    STRUCTURAL_REWRITE_INSTRUCTIONS,
     LENGTH_GUARD_INSTRUCTIONS,
     MAX_EDITOR_ITERATIONS,
     enabled_schemas,
 )
+from ...prompt_builder import build_editor_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -388,12 +384,13 @@ async def editor_pass(
         return
 
     # ── Build message context
-    final_prompt = _build_editor_prompt(
+    final_prompt = build_editor_prompt(
         audit_enabled and not report.is_clean,
         report_text,
         length_guard_triggered,
         length_guard_instruction,
         structural_rewrite=_structural_rewrite_needed(report),
+        reasoning_on=reasoning_on,
     )
 
     logger.info(final_prompt)
@@ -424,9 +421,7 @@ async def editor_pass(
         if kv_tracker is not None and iteration == 0:
             kv_tracker.record("editor", msgs, editor_tools)
         try:
-            reasoning_params = (
-                reasoning_cfg(False) if not reasoning_on else reasoning_cfg(True)
-            )
+            reasoning_params = reasoning_cfg(reasoning_on)
             if not reasoning_params["reasoning"].get("enabled", True):
                 logger.info("Editor iteration %d: reasoning disabled", iteration + 1)
 
@@ -553,12 +548,13 @@ async def editor_pass(
                     msgs[-2] = {"role": "assistant", "content": current_draft}
                     msgs[-1] = {
                         "role": "user",
-                        "content": _build_editor_prompt(
+                        "content": build_editor_prompt(
                             audit_enabled and not report.is_clean,
                             report_text,
                             length_guard_triggered,
                             length_guard_instruction,
                             structural_rewrite=_structural_rewrite_needed(report),
+                            reasoning_on=reasoning_on,
                         ),
                     }
                 continue
@@ -658,39 +654,6 @@ async def editor_pass(
 
 
 # ── Helpers (private) ─────────────────────────────────────────────────────────
-
-
-def _build_editor_prompt(
-    has_audit_issues: bool,
-    report_text: str,
-    length_guard_triggered: bool,
-    length_guard_instruction: str,
-    structural_rewrite: bool = False,
-) -> str:
-    """Assemble the editor instruction sent as the final user message.
-
-    The preamble is *always* included so the model knows it is the
-    Editor Agent and that the assistant message above is the draft.
-    Audit rules and/or length-guard instructions are appended as needed.
-    """
-    parts = [EDITOR_PREAMBLE]
-    rewrite_triggered = length_guard_triggered or structural_rewrite
-
-    if rewrite_triggered:
-        parts.append(EDITOR_REWRITE_INSTRUCTIONS)
-        if has_audit_issues:
-            parts.append(report_text)
-        if structural_rewrite:
-            parts.append(STRUCTURAL_REWRITE_INSTRUCTIONS)
-        if length_guard_triggered:
-            parts.append(length_guard_instruction)
-        if has_audit_issues and length_guard_triggered:
-            parts.append(EDITOR_BOTH_INSTRUCTIONS)
-    elif has_audit_issues:
-        parts.append(EDITOR_PATCH_INSTRUCTIONS)
-        parts.append(report_text)
-
-    return "\n\n".join(parts)
 
 
 def _structural_rewrite_needed(report: AuditReport) -> bool:
