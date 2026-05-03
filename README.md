@@ -49,6 +49,11 @@ For optimal KV cache reuse, the following will remain consistent across passes:
 3. **Anti-slop**: Get rid of overused words, phrases, and patterns often seen in LLM outputs
 4. **Length Guard**: Actively or passively protect from length degradation as context grows
 
+## Design Principles
+1. Only use agentic functionalities when absolutely needed
+2. Scanning should be algorithmic, avoid making LLMs eyeball for errors
+3. Keep agentic scope small, avoid giving the agent too much freedom of choice
+
 ## Drawbacks
 
 1. **Speed**: Multiple passes will obviously have a longer time to final response
@@ -57,3 +62,4 @@ For optimal KV cache reuse, the following will remain consistent across passes:
 ## Requirements
 1. A model with solid tool/function calling capabilities (recommended: Gemma 4)
 2. OpenAI-compatible LLM inference backend API that supports prompt-caching
+3. Python 3.9+
