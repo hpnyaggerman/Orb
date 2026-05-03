@@ -862,7 +862,14 @@ export async function saveEdit(msgId, role) {
 
   try {
     await api.post(convUrl(S.activeConvId, "messages", msgId, "edit"), { content, regenerate: false });
-    S.messages = normalizeMessages(await api.get(convUrl(S.activeConvId, "messages")));
+    if (S.isStreaming) {
+      // Don't replace S.messages during streaming — it would evict any pending
+      // user message that the server hasn't persisted yet, making it vanish from the DOM.
+      const idx = S.messages.findIndex((m) => m.id === msgId);
+      if (idx >= 0) S.messages[idx].content = content;
+    } else {
+      S.messages = normalizeMessages(await api.get(convUrl(S.activeConvId, "messages")));
+    }
     renderMessages();
     toast("Message edited");
   } catch (e) {
