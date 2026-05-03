@@ -533,13 +533,14 @@ async def editor_pass(
                 prev_issues = report.total_issues
                 if reasoning_on:
                     rewrite_tool_calls = resp.get("tool_calls", [])
-                    msgs.append(
-                        {
-                            "role": "assistant",
-                            "content": resp.get("content") or "",
-                            "tool_calls": rewrite_tool_calls,
-                        }
-                    )
+                    asst_msg = {
+                        "role": "assistant",
+                        "content": resp.get("content") or "",
+                        "tool_calls": rewrite_tool_calls,
+                    }
+                    if resp.get("reasoning_content"):
+                        asst_msg["reasoning_content"] = resp["reasoning_content"]
+                    msgs.append(asst_msg)
                     if rewrite_tool_calls:
                         msgs.append(
                             {
@@ -729,13 +730,14 @@ def _append_iteration_context(
     tool_response = ("\n".join(errors) + "\n\n" if errors else "") + report_text
     if reasoning_on:
         tool_calls = resp.get("tool_calls", [])
-        msgs.append(
-            {
-                "role": "assistant",
-                "content": resp.get("content") or "",
-                "tool_calls": tool_calls,
-            }
-        )
+        asst_msg: dict = {
+            "role": "assistant",
+            "content": resp.get("content") or "",
+            "tool_calls": tool_calls,
+        }
+        if resp.get("reasoning_content"):
+            asst_msg["reasoning_content"] = resp["reasoning_content"]
+        msgs.append(asst_msg)
         for tc in tool_calls:
             msgs.append(
                 {
