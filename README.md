@@ -13,6 +13,16 @@ An **agentic middleware layer** sits between the user and the model. It intercep
 
 The user never sees the agentic layer. The writer model doesn't know it's being directed. The result is a roleplay session that naturally adapts its style, tone, and pacing as the narrative evolves.
 
+## Notable Features
+1. **Clear direction for Writer**: Grounding the story + actively steering the writing style = better output
+2. **Customizability**: Customizable prompt injection that's automatically used by Director model
+3. **Anti-slop**: Get rid of overused words, phrases, and patterns often seen in LLM outputs
+4. **Length Guard**: Actively or passively protect from length degradation as context grows
+5. **Super-regenerate**: Normal regens may give samey outputs, ask for a different take
+6. **Magic Rewrite**: Rewrite the target message in a user-defined direction
+7. **Compress History**: Summarize chat context and move it to a new conversation
+8. **Mobile-compatibility**: UI for mobile devices
+
 ## Architecture
 
 ### Single-Model, Three-Pass Design
@@ -24,41 +34,35 @@ The system uses a three-pass architecture for each user message:
 3. **Editor Pass** - A ReAct loop - Self-audit for slop and length optimization phase. This is surgical, errors will be programmatically detected, 
 the model only needs to write replacement for targeted sentences
 
-## KV Cache Reuse Strategy
+### KV Cache Reuse Strategy
 
 For optimal KV cache reuse, the following will remain consistent across passes:
 
-### 1. System Prompt
+#### 1. System Prompt
 - The system prompt (character card, instructions, etc.) is identical across all passes
 - Built once and reused forever
 - Includes character description, scenario, example dialogue, and additional instructions
 
-### 2. Chat History
+#### 2. Chat History
 - The conversation history (previous messages) is identical across all passes
 - Maintains exact same message content and ordering
 
-### 3. Tool Schemas
+#### 3. Tool Schemas
 - The same tool definitions must be sent in each LLM call for kv cache reuse
 - Tool schemas affect the model's internal representation
 - Inconsistent tool schemas break KV cache alignment
-
-## Benefits
-
-1. **Clear direction for Writer**: Grounding the story + actively steering the writing style = better output
-2. **Customizability**: Customizable prompt injection that's automatically used by Director model
-3. **Anti-slop**: Get rid of overused words, phrases, and patterns often seen in LLM outputs
-4. **Length Guard**: Actively or passively protect from length degradation as context grows
-
-## Design Principles
-1. Prioritize small models - if a feature fails half of the time on Gemma-4-26B4A, it will be scrapped
-2. Only use agentic functionalities when absolutely needed
-3. Scanning should be algorithmic, avoid making LLMs eyeball for errors
-4. Keep agentic scopes small, avoid giving the agent too much freedom of choice
 
 ## Drawbacks
 
 1. **Speed**: Multiple passes will obviously have a longer time to final response
 2. **Cost**: Neligible cost increase, which comes naturally with multiple passes, somewhat alleviated by KV cache reuse strategy
+
+## Design Principles
+
+1. Prioritize small models - if a feature fails half of the time on Gemma-4-26B4A, it will be scrapped
+2. Only use agentic functionalities when absolutely needed - we will not have useless tools like `dice_roll`
+3. Scanning should be algorithmic, avoid making LLMs eyeball for errors
+4. Keep agentic scopes small, avoid giving the agent too much freedom of choice
 
 ## Requirements
 1. A model with solid tool/function calling capabilities (recommended: Gemma 4)
