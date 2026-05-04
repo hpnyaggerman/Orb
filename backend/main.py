@@ -14,7 +14,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 import os
 
+from .migrations import run_pending
 from .database import (
+    DB_PATH,
     init_db,
     get_settings,
     update_settings,
@@ -105,6 +107,7 @@ FRONTEND_DIR = os.path.join(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    run_pending(DB_PATH)
     await init_db()
     logger.info("Database initialized")
     yield

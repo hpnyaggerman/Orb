@@ -132,6 +132,7 @@ function toggleSection(header) {
   header.querySelector(".arrow").classList.toggle("collapsed");
   header.nextElementSibling.classList.toggle("collapsed");
 }
+window.toggleSection = toggleSection;
 
 // ── Burger menu
 function toggleBurger() {

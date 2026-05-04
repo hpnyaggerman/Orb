@@ -91,17 +91,18 @@ export async function loadSettings() {
   else if (typeof S.settings.hide_streaming_until_baked === "boolean")
     S.hideUntilBaked = S.settings.hide_streaming_until_baked;
 
-  // Expand Settings section if endpoint_url is empty
-  const settingsSection = $("settings-section");
-  if (settingsSection && (!S.settings.endpoint_url || S.settings.endpoint_url.trim() === "")) {
-    const header = settingsSection.previousElementSibling;
+  // Expand Endpoints section if endpoint_url is empty
+  const endpointsSection = $("endpoints-section");
+  if (endpointsSection && (!S.settings.endpoint_url || S.settings.endpoint_url.trim() === "")) {
+    const header = endpointsSection.previousElementSibling;
     if (header) {
       const arrow = header.querySelector(".arrow");
       if (arrow) arrow.classList.remove("collapsed");
     }
-    settingsSection.classList.remove("collapsed");
+    endpointsSection.classList.remove("collapsed");
   }
 
+  renderEndpoints();
   renderSettings();
   await loadEndpoints();
   initComboboxes(); // Re-initialize comboboxes with loaded endpoints
@@ -119,8 +120,8 @@ export async function loadPersonas() {
   }
 }
 
-export function renderSettings() {
-  $("settings-form").innerHTML = SETTING_FIELDS.map((f) => {
+export function renderEndpoints() {
+  function renderField(f) {
     const v = S.settings[f.k] ?? "";
     if (f.t === "textarea") {
       const rows = f.k === "system_prompt" ? ' rows="2"' : "";
@@ -155,19 +156,30 @@ export function renderSettings() {
     return `<div class="field"><label>${f.l}</label>
               <input type="${f.t}" value="${v}" data-key="${f.k}" ${attrs} onchange="saveSetting(this)">
             </div>`;
-  }).join("");
-  $("settings-form").innerHTML += `
-    <div class="field" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--accent-dim)">
-      <label class="lg-enforce-label" title="Hide the assistant's reply while the pipeline (director -> writer -> editor) runs. The phase indicator stays visible.">
-        <input type="checkbox" ${S.hideUntilBaked ? "checked" : ""} onchange="toggleHideUntilBaked(this.checked)">
-        Hide streaming message until baked
-      </label>
-    </div>
+  }
+
+  $("endpoints-form").innerHTML = `
+    ${SETTING_FIELDS.map(renderField).join("")}
     <div class="field" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--accent-dim)">
       <button class="btn btn-danger" onclick="showResetConfirmModal()" style="width:100%;justify-content:center">Reset to Defaults</button>
     </div>
   `;
   initComboboxes();
+}
+
+export function renderSettings() {
+  $("settings-form").innerHTML = `
+    <div class="tool-card ${S.hideUntilBaked ? "tool-on" : ""}">
+      <div class="tool-card-header">
+        <span class="tool-card-name">Hide until baked</span>
+        <label class="tog" onclick="event.stopPropagation()">
+          <input type="checkbox" ${S.hideUntilBaked ? "checked" : ""} onchange="toggleHideUntilBaked(this.checked)">
+          <span class="tog-slider"></span>
+        </label>
+      </div>
+      <div class="tool-card-desc">Hide the assistant's reply while the pipeline runs. The phase indicator stays visible.</div>
+    </div>
+  `;
 }
 
 export async function saveSetting(el) {

@@ -167,6 +167,10 @@ body {
   overflow: hidden;
 }
 
+#endpoints-section {
+  padding-top: 6px;
+}
+
 .sidebar-section-body.collapsed { display: none; }
 
 /* Conversation list items */
@@ -2109,6 +2113,8 @@ label {
 
 .field-row { display: flex; gap: 8px; }
 .field-row .field { flex: 1; }
+
+
 
 /* ═══════════════════════════════════════════
    9. Toast Notifications
