@@ -605,7 +605,16 @@ async def init_db():
                     mc = dict(mc_rows[0])
                     cur = await db.execute(
                         "INSERT INTO model_configs (endpoint_id, model_name, system_prompt, temperature, min_p, top_k, top_p, repetition_penalty, max_tokens, role) VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, 'agent')",
-                        (ep["id"], mc["model_name"], mc["temperature"], mc["min_p"], mc["top_k"], mc["top_p"], mc["repetition_penalty"], mc["max_tokens"]),
+                        (
+                            ep["id"],
+                            mc["model_name"],
+                            mc["temperature"],
+                            mc["min_p"],
+                            mc["top_k"],
+                            mc["top_p"],
+                            mc["repetition_penalty"],
+                            mc["max_tokens"],
+                        ),
                     )
                 else:
                     cur = await db.execute(

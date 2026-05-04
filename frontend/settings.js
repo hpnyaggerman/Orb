@@ -235,19 +235,16 @@ export function renderEndpoints() {
 
   $("endpoints-form").innerHTML = `
     ${SETTING_FIELDS.map((f) => renderField(f, false)).join("")}
-    <div style="margin:16px 0;border-top:1px solid var(--accent-dim)"></div>
-    <div class="field" style="display:flex;align-items:center;gap:10px">
-      <label style="margin:0">Same as Writer</label>
-      <label class="tog" onclick="event.stopPropagation()">
+    <div style="display:flex;align-items:center;gap:12px;margin:12px 0 8px"><div style="flex:1;height:1px;background:var(--accent-dim)"></div><span style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--accent-dim)">Agent</span><div style="flex:1;height:1px;background:var(--accent-dim)"></div></div>
+    <div class="tool-card-header" style="margin-bottom:12px">
+      <span class="tool-card-name">Same as Writer</span>
+      <label class="tog" style="margin-top:2px" onclick="event.stopPropagation()">
         <input type="checkbox" ${S.agentSameAsWriter ? "checked" : ""} onchange="toggleAgentSameAsWriter(this.checked)">
         <span class="tog-slider"></span>
       </label>
     </div>
     <div id="agent-fields"${agentHidden}>
       ${AGENT_SETTING_FIELDS.map((f) => renderField(f, true)).join("")}
-    </div>
-    <div class="field" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--accent-dim)">
-      <button class="btn btn-danger" onclick="showResetConfirmModal()" style="width:100%;justify-content:center">Reset to Defaults</button>
     </div>
   `;
   initComboboxes();
@@ -264,6 +261,9 @@ export function renderSettings() {
         </label>
       </div>
       <div class="tool-card-desc">Hide the assistant's reply while the pipeline runs. The phase indicator stays visible.</div>
+    </div>
+    <div class="field" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--accent-dim)">
+      <button class="btn btn-danger" onclick="showResetConfirmModal()" style="width:100%;justify-content:center">Reset to Defaults</button>
     </div>
   `;
 }
@@ -565,8 +565,7 @@ function _fillEndpointFields(ctx) {
     const keyEl = document.querySelector(`[data-key="${ctx.apiKeyField}"]`);
     if (keyEl) keyEl.value = ep.api_key || "";
   }
-  const activeModel =
-    S[ctx.configsKey].find((m) => m.id === S[ctx.configIdKey]) || S[ctx.configsKey][0];
+  const activeModel = S[ctx.configsKey].find((m) => m.id === S[ctx.configIdKey]) || S[ctx.configsKey][0];
   if (activeModel) {
     const modelEl = document.querySelector(`[data-key="${ctx.modelField}"]`);
     if (modelEl) modelEl.value = activeModel.model_name || "";
@@ -694,8 +693,7 @@ async function _onHybridInputCtx(ctx, el) {
     await _loadConfigs(ctx, match.id);
     const modelEl = document.querySelector(`[data-key="${ctx.modelField}"]`);
     if (!modelEl || !S[ctx.configsKey].length) return;
-    const activeModel =
-      S[ctx.configsKey].find((m) => m.id === match[ctx.activeConfigDbField]) || S[ctx.configsKey][0];
+    const activeModel = S[ctx.configsKey].find((m) => m.id === match[ctx.activeConfigDbField]) || S[ctx.configsKey][0];
     modelEl.value = activeModel.model_name;
     _fillConfigFields(ctx, activeModel);
     S[ctx.configIdKey] = activeModel.id;
