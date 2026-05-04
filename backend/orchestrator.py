@@ -111,8 +111,7 @@ async def _run_pipeline(
         else settings["model_name"]
     )
 
-    prefix_chars = sum(len(m.get("content") or "") for m in prefix)
-    kv_tracker = _KVCacheTracker(prefix_chars)
+    kv_tracker = _KVCacheTracker()
 
     # --- Director pass ---
     has_pre_writer_tools = any(

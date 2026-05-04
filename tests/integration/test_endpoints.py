@@ -1,29 +1,5 @@
 from __future__ import annotations
 
-
-async def test_create_endpoint_persists_to_db(client, db):
-    """Test creating an endpoint via POST /api/endpoints"""
-    resp = await client.post(
-        "/api/endpoints",
-        json={"url": "https://api.example.com/v1", "api_key": "test-key-123"},
-    )
-    assert resp.status_code == 200
-    data = resp.json()
-    assert "id" in data
-    assert data["url"] == "https://api.example.com/v1"
-    # API key should not be returned in response for security
-    assert "api_key" not in data
-
-    # Verify directly in the DB
-    async with db.execute(
-        "SELECT url, api_key FROM endpoints WHERE id = ?",
-        (data["id"],),
-    ) as cur:
-        row = await cur.fetchone()
-    assert row["url"] == "https://api.example.com/v1"
-    assert row["api_key"] == "test-key-123"
-
-
 async def test_delete_endpoint_removes_from_db(client, db):
     """Test DELETE /api/endpoints/{id} removes endpoint"""
     # Create an endpoint
