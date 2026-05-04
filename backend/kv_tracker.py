@@ -70,7 +70,10 @@ class _KVCacheTracker:
                 if overlap > 0:
                     total_saved += overlap
                     pct = overlap / len(prev_serialized) * 100 if prev_serialized else 0
-                    cache_note = f"HIT  overlap={overlap} ({pct:.1f}%)"
+                    prev_label = self._entries[i - 1]["label"]
+                    cache_note = (
+                        f"HIT  overlap={overlap} ({pct:.1f}%)  vs [{i-1}] {prev_label}"
+                    )
                 else:
                     cache_note = "BUST  no_overlap"
 

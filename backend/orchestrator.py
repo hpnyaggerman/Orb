@@ -20,7 +20,7 @@ from .prompt_builder import (
 )
 from .kv_tracker import _KVCacheTracker
 from .passes.director import _director_pass
-from .passes.writer import _writer_pass
+from .passes.writer import _writer_pass, build_writer_content
 from .passes.editor import editor_pass
 
 logger = logging.getLogger(__name__)
@@ -182,6 +182,15 @@ async def _run_pipeline(
     }
 
     # --- Writer pass ---
+    writer_content = build_writer_content(
+        lorebook_block,
+        inj_block,
+        enabled_tools,
+        effective_msg,
+        attachments,
+        length_guard_enforce,
+        length_guard,
+    )
     resp_text = ""
     async for item in _writer_pass(
         client,
@@ -246,6 +255,7 @@ async def _run_pipeline(
                 reasoning_on=editor_reasoning_on,
                 audit_context_msgs=editor_audit_msgs,
                 model=agent_model,
+                writer_user_msg=writer_content,
             ):
                 if event["type"] == "reasoning":
                     yield {

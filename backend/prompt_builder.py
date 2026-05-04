@@ -135,7 +135,7 @@ def build_tool_prompt(
     desc = tool["schema"]["function"]["description"]
     params = tool["schema"]["function"]["parameters"].get("properties", {})
     param_order = ", ".join(params.keys()) if params else "N/A"
-    preamble = DIRECTOR_PREAMBLE + ("" if reasoning_on else REASONING_GUIDANCE)
+    preamble = DIRECTOR_PREAMBLE + (REASONING_GUIDANCE if reasoning_on else "")
     parts = [
         preamble,
         f"Call ONLY this tool, ensuring parameters follow the schema order: {tool_name} - {desc}\nParameter order: ({param_order})",
@@ -164,7 +164,7 @@ def build_editor_prompt(
     structural_rewrite: bool = False,
     reasoning_on: bool = False,
 ) -> str:
-    preamble = EDITOR_PREAMBLE + ("" if reasoning_on else REASONING_GUIDANCE)
+    preamble = EDITOR_PREAMBLE + (REASONING_GUIDANCE if reasoning_on else "")
     parts = [preamble]
     rewrite_triggered = length_guard_triggered or structural_rewrite
 

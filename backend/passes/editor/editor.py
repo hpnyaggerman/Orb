@@ -276,6 +276,7 @@ async def editor_pass(
         list[str] | None
     ) = None,  # explicit previous-assistant list for repetition scanning; if None, derived from prefix
     model: str | None = None,
+    writer_user_msg: "str | list | None" = None,  # writer's exact last user message; when provided replaces bare effective_msg so the editor extends the writer's KV-cached prefix
 ) -> AsyncIterator[dict]:
     """ReAct-style editor loop with optional audit and/or length guard.
 
@@ -397,7 +398,12 @@ async def editor_pass(
     logger.info(final_prompt)
 
     msgs = prefix + [
-        {"role": "user", "content": effective_msg},
+        {
+            "role": "user",
+            "content": (
+                writer_user_msg if writer_user_msg is not None else effective_msg
+            ),
+        },
         {"role": "assistant", "content": draft},
         {"role": "user", "content": final_prompt},
     ]
@@ -634,10 +640,27 @@ async def editor_pass(
                 break
             prev_issues = report.total_issues
 
-            # Append recap for next iteration
-            _append_iteration_context(
-                msgs, resp, patches, errors, report_text, reasoning_on=reasoning_on
-            )
+            # Feed results back for next iteration.
+            # reasoning_on=True: append structured tool-use/tool-result turns.
+            # reasoning_on=False: replace the draft + prompt in-place (same as
+            # the rewrite path) so the message list stays flat.
+            if reasoning_on:
+                _append_iteration_context(
+                    msgs, resp, patches, errors, report_text, reasoning_on=True
+                )
+            else:
+                msgs[-2] = {"role": "assistant", "content": current_draft}
+                msgs[-1] = {
+                    "role": "user",
+                    "content": build_editor_prompt(
+                        audit_enabled and not report.is_clean,
+                        report_text,
+                        length_guard_triggered,
+                        length_guard_instruction,
+                        structural_rewrite=_structural_rewrite_needed(report),
+                        reasoning_on=reasoning_on,
+                    ),
+                }
 
         except Exception as e:
             logger.error(

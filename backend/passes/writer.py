@@ -14,6 +14,46 @@ from ..tool_defs import enabled_schemas
 logger = logging.getLogger(__name__)
 
 
+def build_writer_content(
+    lorebook_block: str,
+    inj_block: str,
+    enabled_tools: dict | None,
+    effective_msg: str,
+    attachments: list[dict] | None,
+    length_guard_enforce: bool,
+    length_guard: dict | None,
+) -> "str | list":
+    """Build the writer's user-message content (string or multimodal list).
+
+    Extracted so the orchestrator can pass the exact value to the editor,
+    letting it replicate the writer's last user message for KV-cache reuse.
+    """
+    tail = ""
+    if lorebook_block:
+        tail += "___\n\n" + lorebook_block + "\n\n"
+    if inj_block:
+        tail += "___\n\n" + inj_block + "\n\n"
+    if enabled_tools and len(enabled_tools) > 0:
+        tail += "**Do not use tool or function calls this turn.**\n\n"
+    if length_guard_enforce and length_guard and length_guard.get("enabled"):
+        max_words = length_guard.get("max_words", 240)
+        max_paragraphs = length_guard.get("max_paragraphs", 4)
+        tail += f"**Keep your response under {max_words} words and {max_paragraphs} paragraphs.**\n\n"
+    tail += "___\n\n" + effective_msg + "\n\n"
+
+    if attachments:
+        parts: list = [{"type": "text", "text": tail}]
+        for att in attachments:
+            mime = att.get("mime_type", att.get("mime", "image/jpeg"))
+            b64 = att.get("data_b64", att.get("b64", ""))
+            if not b64:
+                continue
+            url = f"data:{mime};base64,{b64}"
+            parts.append({"type": "image_url", "image_url": {"url": url}})
+        return parts
+    return tail
+
+
 async def _writer_pass(
     client: LLMClient,
     prefix: list[dict],
@@ -30,32 +70,15 @@ async def _writer_pass(
     reasoning_on: bool = True,
 ) -> AsyncIterator[dict]:
     """Yields {"type": "content"|"reasoning", "delta": str} dicts."""
-    tail = ""
-    if lorebook_block:
-        tail += "___\n\n" + lorebook_block + "\n\n"
-    if inj_block:
-        tail += "___\n\n" + inj_block + "\n\n"
-    if len(enabled_tools) > 0:
-        tail += "**Do not use tool or function calls.**\n\n"
-    if length_guard_enforce and length_guard and length_guard.get("enabled"):
-        max_words = length_guard.get("max_words", 240)
-        max_paragraphs = length_guard.get("max_paragraphs", 4)
-        tail += f"**Keep your response under {max_words} words and {max_paragraphs} paragraphs.**\n\n"
-    tail += "___\n\n" + effective_msg + "\n\n"
-
-    # Build user message content, possibly multimodal
-    if attachments:
-        parts = [{"type": "text", "text": tail}]
-        for att in attachments:
-            mime = att.get("mime_type", att.get("mime", "image/jpeg"))
-            b64 = att.get("data_b64", att.get("b64", ""))
-            if not b64:
-                continue
-            url = f"data:{mime};base64,{b64}"
-            parts.append({"type": "image_url", "image_url": {"url": url}})
-        content = parts
-    else:
-        content = tail
+    content = build_writer_content(
+        lorebook_block,
+        inj_block,
+        enabled_tools,
+        effective_msg,
+        attachments,
+        length_guard_enforce,
+        length_guard,
+    )
 
     msgs = prefix + [{"role": "user", "content": content}]
 
