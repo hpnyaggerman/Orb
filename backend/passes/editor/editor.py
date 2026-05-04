@@ -435,6 +435,22 @@ async def editor_pass(
 
             resp: dict = {}
             try:
+                hyperparams = {
+                    k: v
+                    for k in [
+                        "temperature",
+                        "max_tokens",
+                        "top_p",
+                        "min_p",
+                        "top_k",
+                        "repetition_penalty",
+                    ]
+                    if (v := settings.get(k)) is not None
+                }
+                if "temperature" not in hyperparams:
+                    hyperparams["temperature"] = 0.25
+                if "max_tokens" not in hyperparams:
+                    hyperparams["max_tokens"] = 8192
                 async for event in client.complete(
                     messages=msgs,
                     model=model or settings["model_name"],
@@ -442,8 +458,7 @@ async def editor_pass(
                     tool_choice=_pick_tool_choice(
                         length_guard_triggered, report, audit_enabled
                     ),
-                    temperature=0.25,
-                    max_tokens=8192,
+                    **hyperparams,
                     **reasoning_params,
                 ):
                     if event["type"] == "reasoning":

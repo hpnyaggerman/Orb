@@ -236,12 +236,15 @@ export function renderEndpoints() {
   $("endpoints-form").innerHTML = `
     ${SETTING_FIELDS.map((f) => renderField(f, false)).join("")}
     <div style="display:flex;align-items:center;gap:12px;margin:12px 0 8px"><div style="flex:1;height:1px;background:var(--accent-dim)"></div><span style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--accent-dim)">Agent</span><div style="flex:1;height:1px;background:var(--accent-dim)"></div></div>
-    <div class="tool-card-header" style="margin-bottom:12px">
-      <span class="tool-card-name">Same as Writer</span>
-      <label class="tog" style="margin-top:2px" onclick="event.stopPropagation()">
-        <input type="checkbox" ${S.agentSameAsWriter ? "checked" : ""} onchange="toggleAgentSameAsWriter(this.checked)">
-        <span class="tog-slider"></span>
-      </label>
+    <div class="tool-card" style="margin-bottom:12px">
+      <div class="tool-card-header">
+        <span class="tool-card-name">Same as Writer</span>
+        <label class="tog" onclick="event.stopPropagation()">
+          <input type="checkbox" ${S.agentSameAsWriter ? "checked" : ""} onchange="toggleAgentSameAsWriter(this.checked)">
+          <span class="tog-slider"></span>
+        </label>
+      </div>
+      <div class="tool-card-desc">Use the same endpoint and model for Agent passes as the Writer.</div>
     </div>
     <div id="agent-fields"${agentHidden}>
       ${AGENT_SETTING_FIELDS.map((f) => renderField(f, true)).join("")}

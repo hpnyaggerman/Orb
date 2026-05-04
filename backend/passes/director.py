@@ -162,13 +162,28 @@ async def _director_pass(
             reasoning_params = reasoning_cfg(
                 reasoning_on and name != "rewrite_user_prompt"
             )
+            hyperparams = {
+                k: v
+                for k in [
+                    "temperature",
+                    "max_tokens",
+                    "top_p",
+                    "min_p",
+                    "top_k",
+                    "repetition_penalty",
+                ]
+                if (v := settings.get(k)) is not None
+            }
+            if "temperature" not in hyperparams:
+                hyperparams["temperature"] = 0.25
+            if "max_tokens" not in hyperparams:
+                hyperparams["max_tokens"] = 8192
             async for event in client.complete(
                 messages=msgs,
                 model=model or settings["model_name"],
                 tools=tool_schemas,
                 tool_choice=TOOLS[name]["choice"],
-                temperature=0.25,
-                max_tokens=8192,
+                **hyperparams,
                 **reasoning_params,
             ):
                 if event["type"] == "reasoning":
