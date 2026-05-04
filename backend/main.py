@@ -158,6 +158,9 @@ class SettingsUpdate(BaseModel):
     active_endpoint_id: Optional[int] = None
     show_editor_diff: Optional[bool] = None
     hide_streaming_until_baked: Optional[bool] = None
+    agent_same_as_writer: Optional[bool] = None
+    agent_endpoint_id: Optional[int] = None
+    agent_shared_system_prompt: Optional[str] = None
 
 
 class EndpointCreate(BaseModel):
@@ -169,6 +172,7 @@ class EndpointUpdate(BaseModel):
     url: Optional[str] = None
     api_key: Optional[str] = None
     active_model_config_id: Optional[int] = None
+    agent_active_model_config_id: Optional[int] = None
 
 
 class ModelConfigCreate(BaseModel):
@@ -182,6 +186,7 @@ class ModelConfigCreate(BaseModel):
     top_p: float = 0.95
     repetition_penalty: float = 1.0
     max_tokens: int = 4096
+    role: str = "writer"
 
 
 class ModelConfigUpdate(BaseModel):

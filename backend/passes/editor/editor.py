@@ -275,6 +275,7 @@ async def editor_pass(
     audit_context_msgs: (
         list[str] | None
     ) = None,  # explicit previous-assistant list for repetition scanning; if None, derived from prefix
+    model: str | None = None,
 ) -> AsyncIterator[dict]:
     """ReAct-style editor loop with optional audit and/or length guard.
 
@@ -436,7 +437,7 @@ async def editor_pass(
             try:
                 async for event in client.complete(
                     messages=msgs,
-                    model=settings["model_name"],
+                    model=model or settings["model_name"],
                     tools=editor_tools,
                     tool_choice=_pick_tool_choice(
                         length_guard_triggered, report, audit_enabled

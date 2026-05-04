@@ -70,6 +70,7 @@ async def _director_pass(
     kv_tracker=None,
     reasoning_on: bool = True,
     lorebook_block: str = "",
+    model: str | None = None,
 ) -> AsyncIterator[dict]:
     """Yields reasoning dicts during each tool call, then a single done dict.
 
@@ -163,7 +164,7 @@ async def _director_pass(
             )
             async for event in client.complete(
                 messages=msgs,
-                model=settings["model_name"],
+                model=model or settings["model_name"],
                 tools=tool_schemas,
                 tool_choice=TOOLS[name]["choice"],
                 temperature=0.25,

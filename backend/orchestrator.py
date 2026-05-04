@@ -41,6 +41,8 @@ async def _run_pipeline(
     phrase_bank: list[list[str]] | None = None,
     lorebook_block: str = "",
     editor_audit_msgs: list[str] | None = None,
+    agent_client: LLMClient | None = None,
+    agent_prefix: list[dict] | None = None,
 ) -> AsyncIterator[dict]:
     """Three-pass pipeline: director → writer → editor.
 
@@ -99,6 +101,16 @@ async def _run_pipeline(
 
     do_edit = audit_enabled or (length_guard_enabled and agent_on)
 
+    director_client = agent_client or client
+    editor_client = agent_client or client
+    director_prefix = agent_prefix or prefix
+    editor_prefix = agent_prefix or prefix
+    agent_model = (
+        settings.get("agent_model_name", settings["model_name"])
+        if agent_client
+        else settings["model_name"]
+    )
+
     prefix_chars = sum(len(m.get("content") or "") for m in prefix)
     kv_tracker = _KVCacheTracker(prefix_chars)
 
@@ -109,8 +121,8 @@ async def _run_pipeline(
     if agent_on and has_pre_writer_tools:
         yield {"event": "director_start"}
         async for event in _director_pass(
-            client,
-            prefix,
+            director_client,
+            director_prefix,
             user_message,
             settings,
             director,
@@ -121,6 +133,7 @@ async def _run_pipeline(
             kv_tracker=kv_tracker,
             reasoning_on=director_reasoning_on,
             lorebook_block=lorebook_block,
+            model=agent_model,
         ):
             if event["type"] == "reasoning":
                 yield {
@@ -221,8 +234,8 @@ async def _run_pipeline(
         )
         try:
             async for event in editor_pass(
-                client,
-                prefix,
+                editor_client,
+                editor_prefix,
                 effective_msg,
                 resp_text,
                 settings,
@@ -233,6 +246,7 @@ async def _run_pipeline(
                 kv_tracker=kv_tracker,
                 reasoning_on=editor_reasoning_on,
                 audit_context_msgs=editor_audit_msgs,
+                model=agent_model,
             ):
                 if event["type"] == "reasoning":
                     yield {
@@ -313,6 +327,23 @@ async def _load_pipeline_context(conversation_id: str) -> dict | None:
     if active_persona_id:
         active_persona = await db.get_user_persona(active_persona_id)
 
+    # Resolve agent client and system prompt when separate from writer
+    agent_same = settings.get("agent_same_as_writer", True)
+    agent_client = None
+    agent_system_prompt = None
+    if not agent_same and settings.get("agent_endpoint_id"):
+        agent_url = settings.get("agent_endpoint_url", settings["endpoint_url"])
+        agent_api_key = settings.get("agent_api_key", settings.get("api_key", ""))
+        agent_model = settings.get("agent_model_name", settings.get("model_name", ""))
+        agent_client = LLMClient(
+            agent_url,
+            api_key=agent_api_key,
+            profile=profile_for(agent_url, agent_model),
+        )
+        agent_system_prompt, _, _ = await db.resolve_char_context(
+            conv, settings, shared_key="agent_shared_system_prompt"
+        )
+
     return {
         "settings": settings,
         "conv": conv,
@@ -326,6 +357,8 @@ async def _load_pipeline_context(conversation_id: str) -> dict | None:
         "char_persona": char_persona,
         "mes_example": mes_example,
         "active_persona": active_persona,
+        "agent_client": agent_client,
+        "agent_system_prompt": agent_system_prompt,
     }
 
 
@@ -354,6 +387,33 @@ def _build_prefix_from_ctx(ctx: dict, history: list[dict]) -> list[dict]:
 
     return build_prefix(
         ctx["system_prompt"],
+        conv["character_name"],
+        ctx["char_persona"],
+        conv["character_scenario"],
+        ctx["mes_example"],
+        conv.get("post_history_instructions", ""),
+        history,
+        user_name,
+        user_description,
+    )
+
+
+def _build_prefix_with_system_prompt(
+    ctx: dict, history: list[dict], system_prompt: str
+) -> list[dict]:
+    """Build the LLM prefix using a custom system prompt instead of ctx['system_prompt']."""
+    conv = ctx["conv"]
+    active_persona = ctx.get("active_persona")
+
+    if active_persona:
+        user_name = active_persona.get("name", "User")
+        user_description = active_persona.get("description", "")
+    else:
+        user_name = ctx["settings"].get("user_name", "User")
+        user_description = ctx["settings"].get("user_description", "")
+
+    return build_prefix(
+        system_prompt,
         conv["character_name"],
         ctx["char_persona"],
         conv["character_scenario"],
@@ -599,6 +659,11 @@ async def handle_turn(
             yield {"event": "user_message_created", "data": {"id": user_msg_id}}
 
         prefix = _build_prefix_from_ctx(ctx, history)
+        agent_prefix = None
+        if ctx.get("agent_system_prompt") is not None:
+            agent_prefix = _build_prefix_with_system_prompt(
+                ctx, history, ctx["agent_system_prompt"]
+            )
         asst_turn = next_turn + (0 if skip_user_persist else 1)
 
         # Compute lorebook injection — include the current user message so its
@@ -633,6 +698,8 @@ async def handle_turn(
             attachments=attachments,
             phrase_bank=ctx["phrase_bank"],
             lorebook_block=lorebook_block,
+            agent_client=ctx.get("agent_client"),
+            agent_prefix=agent_prefix,
         )
         async for event in _consume_pipeline(
             pipeline,
@@ -685,6 +752,11 @@ async def handle_regenerate(
             else []
         )
         prefix = _build_prefix_from_ctx(ctx, history)
+        agent_prefix = None
+        if ctx.get("agent_system_prompt") is not None:
+            agent_prefix = _build_prefix_with_system_prompt(
+                ctx, history, ctx["agent_system_prompt"]
+            )
 
         # Get the moods that were active BEFORE this turn (not the current state).
         # Logs are keyed by the user's turn_index (= assistant turn_index - 1), so
@@ -721,6 +793,8 @@ async def handle_regenerate(
             attachments,
             ctx["phrase_bank"],
             lorebook_block=lorebook_block,
+            agent_client=ctx.get("agent_client"),
+            agent_prefix=agent_prefix,
         )
         async for event in _consume_pipeline(
             pipeline, conversation_id, settings, user_msg_id, target["turn_index"]
@@ -778,6 +852,11 @@ async def handle_super_regenerate(
             {"role": "assistant", "content": target["content"]},
         ]
         prefix = _build_prefix_from_ctx(ctx, extended_history)
+        agent_prefix = None
+        if ctx.get("agent_system_prompt") is not None:
+            agent_prefix = _build_prefix_with_system_prompt(
+                ctx, extended_history, ctx["agent_system_prompt"]
+            )
 
         # Reset moods to pre-turn baseline (same logic as handle_regenerate).
         moods_before = await db.get_moods_before_turn(
@@ -826,6 +905,8 @@ async def handle_super_regenerate(
             ctx["phrase_bank"],
             lorebook_block=lorebook_block,
             editor_audit_msgs=editor_audit_msgs,
+            agent_client=ctx.get("agent_client"),
+            agent_prefix=agent_prefix,
         )
         # Save result as a sibling of the original: same parent_id and turn_index.
         async for event in _consume_pipeline(

@@ -29,6 +29,7 @@ MIGRATIONS: list[str] = [
     "0010_active_model_config_on_endpoints",
     "0011_add_show_editor_diff",
     "0012_hide_streaming_until_baked",
+    "0013_agent_endpoint",
 ]
 
 

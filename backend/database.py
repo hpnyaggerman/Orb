@@ -208,6 +208,8 @@ DEFAULT_SETTINGS = {
     "character_library_sort": "time-added",
     "show_editor_diff": 1,
     "hide_streaming_until_baked": 0,
+    "agent_same_as_writer": True,
+    "agent_shared_system_prompt": "",
 }
 
 SEED_PHRASE_BANK = [
@@ -351,7 +353,10 @@ async def init_db():
                 character_library_view TEXT NOT NULL DEFAULT 'grid',
                 character_library_sort TEXT NOT NULL DEFAULT 'time-added',
                 show_editor_diff INTEGER NOT NULL DEFAULT 1,
-                hide_streaming_until_baked INTEGER NOT NULL DEFAULT 0
+                hide_streaming_until_baked INTEGER NOT NULL DEFAULT 0,
+                agent_same_as_writer INTEGER NOT NULL DEFAULT 1,
+                agent_endpoint_id INTEGER REFERENCES endpoints(id) ON DELETE SET NULL,
+                agent_shared_system_prompt TEXT NOT NULL DEFAULT ''
             );
 
             CREATE TABLE IF NOT EXISTS mood_fragments (
@@ -468,7 +473,8 @@ async def init_db():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 url TEXT NOT NULL,
                 api_key TEXT NOT NULL DEFAULT '',
-                active_model_config_id INTEGER REFERENCES model_configs(id) ON DELETE SET NULL
+                active_model_config_id INTEGER REFERENCES model_configs(id) ON DELETE SET NULL,
+                agent_active_model_config_id INTEGER REFERENCES model_configs(id) ON DELETE SET NULL
             );
 
             CREATE TABLE IF NOT EXISTS model_configs (
@@ -481,7 +487,8 @@ async def init_db():
                 top_k INTEGER NOT NULL DEFAULT 40,
                 top_p REAL NOT NULL DEFAULT 0.95,
                 repetition_penalty REAL NOT NULL DEFAULT 1.0,
-                max_tokens INTEGER NOT NULL DEFAULT 4096
+                max_tokens INTEGER NOT NULL DEFAULT 4096,
+                role TEXT NOT NULL DEFAULT 'writer' CHECK (role IN ('writer', 'agent'))
             );
 
             CREATE TABLE IF NOT EXISTS worlds (
@@ -564,6 +571,65 @@ async def init_db():
             await db.execute(
                 "ALTER TABLE endpoints ADD COLUMN active_model_config_id INTEGER REFERENCES model_configs(id) ON DELETE SET NULL"
             )
+        if "agent_active_model_config_id" not in endpoint_cols:
+            await db.execute(
+                "ALTER TABLE endpoints ADD COLUMN agent_active_model_config_id INTEGER REFERENCES model_configs(id) ON DELETE SET NULL"
+            )
+
+        # Migration: add role column to model_configs
+        model_config_cols = {
+            row[1]
+            for row in await db.execute_fetchall("PRAGMA table_info(model_configs)")
+        }
+        if "role" not in model_config_cols:
+            await db.execute(
+                "ALTER TABLE model_configs ADD COLUMN role TEXT NOT NULL DEFAULT 'writer'"
+            )
+            # All existing configs just got role='writer'. Create a fresh role='agent'
+            # config for every endpoint (including those that already had
+            # agent_active_model_config_id set, since that column also pointed to a
+            # writer-role config before this migration).
+            ep_rows = await db.execute_fetchall("SELECT * FROM endpoints")
+            for ep_row in ep_rows:
+                ep = dict(ep_row)
+                mc_rows = await db.execute_fetchall(
+                    "SELECT * FROM model_configs WHERE endpoint_id = ? AND id = ?",
+                    (ep["id"], ep.get("active_model_config_id")),
+                )
+                if not mc_rows:
+                    mc_rows = await db.execute_fetchall(
+                        "SELECT * FROM model_configs WHERE endpoint_id = ? LIMIT 1",
+                        (ep["id"],),
+                    )
+                if mc_rows:
+                    mc = dict(mc_rows[0])
+                    cur = await db.execute(
+                        "INSERT INTO model_configs (endpoint_id, model_name, system_prompt, temperature, min_p, top_k, top_p, repetition_penalty, max_tokens, role) VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, 'agent')",
+                        (ep["id"], mc["model_name"], mc["temperature"], mc["min_p"], mc["top_k"], mc["top_p"], mc["repetition_penalty"], mc["max_tokens"]),
+                    )
+                else:
+                    cur = await db.execute(
+                        "INSERT INTO model_configs (endpoint_id, model_name, system_prompt, temperature, min_p, top_k, top_p, repetition_penalty, max_tokens, role) VALUES (?, 'default', '', 0.8, 0.0, 40, 0.95, 1.0, 4096, 'agent')",
+                        (ep["id"],),
+                    )
+                await db.execute(
+                    "UPDATE endpoints SET agent_active_model_config_id = ? WHERE id = ?",
+                    (cur.lastrowid, ep["id"]),
+                )
+
+        # Migration for settings agent columns
+        if "agent_same_as_writer" not in existing_cols:
+            await db.execute(
+                "ALTER TABLE settings ADD COLUMN agent_same_as_writer INTEGER NOT NULL DEFAULT 1"
+            )
+        if "agent_endpoint_id" not in existing_cols:
+            await db.execute(
+                "ALTER TABLE settings ADD COLUMN agent_endpoint_id INTEGER REFERENCES endpoints(id) ON DELETE SET NULL"
+            )
+        if "agent_shared_system_prompt" not in existing_cols:
+            await db.execute(
+                "ALTER TABLE settings ADD COLUMN agent_shared_system_prompt TEXT NOT NULL DEFAULT ''"
+            )
 
         # Migration for director_state keywords column
         director_cols = {
@@ -635,7 +701,7 @@ async def init_db():
                 )
                 endpoint_id = cur.lastrowid
                 cur2 = await db.execute(
-                    "INSERT INTO model_configs (endpoint_id, model_name, system_prompt, temperature, min_p, top_k, top_p, repetition_penalty, max_tokens) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    "INSERT INTO model_configs (endpoint_id, model_name, system_prompt, temperature, min_p, top_k, top_p, repetition_penalty, max_tokens, role) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'writer')",
                     (
                         endpoint_id,
                         s.get("model_name", "default"),
@@ -649,9 +715,23 @@ async def init_db():
                     ),
                 )
                 model_config_id = cur2.lastrowid
+                cur3 = await db.execute(
+                    "INSERT INTO model_configs (endpoint_id, model_name, system_prompt, temperature, min_p, top_k, top_p, repetition_penalty, max_tokens, role) VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, 'agent')",
+                    (
+                        endpoint_id,
+                        s.get("model_name", "default"),
+                        s.get("temperature", 0.8),
+                        s.get("min_p", 0.0),
+                        s.get("top_k", 40),
+                        s.get("top_p", 0.95),
+                        s.get("repetition_penalty", 1.0),
+                        s.get("max_tokens", 4096),
+                    ),
+                )
+                agent_config_id = cur3.lastrowid
                 await db.execute(
-                    "UPDATE endpoints SET active_model_config_id = ? WHERE id = ?",
-                    (model_config_id, endpoint_id),
+                    "UPDATE endpoints SET active_model_config_id = ?, agent_active_model_config_id = ? WHERE id = ?",
+                    (model_config_id, agent_config_id, endpoint_id),
                 )
                 await db.execute(
                     "UPDATE settings SET active_endpoint_id = ? WHERE id = 1",
@@ -917,6 +997,45 @@ async def get_settings() -> dict:
                                 s[field] = mc[field]
                         if mc.get("system_prompt") is not None:
                             s["system_prompt"] = mc["system_prompt"]
+
+        # Resolve agent endpoint cascade
+        s["agent_same_as_writer"] = bool(s.get("agent_same_as_writer", 1))
+        s["agent_endpoint_id"] = s.get("agent_endpoint_id")
+        s["agent_shared_system_prompt"] = s.get("agent_shared_system_prompt", "")
+        agent_ep_id = s.get("agent_endpoint_id")
+        if not s["agent_same_as_writer"] and agent_ep_id:
+            agent_ep_rows = await db.execute_fetchall(
+                "SELECT id, url, api_key, active_model_config_id, agent_active_model_config_id FROM endpoints WHERE id = ?",
+                (agent_ep_id,),
+            )
+            if agent_ep_rows:
+                agent_ep = dict(agent_ep_rows[0])
+                agent_mc_id = agent_ep.get("agent_active_model_config_id")
+                if agent_mc_id:
+                    agent_mc_rows = await db.execute_fetchall(
+                        """SELECT mc.*, e.url AS endpoint_url, e.api_key
+                           FROM model_configs mc
+                           JOIN endpoints e ON mc.endpoint_id = e.id
+                           WHERE mc.id = ?""",
+                        (agent_mc_id,),
+                    )
+                    if agent_mc_rows:
+                        amc = dict(agent_mc_rows[0])
+                        s["agent_endpoint_url"] = amc["endpoint_url"]
+                        s["agent_api_key"] = amc.get("api_key", "")
+                        s["agent_model_name"] = amc["model_name"]
+                        for field in (
+                            "temperature",
+                            "min_p",
+                            "top_k",
+                            "top_p",
+                            "repetition_penalty",
+                            "max_tokens",
+                        ):
+                            if amc.get(field) is not None:
+                                s[f"agent_{field}"] = amc[field]
+                        if amc.get("system_prompt") is not None:
+                            s["agent_system_prompt"] = amc["system_prompt"]
         return s
 
 
@@ -947,6 +1066,9 @@ async def update_settings(data: dict) -> dict:
             "active_endpoint_id",
             "show_editor_diff",
             "hide_streaming_until_baked",
+            "agent_same_as_writer",
+            "agent_endpoint_id",
+            "agent_shared_system_prompt",
         ]
         sets, vals = _build_set_clause(
             allowed, data, json_fields={"enabled_tools", "reasoning_enabled_passes"}
@@ -966,7 +1088,7 @@ async def update_settings(data: dict) -> dict:
 async def get_endpoints() -> list[dict]:
     async with get_db() as db:
         rows = await db.execute_fetchall(
-            "SELECT id, url, api_key, active_model_config_id FROM endpoints ORDER BY id ASC"
+            "SELECT id, url, api_key, active_model_config_id, agent_active_model_config_id FROM endpoints ORDER BY id ASC"
         )
         return [dict(r) for r in rows]
 
@@ -974,7 +1096,7 @@ async def get_endpoints() -> list[dict]:
 async def get_endpoint(endpoint_id: int) -> dict | None:
     async with get_db() as db:
         rows = await db.execute_fetchall(
-            "SELECT id, url, api_key, active_model_config_id FROM endpoints WHERE id = ?",
+            "SELECT id, url, api_key, active_model_config_id, agent_active_model_config_id FROM endpoints WHERE id = ?",
             (endpoint_id,),
         )
         return dict(rows[0]) if rows else None
@@ -985,16 +1107,35 @@ async def create_endpoint(url: str, api_key: str = "") -> dict:
         cur = await db.execute(
             "INSERT INTO endpoints (url, api_key) VALUES (?, ?)", (url, api_key)
         )
+        endpoint_id = cur.lastrowid
+        cur_w = await db.execute(
+            "INSERT INTO model_configs (endpoint_id, model_name, system_prompt, temperature, min_p, top_k, top_p, repetition_penalty, max_tokens, role) VALUES (?, 'default', '', 0.8, 0.0, 40, 0.95, 1.0, 4096, 'writer')",
+            (endpoint_id,),
+        )
+        cur_a = await db.execute(
+            "INSERT INTO model_configs (endpoint_id, model_name, system_prompt, temperature, min_p, top_k, top_p, repetition_penalty, max_tokens, role) VALUES (?, 'default', '', 0.8, 0.0, 40, 0.95, 1.0, 4096, 'agent')",
+            (endpoint_id,),
+        )
+        await db.execute(
+            "UPDATE endpoints SET active_model_config_id = ?, agent_active_model_config_id = ? WHERE id = ?",
+            (cur_w.lastrowid, cur_a.lastrowid, endpoint_id),
+        )
         await db.commit()
         rows = await db.execute_fetchall(
-            "SELECT id, url FROM endpoints WHERE id = ?", (cur.lastrowid,)
+            "SELECT id, url, api_key, active_model_config_id, agent_active_model_config_id FROM endpoints WHERE id = ?",
+            (endpoint_id,),
         )
         return dict(rows[0])
 
 
 async def update_endpoint(endpoint_id: int, data: dict) -> dict | None:
     async with get_db() as db:
-        allowed = ["url", "api_key", "active_model_config_id"]
+        allowed = [
+            "url",
+            "api_key",
+            "active_model_config_id",
+            "agent_active_model_config_id",
+        ]
         sets, vals = _build_set_clause(allowed, data)
         if sets:
             vals.append(endpoint_id)
@@ -1004,7 +1145,7 @@ async def update_endpoint(endpoint_id: int, data: dict) -> dict | None:
             )
             await db.commit()
         rows = await db.execute_fetchall(
-            "SELECT id, url, api_key, active_model_config_id FROM endpoints WHERE id = ?",
+            "SELECT id, url, api_key, active_model_config_id, agent_active_model_config_id FROM endpoints WHERE id = ?",
             (endpoint_id,),
         )
         return dict(rows[0]) if rows else None
@@ -1032,7 +1173,7 @@ async def get_model_configs(endpoint_id: int) -> list[dict]:
 async def create_model_config(endpoint_id: int, data: dict) -> dict:
     async with get_db() as db:
         cur = await db.execute(
-            "INSERT INTO model_configs (endpoint_id, model_name, system_prompt, temperature, min_p, top_k, top_p, repetition_penalty, max_tokens) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO model_configs (endpoint_id, model_name, system_prompt, temperature, min_p, top_k, top_p, repetition_penalty, max_tokens, role) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 endpoint_id,
                 data.get("model_name", "default"),
@@ -1043,6 +1184,7 @@ async def create_model_config(endpoint_id: int, data: dict) -> dict:
                 data.get("top_p", 0.95),
                 data.get("repetition_penalty", 1.0),
                 data.get("max_tokens", 4096),
+                data.get("role", "writer"),
             ),
         )
         await db.commit()
@@ -2088,7 +2230,9 @@ async def delete_message_with_descendants(cid: str, msg_id: int) -> bool:
         return True
 
 
-async def resolve_char_context(conv: dict, settings: dict) -> tuple[str, str, str]:
+async def resolve_char_context(
+    conv: dict, settings: dict, shared_key: str = "shared_system_prompt"
+) -> tuple[str, str, str]:
     """Load character card data and resolve the effective system prompt, persona, and example messages.
 
     Combines shared_system_prompt (global) with system_prompt (model-specific).
@@ -2097,7 +2241,7 @@ async def resolve_char_context(conv: dict, settings: dict) -> tuple[str, str, st
     Returns (system_prompt, char_persona, mes_example).
     """
     # Combine shared (global) + model-specific system prompts
-    shared = settings.get("shared_system_prompt", "")
+    shared = settings.get(shared_key, "")
     model_specific = settings.get("system_prompt", "")
 
     if shared and model_specific:
@@ -2172,7 +2316,7 @@ async def reset_to_defaults() -> None:
         )
         endpoint_id = cur_ep.lastrowid
         cur_mc = await db.execute(
-            "INSERT INTO model_configs (endpoint_id, model_name, system_prompt, temperature, min_p, top_k, top_p, repetition_penalty, max_tokens) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO model_configs (endpoint_id, model_name, system_prompt, temperature, min_p, top_k, top_p, repetition_penalty, max_tokens, role) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'writer')",
             (
                 endpoint_id,
                 s["model_name"],
@@ -2186,9 +2330,23 @@ async def reset_to_defaults() -> None:
             ),
         )
         model_config_id = cur_mc.lastrowid
+        cur_amc = await db.execute(
+            "INSERT INTO model_configs (endpoint_id, model_name, system_prompt, temperature, min_p, top_k, top_p, repetition_penalty, max_tokens, role) VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, 'agent')",
+            (
+                endpoint_id,
+                s["model_name"],
+                s["temperature"],
+                s["min_p"],
+                s["top_k"],
+                s["top_p"],
+                s["repetition_penalty"],
+                s["max_tokens"],
+            ),
+        )
+        agent_config_id = cur_amc.lastrowid
         await db.execute(
-            "UPDATE endpoints SET active_model_config_id = ? WHERE id = ?",
-            (model_config_id, endpoint_id),
+            "UPDATE endpoints SET active_model_config_id = ?, agent_active_model_config_id = ? WHERE id = ?",
+            (model_config_id, agent_config_id, endpoint_id),
         )
         await db.execute(
             "UPDATE settings SET active_endpoint_id = ? WHERE id = 1",
