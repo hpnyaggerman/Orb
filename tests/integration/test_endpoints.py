@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+
 async def test_delete_endpoint_removes_from_db(client, db):
     """Test DELETE /api/endpoints/{id} removes endpoint"""
     # Create an endpoint

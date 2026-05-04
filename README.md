@@ -25,9 +25,9 @@ The user never sees the agentic layer. The writer model doesn't know it's being 
 
 ## Architecture
 
-### Single-Model, Three-Pass Design
+### Three-Pass Design
 
-The system uses a three-pass architecture for each user message:
+The system uses a three-pass architecture, with the agent and writer optionally being the same or different models:
 
 1. **Director Pass** - Tool-calling phase where the LLM selects moods, plot direction, and potentially rewrites user prompts
 2. **Writer Pass** - Story generation phase where the LLM writes the actual roleplay response
@@ -52,17 +52,17 @@ For optimal KV cache reuse, the following will remain consistent across passes:
 - Tool schemas affect the model's internal representation
 - Inconsistent tool schemas break KV cache alignment
 
-## Drawbacks
-
-1. **Speed**: Multiple passes will obviously have a longer time to final response
-2. **Cost**: Neligible cost increase, which comes naturally with multiple passes, somewhat alleviated by KV cache reuse strategy
-
 ## Design Principles
 
 1. Prioritize small models - if a feature fails half of the time on Gemma-4-26B4A, it will be scrapped
 2. Only use agentic functionalities when absolutely needed - we will not have useless tools like `dice_roll`
 3. Scanning should be algorithmic, avoid making LLMs eyeball for errors
-4. Keep agentic scopes small, avoid giving the agent too much freedom of choice
+4. Keep agentic scope small, avoid giving the agent too much freedom of choice
+
+## Drawbacks
+
+1. **Speed**: Multiple passes will obviously have a longer time to final response
+2. **Cost**: Neligible cost increase, which comes naturally with multiple passes, somewhat alleviated by KV cache reuse strategy
 
 ## Requirements
 1. A model with solid tool/function calling capabilities (recommended: Gemma 4)
