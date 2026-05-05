@@ -55,9 +55,9 @@ test_image() {
     local tag="orb-app:$version"
     local container_name="orb-test-$version"
     if [[ "$version" == "3.9" ]]; then
-        local host_port=8899
+        local host_port=9899
     elif [[ "$version" == "3.14" ]]; then
-        local host_port=8898
+        local host_port=9898
     else
         local host_port=0 # let Docker choose
     fi

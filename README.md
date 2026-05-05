@@ -68,3 +68,7 @@ For optimal KV cache reuse, the following will remain consistent across passes:
 1. A model with solid tool/function calling capabilities (recommended: Gemma 4)
 2. OpenAI-compatible LLM inference backend API that supports prompt-caching
 3. Python 3.9+
+
+## Discussions
+
+Ideas, help requests, and questions go here: https://github.com/OrbFrontend/Orb/discussions
