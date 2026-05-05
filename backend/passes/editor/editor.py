@@ -24,6 +24,7 @@ from ...tool_defs import (
     enabled_schemas,
 )
 from ...prompt_builder import build_editor_prompt
+from ...pipeline_utils import extract_hyperparams
 
 logger = logging.getLogger(__name__)
 
@@ -260,6 +261,24 @@ def apply_patches(draft: str, patches: list[dict]) -> tuple[str, list[str]]:
 # ── Editor pass (ReAct loop) ─────────────────────────────────────────────────
 
 
+def _editor_done_event(
+    draft: str | None,
+    debug_parts: list[str],
+    t0: float,
+    tool_calls: list[dict] | None = None,
+) -> dict:
+    """Build a done event dict for the editor pass."""
+    event = {
+        "type": "done",
+        "draft": draft,
+        "debug": "\n---\n".join(debug_parts),
+        "elapsed": int((time.monotonic() - t0) * 1000),
+    }
+    if tool_calls is not None:
+        event["tool_calls"] = tool_calls
+    return event
+
+
 async def editor_pass(
     client: LLMClient,
     prefix: list[dict],
@@ -367,22 +386,12 @@ async def editor_pass(
 
     if report.is_clean and not length_guard_triggered:
         logger.info("Editor: audit clean and no length guard, skipping LLM loop")
-        yield {
-            "type": "done",
-            "draft": None,
-            "debug": "\n---\n".join(debug_parts),
-            "elapsed": int((time.monotonic() - t0) * 1000),
-        }
+        yield _editor_done_event(None, debug_parts, t0)
         return
 
     if not editor_tools:
         logger.info("Editor: no editor tools applicable, skipping LLM loop")
-        yield {
-            "type": "done",
-            "draft": None,
-            "debug": "\n---\n".join(debug_parts),
-            "elapsed": int((time.monotonic() - t0) * 1000),
-        }
+        yield _editor_done_event(None, debug_parts, t0)
         return
 
     # ── Build message context
@@ -441,22 +450,9 @@ async def editor_pass(
 
             resp: dict = {}
             try:
-                hyperparams = {
-                    k: v
-                    for k in [
-                        "temperature",
-                        "max_tokens",
-                        "top_p",
-                        "min_p",
-                        "top_k",
-                        "repetition_penalty",
-                    ]
-                    if (v := settings.get(k)) is not None
-                }
-                if "temperature" not in hyperparams:
-                    hyperparams["temperature"] = 0.25
-                if "max_tokens" not in hyperparams:
-                    hyperparams["max_tokens"] = 8192
+                hyperparams = extract_hyperparams(
+                    settings, defaults={"temperature": 0.25, "max_tokens": 8192}
+                )
                 async for event in client.complete(
                     messages=msgs,
                     model=model or settings["model_name"],
@@ -683,13 +679,12 @@ async def editor_pass(
         changed,
         len(current_draft),
     )
-    yield {
-        "type": "done",
-        "draft": current_draft if changed else None,
-        "debug": "\n---\n".join(debug_parts),
-        "elapsed": elapsed,
-        "tool_calls": all_calls,
-    }
+    yield _editor_done_event(
+        current_draft if changed else None,
+        debug_parts,
+        t0,
+        all_calls,
+    )
 
 
 # ── Helpers (private) ─────────────────────────────────────────────────────────

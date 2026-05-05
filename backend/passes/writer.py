@@ -10,6 +10,7 @@ from typing import AsyncIterator, List, Optional
 
 from ..llm_client import LLMClient, reasoning_cfg
 from ..tool_defs import enabled_schemas
+from ..pipeline_utils import extract_hyperparams, build_multimodal_content
 
 logger = logging.getLogger(__name__)
 
@@ -41,17 +42,7 @@ def build_writer_content(
         tail += f"**Keep your response under {max_words} words and {max_paragraphs} paragraphs.**\n\n"
     tail += "___\n\n" + effective_msg + "\n\n"
 
-    if attachments:
-        parts: list = [{"type": "text", "text": tail}]
-        for att in attachments:
-            mime = att.get("mime_type", att.get("mime", "image/jpeg"))
-            b64 = att.get("data_b64", att.get("b64", ""))
-            if not b64:
-                continue
-            url = f"data:{mime};base64,{b64}"
-            parts.append({"type": "image_url", "image_url": {"url": url}})
-        return parts
-    return tail
+    return build_multimodal_content(tail, attachments)
 
 
 async def _writer_pass(
@@ -82,18 +73,7 @@ async def _writer_pass(
 
     msgs = prefix + [{"role": "user", "content": content}]
 
-    params = {
-        k: v
-        for k in [
-            "temperature",
-            "max_tokens",
-            "top_p",
-            "min_p",
-            "top_k",
-            "repetition_penalty",
-        ]
-        if (v := settings.get(k)) is not None
-    }
+    hyperparams = extract_hyperparams(settings)
     schemas = enabled_schemas(enabled_tools)
     logger.info(
         "Writer pass: tools included=%s",
@@ -106,7 +86,7 @@ async def _writer_pass(
         kv_tracker.record("writer", msgs, schemas if schemas else None)
 
     async for item in client.complete(
-        messages=msgs, model=settings["model_name"], **extra, **params
+        messages=msgs, model=settings["model_name"], **extra, **hyperparams
     ):
         if item["type"] == "done":
             return

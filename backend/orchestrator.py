@@ -19,6 +19,7 @@ from .prompt_builder import (
     compute_lorebook_injection_block,
 )
 from .kv_tracker import _KVCacheTracker
+from .pipeline_utils import extract_hyperparams
 from .passes.director import _director_pass
 from .passes.writer import _writer_pass, build_writer_content
 from .passes.editor import editor_pass
@@ -382,35 +383,14 @@ def _ctx_names(ctx: dict) -> tuple[str, str]:
     return user_name, ctx["conv"]["character_name"]
 
 
-def _build_prefix_from_ctx(ctx: dict, history: list[dict]) -> list[dict]:
-    """Build the LLM prefix from a pipeline-context dict."""
-    conv = ctx["conv"]
-    active_persona = ctx.get("active_persona")
-
-    if active_persona:
-        user_name = active_persona.get("name", "User")
-        user_description = active_persona.get("description", "")
-    else:
-        user_name = ctx["settings"].get("user_name", "User")
-        user_description = ctx["settings"].get("user_description", "")
-
-    return build_prefix(
-        ctx["system_prompt"],
-        conv["character_name"],
-        ctx["char_persona"],
-        conv["character_scenario"],
-        ctx["mes_example"],
-        conv.get("post_history_instructions", ""),
-        history,
-        user_name,
-        user_description,
-    )
-
-
-def _build_prefix_with_system_prompt(
-    ctx: dict, history: list[dict], system_prompt: str
+def _build_prefix_from_ctx(
+    ctx: dict, history: list[dict], *, system_prompt: str | None = None
 ) -> list[dict]:
-    """Build the LLM prefix using a custom system prompt instead of ctx['system_prompt']."""
+    """Build the LLM prefix from a pipeline-context dict.
+
+    When *system_prompt* is provided it overrides ``ctx["system_prompt"]``
+    (used for the agent prefix when it has its own system prompt).
+    """
     conv = ctx["conv"]
     active_persona = ctx.get("active_persona")
 
@@ -422,7 +402,7 @@ def _build_prefix_with_system_prompt(
         user_description = ctx["settings"].get("user_description", "")
 
     return build_prefix(
-        system_prompt,
+        system_prompt if system_prompt is not None else ctx["system_prompt"],
         conv["character_name"],
         ctx["char_persona"],
         conv["character_scenario"],
@@ -432,6 +412,79 @@ def _build_prefix_with_system_prompt(
         user_name,
         user_description,
     )
+
+
+def _build_prefixes(
+    ctx: dict, history: list[dict]
+) -> tuple[list[dict], list[dict] | None]:
+    """Build (prefix, agent_prefix) from *ctx* and *history*.
+
+    *agent_prefix* is ``None`` when no separate agent system prompt is configured.
+    """
+    prefix = _build_prefix_from_ctx(ctx, history)
+    agent_sp = ctx.get("agent_system_prompt")
+    agent_prefix = (
+        _build_prefix_from_ctx(ctx, history, system_prompt=agent_sp)
+        if agent_sp is not None
+        else None
+    )
+    return prefix, agent_prefix
+
+
+def _compute_lorebook(ctx: dict, messages: list[dict]) -> str:
+    """Compute the lorebook injection block for a sequence of *messages*."""
+    user_name, char_name = _ctx_names(ctx)
+    return compute_lorebook_injection_block(
+        messages,
+        ctx.get("lorebook_entries", []),
+        user_name,
+        char_name,
+    )
+
+
+async def _resolve_target_and_parent(
+    conversation_id: str, assistant_msg_id: int
+) -> tuple[dict, dict] | str:
+    """Validate *assistant_msg_id* and load its parent user message.
+
+    Returns ``(target, user_msg)`` on success, or an error string on failure.
+    """
+    target = await db.get_message_by_id(assistant_msg_id)
+    if (
+        not target
+        or target["conversation_id"] != conversation_id
+        or target["role"] != "assistant"
+    ):
+        return "Invalid target message"
+    user_msg_id = target["parent_id"]
+    user_msg = await db.get_message_by_id(user_msg_id) if user_msg_id else None
+    if not user_msg:
+        return "Parent user message not found"
+    return target, user_msg
+
+
+async def _prepare_regen_context(
+    ctx: dict, conversation_id: str, target: dict, user_msg: dict
+) -> tuple[list[dict], list[dict]]:
+    """Prepare history and attachments for a regeneration pass.
+
+    Also resets director moods to the pre-turn baseline.
+    Returns ``(history, attachments)``.
+    """
+    history = (
+        await db._get_path_to_leaf(conversation_id, user_msg.get("parent_id"))
+        if user_msg.get("parent_id")
+        else []
+    )
+    moods_before = await db.get_moods_before_turn(
+        conversation_id, target["turn_index"] - 1
+    )
+    ctx["director"]["active_moods"] = moods_before
+    user_msg_id = target["parent_id"]
+    attachments = (
+        await db.get_attachments_for_message(user_msg_id) if user_msg_id else []
+    )
+    return history, attachments
 
 
 async def _persist_result(
@@ -667,22 +720,13 @@ async def handle_turn(
             await db.set_active_leaf(conversation_id, user_msg_id)
             yield {"event": "user_message_created", "data": {"id": user_msg_id}}
 
-        prefix = _build_prefix_from_ctx(ctx, history)
-        agent_prefix = None
-        if ctx.get("agent_system_prompt") is not None:
-            agent_prefix = _build_prefix_with_system_prompt(
-                ctx, history, ctx["agent_system_prompt"]
-            )
+        prefix, agent_prefix = _build_prefixes(ctx, history)
         asst_turn = next_turn + (0 if skip_user_persist else 1)
 
         # Compute lorebook injection — include the current user message so its
         # keywords are scanned, not just prior history.
-        _user_name, _char_name = _ctx_names(ctx)
-        lorebook_block = compute_lorebook_injection_block(
-            history + [{"role": "user", "content": user_message}],
-            ctx.get("lorebook_entries", []),
-            _user_name,
-            _char_name,
+        lorebook_block = _compute_lorebook(
+            ctx, history + [{"role": "user", "content": user_message}]
         )
 
         async def _on_result(res, asst_id):
@@ -740,55 +784,20 @@ async def handle_regenerate(
             client_ref.append(ctx["client"])
 
         settings = ctx["settings"]
-        target = await db.get_message_by_id(assistant_msg_id)
-        if (
-            not target
-            or target["conversation_id"] != conversation_id
-            or target["role"] != "assistant"
-        ):
-            yield {"event": "error", "data": "Invalid target message"}
+        result = await _resolve_target_and_parent(conversation_id, assistant_msg_id)
+        if isinstance(result, str):
+            yield {"event": "error", "data": result}
             return
+        target, user_msg = result
 
         user_msg_id = target["parent_id"]
-        user_msg = await db.get_message_by_id(user_msg_id) if user_msg_id else None
-        if not user_msg:
-            yield {"event": "error", "data": "Parent user message not found"}
-            return
-
-        history = (
-            await db._get_path_to_leaf(conversation_id, user_msg.get("parent_id"))
-            if user_msg.get("parent_id")
-            else []
+        history, attachments = await _prepare_regen_context(
+            ctx, conversation_id, target, user_msg
         )
-        prefix = _build_prefix_from_ctx(ctx, history)
-        agent_prefix = None
-        if ctx.get("agent_system_prompt") is not None:
-            agent_prefix = _build_prefix_with_system_prompt(
-                ctx, history, ctx["agent_system_prompt"]
-            )
+        prefix, agent_prefix = _build_prefixes(ctx, history)
 
-        # Get the moods that were active BEFORE this turn (not the current state).
-        # Logs are keyed by the user's turn_index (= assistant turn_index - 1), so
-        # querying with target["turn_index"] would return the log for THIS very turn
-        # (the previously swiped message). Subtracting 1 skips that entry and returns
-        # the grandparent's moods — the correct baseline for the director prompt.
-        moods_before = await db.get_moods_before_turn(
-            conversation_id, target["turn_index"] - 1
-        )
-        ctx["director"]["active_moods"] = moods_before
-
-        attachments = (
-            await db.get_attachments_for_message(user_msg_id) if user_msg_id else []
-        )
-
-        # Compute lorebook injection for regenerate — include the user message
-        # being regenerated so its keywords are scanned.
-        _user_name, _char_name = _ctx_names(ctx)
-        lorebook_block = compute_lorebook_injection_block(
-            history + [{"role": "user", "content": user_msg["content"]}],
-            ctx.get("lorebook_entries", []),
-            _user_name,
-            _char_name,
+        lorebook_block = _compute_lorebook(
+            ctx, history + [{"role": "user", "content": user_msg["content"]}]
         )
 
         pipeline = _run_pipeline(
@@ -833,25 +842,15 @@ async def handle_super_regenerate(
             client_ref.append(ctx["client"])
 
         settings = ctx["settings"]
-        target = await db.get_message_by_id(assistant_msg_id)
-        if (
-            not target
-            or target["conversation_id"] != conversation_id
-            or target["role"] != "assistant"
-        ):
-            yield {"event": "error", "data": "Invalid target message"}
+        result = await _resolve_target_and_parent(conversation_id, assistant_msg_id)
+        if isinstance(result, str):
+            yield {"event": "error", "data": result}
             return
+        target, user_msg = result
 
         user_msg_id = target["parent_id"]
-        user_msg = await db.get_message_by_id(user_msg_id) if user_msg_id else None
-        if not user_msg:
-            yield {"event": "error", "data": "Parent user message not found"}
-            return
-
-        history = (
-            await db._get_path_to_leaf(conversation_id, user_msg.get("parent_id"))
-            if user_msg.get("parent_id")
-            else []
+        history, attachments = await _prepare_regen_context(
+            ctx, conversation_id, target, user_msg
         )
 
         # Extend history to include the original user+assistant exchange so the
@@ -860,22 +859,7 @@ async def handle_super_regenerate(
             {"role": "user", "content": user_msg["content"]},
             {"role": "assistant", "content": target["content"]},
         ]
-        prefix = _build_prefix_from_ctx(ctx, extended_history)
-        agent_prefix = None
-        if ctx.get("agent_system_prompt") is not None:
-            agent_prefix = _build_prefix_with_system_prompt(
-                ctx, extended_history, ctx["agent_system_prompt"]
-            )
-
-        # Reset moods to pre-turn baseline (same logic as handle_regenerate).
-        moods_before = await db.get_moods_before_turn(
-            conversation_id, target["turn_index"] - 1
-        )
-        ctx["director"]["active_moods"] = moods_before
-
-        attachments = (
-            await db.get_attachments_for_message(user_msg_id) if user_msg_id else []
-        )
+        prefix, agent_prefix = _build_prefixes(ctx, extended_history)
 
         # rewrite_user_prompt must not alter the OOC steering message.
         super_regen_settings = {
@@ -886,12 +870,8 @@ async def handle_super_regenerate(
             },
         }
 
-        _user_name, _char_name = _ctx_names(ctx)
-        lorebook_block = compute_lorebook_injection_block(
-            extended_history + [{"role": "user", "content": _SUPER_REGEN_MSG}],
-            ctx.get("lorebook_entries", []),
-            _user_name,
-            _char_name,
+        lorebook_block = _compute_lorebook(
+            ctx, extended_history + [{"role": "user", "content": _SUPER_REGEN_MSG}]
         )
 
         # Collect audit context from history only — exclude target["content"] so
@@ -944,20 +924,11 @@ async def handle_magic_rewrite(
             client_ref.append(ctx["client"])
 
         settings = ctx["settings"]
-        target = await db.get_message_by_id(assistant_msg_id)
-        if (
-            not target
-            or target["conversation_id"] != conversation_id
-            or target["role"] != "assistant"
-        ):
-            yield {"event": "error", "data": "Invalid target message"}
+        result = await _resolve_target_and_parent(conversation_id, assistant_msg_id)
+        if isinstance(result, str):
+            yield {"event": "error", "data": result}
             return
-
-        user_msg_id = target["parent_id"]
-        user_msg = await db.get_message_by_id(user_msg_id) if user_msg_id else None
-        if not user_msg:
-            yield {"event": "error", "data": "Parent user message not found"}
-            return
+        target, user_msg = result
 
         history = (
             await db._get_path_to_leaf(conversation_id, user_msg.get("parent_id"))
@@ -974,18 +945,7 @@ async def handle_magic_rewrite(
         direction_msg = f"[OOC: Rewrite the above response. Direction: {direction}]"
         msgs = prefix + [{"role": "user", "content": direction_msg}]
 
-        params = {
-            k: v
-            for k in [
-                "temperature",
-                "max_tokens",
-                "top_p",
-                "min_p",
-                "top_k",
-                "repetition_penalty",
-            ]
-            if (v := settings.get(k)) is not None
-        }
+        hyperparams = extract_hyperparams(settings)
 
         writer_reasoning_on = bool(
             (settings.get("reasoning_enabled_passes") or {}).get("writer", False)
@@ -994,7 +954,7 @@ async def handle_magic_rewrite(
 
         accumulated = ""
         async for item in ctx["client"].complete(
-            messages=msgs, model=settings["model_name"], **extra, **params
+            messages=msgs, model=settings["model_name"], **extra, **hyperparams
         ):
             if item["type"] == "done":
                 break

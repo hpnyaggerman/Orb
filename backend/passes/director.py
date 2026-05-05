@@ -19,6 +19,7 @@ from ..tool_defs import (
     build_direct_scene_tool,
 )
 from ..prompt_builder import build_tool_prompt
+from ..pipeline_utils import extract_hyperparams, build_multimodal_content
 
 logger = logging.getLogger(__name__)
 
@@ -137,18 +138,7 @@ async def _director_pass(
         tail = (
             "___\n\n" + lorebook_block + "\n\n" if lorebook_block else ""
         ) + tool_tail
-        if attachments:
-            parts = [{"type": "text", "text": tail}]
-            for att in attachments:
-                mime = att.get("mime_type", att.get("mime", "image/jpeg"))
-                b64 = att.get("data_b64", att.get("b64", ""))
-                if not b64:
-                    continue
-                url = f"data:{mime};base64,{b64}"
-                parts.append({"type": "image_url", "image_url": {"url": url}})
-            content = parts
-        else:
-            content = tail
+        content = build_multimodal_content(tail, attachments)
         msgs = prefix + [{"role": "user", "content": content}]
         logger.info(
             "Agent tool=%s prompt:\n%s",
@@ -162,22 +152,9 @@ async def _director_pass(
             reasoning_params = reasoning_cfg(
                 reasoning_on and name != "rewrite_user_prompt"
             )
-            hyperparams = {
-                k: v
-                for k in [
-                    "temperature",
-                    "max_tokens",
-                    "top_p",
-                    "min_p",
-                    "top_k",
-                    "repetition_penalty",
-                ]
-                if (v := settings.get(k)) is not None
-            }
-            if "temperature" not in hyperparams:
-                hyperparams["temperature"] = 0.25
-            if "max_tokens" not in hyperparams:
-                hyperparams["max_tokens"] = 8192
+            hyperparams = extract_hyperparams(
+                settings, defaults={"temperature": 0.25, "max_tokens": 8192}
+            )
             async for event in client.complete(
                 messages=msgs,
                 model=model or settings["model_name"],
