@@ -141,14 +141,14 @@ def _normalize(word: str) -> str:
 def _get_template(sentence: str, max_words: int) -> str | None:
     """Extract the template (first N words) from a sentence."""
     words = sentence.split()
-    if not words:
+    if len(words) < 3:
         return None
     # Take up to max_words words
     template_words = words[:max_words]
     normalized = [_normalize(w) for w in template_words]
     # Filter out empty words after normalization
     normalized = [w for w in normalized if w]
-    if not normalized:
+    if len(normalized) < 3:
         return None
     return " ".join(normalized)
 

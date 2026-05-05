@@ -23,13 +23,13 @@ class TestTruePositives:
     """These MUST be detected."""
 
     def test_same_template_three_times(self):
-        """Simple exact template repetition with max_words=2."""
+        """Simple exact template repetition with max_words=3."""
         text = (
             "The question hangs in the air. "
             "The question is heavy. "
             "The question remains."
         )
-        result = detect_template_repetition(text, max_words=2, flag_threshold=3)
+        result = detect_template_repetition(text, max_words=3, flag_threshold=3)
         assert len(result.flagged_templates) >= 1
         flagged = result.flagged_templates[0]
         assert "the question" in flagged.template
@@ -44,7 +44,7 @@ class TestTruePositives:
             "The question is heavy.\n\n"
             "The question remains unanswered."
         )
-        result = detect_template_repetition(text, max_words=2, flag_threshold=3)
+        result = detect_template_repetition(text, max_words=3, flag_threshold=3)
         assert len(result.flagged_templates) >= 1
         # Find the flagged template about "the question"
         question_templates = [
@@ -63,8 +63,8 @@ class TestTruePositives:
             "She looks at the clock. "
             "She looks away."
         )
-        result = detect_template_repetition(text, max_words=2, flag_threshold=3)
-        # Should detect "the wind" and "she looks" templates
+        result = detect_template_repetition(text, max_words=3, flag_threshold=3)
+        # Should detect "the wind blows" and "she looks out" templates
         templates = [ft.template for ft in result.flagged_templates]
         assert any("the wind" in t for t in templates)
         assert any("she looks" in t for t in templates)
@@ -150,10 +150,9 @@ class TestEdgeCases:
         text = '"Hello there," he said. "How are you?" she asked.'
         result = detect_template_repetition(text)
         # Dialogue is stripped, leaving only "he said" and "she asked" as narration fragments
-        # These short fragments are valid sentences for analysis
+        # These short fragments are below the 3-word minimum and are skipped
         assert result.total_sentences == 2
-        assert "he said" in result.all_templates
-        assert "she asked" in result.all_templates
+        assert result.all_templates == {}
 
     def test_mixed_dialogue_and_narration(self):
         """Should analyze only narration, ignoring dialogue."""
@@ -162,7 +161,7 @@ class TestEdgeCases:
             '"What?" she replied. The question was heavy. '
             '"I see," he nodded. The question remained.'
         )
-        result = detect_template_repetition(text, max_words=2, flag_threshold=3)
+        result = detect_template_repetition(text, max_words=3, flag_threshold=3)
         # Should find the "the question" template in narration
         assert len(result.flagged_templates) >= 1
         flagged = result.flagged_templates[0]
@@ -175,8 +174,8 @@ class TestEdgeCases:
             "It was the best of times it was the worst of times. "
             "It was the age of wisdom it was the age of foolishness."
         )
-        # With max_words=2, should match "it was"
-        result_small = detect_template_repetition(text, max_words=2, flag_threshold=2)
+        # With max_words=3, should match "it was the"
+        result_small = detect_template_repetition(text, max_words=3, flag_threshold=2)
         # With max_words=4, might match more specifically
         result_large = detect_template_repetition(text, max_words=4, flag_threshold=2)
 
@@ -191,7 +190,7 @@ class TestEdgeCases:
             "THE QUESTION is heavy. "
             "the question remains."
         )
-        result = detect_template_repetition(text, max_words=2, flag_threshold=3)
+        result = detect_template_repetition(text, max_words=3, flag_threshold=3)
         # Should cluster these together
         assert len(result.flagged_templates) >= 1
         assert result.flagged_templates[0].count >= 3
@@ -203,7 +202,7 @@ class TestEdgeCases:
             "The test sentence two. "
             "The test sentence three."
         )
-        result = detect_template_repetition(text, max_words=2, flag_threshold=3)
+        result = detect_template_repetition(text, max_words=3, flag_threshold=3)
         assert len(result.flagged_templates) >= 1
 
         ft = result.flagged_templates[0]
