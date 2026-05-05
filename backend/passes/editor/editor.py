@@ -384,8 +384,11 @@ async def editor_pass(
                 f"Length guard triggered: {word_count} words (max {max_words})"
             )
 
-    if report.is_clean and not length_guard_triggered:
-        logger.info("Editor: audit clean and no length guard, skipping LLM loop")
+    if report.total_issues <= 1 and not length_guard_triggered:
+        logger.info(
+            "Editor: %d issue(s) within threshold and no length guard, skipping LLM loop",
+            report.total_issues,
+        )
         yield _editor_done_event(None, debug_parts, t0)
         return
 
@@ -535,7 +538,7 @@ async def editor_pass(
                     report = AuditReport.clean()
                     report_text = ""
 
-                if report.is_clean:
+                if report.total_issues <= 1:
                     break
                 if _structural_rewrite_needed(report):
                     editor_tools = [EDITOR_REWRITE_TOOL]
@@ -619,11 +622,11 @@ async def editor_pass(
                 f"Post-iteration {iteration + 1} audit ({report.total_issues} issues):\n{report_text}"
             )
 
-            if report.is_clean:
+            if report.total_issues <= 1:
                 if not length_guard_triggered:
                     break
                 logger.info(
-                    "Editor: audit clean, length guard still pending — queuing rewrite"
+                    "Editor: audit within threshold, length guard still pending — queuing rewrite"
                 )
                 editor_tools = [EDITOR_REWRITE_TOOL]
 
