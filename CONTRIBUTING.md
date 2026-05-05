@@ -27,7 +27,8 @@ If any of these fail, fix it before submitting.
 
 ## Quick rules
 
-- Small models first. If it doesn't work on something like Gemma 4 26B4A, it probably doesn't belong here.
+- Small models first. If a feature doesn't work on something like Gemma 4 26B4A, it probably doesn't belong here.
 - Only use agentic functionalities when absolutely needed - we will not have useless tools like `dice_roll`
 - Keep the agent's scope tight - less freedom, fewer hallucinations.
-- Prefer algorithmic scanning over making the LLM eyeball things.
+- If something can be done with an algorithm, don't use an LLM for it.
+- AI-generated code is accepted. It will be manually reviewed just like human written code. But must be subjected to more testing.
