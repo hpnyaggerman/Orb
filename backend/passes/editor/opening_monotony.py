@@ -2,7 +2,7 @@
 opening_monotony.py — Detect repetitive sentence openings in LLM output.
 
 Public API (unchanged from the original):
-    detect_opening_monotony(text, n_words=1, min_consecutive=3) -> MonotonyResult
+    detect_opening_monotony(text, n_words=1, min_consecutive=4) -> MonotonyResult
     MonotonyResult, FlaggedOpener  (dataclasses)
 
 Internals rewritten:
@@ -135,7 +135,7 @@ def _get_opener(sentence: str, n_words: int) -> str | None:
 def detect_opening_monotony(
     text: str,
     n_words: int = 1,
-    min_consecutive: int = 3,
+    min_consecutive: int = 4,
 ) -> MonotonyResult:
     sentences = _split_sentences(text)
     if DEBUG:
