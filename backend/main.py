@@ -85,6 +85,8 @@ from .database import (
     update_lorebook_entry,
     delete_lorebook_entry,
     get_active_lorebook_entries,
+    resolve_char_context,
+    get_user_persona,
 )
 import asyncio
 from .orchestrator import (
@@ -96,6 +98,7 @@ from .orchestrator import (
 from .llm_client import LLMClient
 from .endpoint_profiles import profile_for
 from . import tavern_cards
+from . import prompt_builder
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -1521,6 +1524,94 @@ async def api_get_logs(cid: str):
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return await get_conversation_logs(cid)
+
+
+@app.get("/api/conversations/{cid}/context-size")
+async def api_get_context_size(cid: str):
+    conv = await get_conversation(cid)
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    settings = await get_settings()
+    messages = await get_messages(cid)
+    director = await get_director_state(cid) or {}
+    director_frags = [
+        f for f in await get_director_fragments() if f.get("enabled", True)
+    ]
+    mood_frags = [f for f in await get_mood_fragments() if f.get("enabled", True)]
+    lorebook_entries = await get_active_lorebook_entries()
+
+    # Resolve persona
+    persona_id = settings.get("active_persona_id")
+    active_persona = await get_user_persona(persona_id) if persona_id else None
+    user_name = (
+        active_persona["name"] if active_persona else settings.get("user_name", "User")
+    )
+    user_desc = (
+        active_persona.get("description", "")
+        if active_persona
+        else settings.get("user_description", "")
+    )
+
+    # Resolve character context
+    system_prompt, char_persona, mes_example = await resolve_char_context(
+        conv, settings
+    )
+
+    def _resolve(text):
+        return prompt_builder.replace_placeholders(text, user_name, conv["character_name"])
+
+    # Measure each component individually
+    sys_text = system_prompt or ""
+    persona_text = _resolve(char_persona or "")
+    scenario_text = _resolve(conv.get("character_scenario", "") or "")
+    mes_text = _resolve(mes_example or "")
+    post_text = _resolve(conv.get("post_history_instructions", "") or "")
+    user_persona_text = (
+        f"## User: {user_name}\n{_resolve(user_desc)}" if user_desc else ""
+    )
+    msg_chars = sum(len(m.get("content", "") or "") for m in messages)
+
+    # Director injection
+    active_moods = director.get("active_moods", []) if director else []
+    inj_block = prompt_builder.compute_style_injection_block(
+        active_moods,
+        active_moods,
+        mood_frags,
+        director_frags,
+        bool(settings.get("enable_agent", 1)),
+        {},
+    )
+
+    # Lorebook injection
+    lorebook_block = prompt_builder.compute_lorebook_injection_block(
+        lorebook_entries, messages[-6:] if len(messages) >= 6 else messages
+    )
+
+    def est(chars):
+        return max(1, round(chars / 3.5))
+
+    breakdown = {}
+    for label, chars in [
+        ("system_prompt", len(sys_text)),
+        ("char_persona", len(persona_text)),
+        ("scenario", len(scenario_text)),
+        ("mes_example", len(mes_text)),
+        ("user_persona", len(user_persona_text)),
+        ("messages", msg_chars),
+        ("post_history", len(post_text)),
+        ("director_injection", len(inj_block)),
+        ("lorebook", len(lorebook_block)),
+    ]:
+        breakdown[label] = {"chars": chars, "tokens_est": est(chars)}
+
+    total_chars = sum(v["chars"] for v in breakdown.values())
+    return {
+        "total_chars": total_chars,
+        "total_tokens_est": est(total_chars),
+        "breakdown": breakdown,
+        "message_count": len(messages),
+    }
 
 
 # Chat (SSE streaming) ──
