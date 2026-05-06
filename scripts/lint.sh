@@ -16,3 +16,7 @@ pip install -q -r requirements-dev.txt
 
 echo ""
 python -m flake8 backend/ tests/ "$@"
+
+echo ""
+echo "Running Pylance type check on backend..."
+python -m pyright backend/ "$@"
