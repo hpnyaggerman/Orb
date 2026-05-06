@@ -1830,7 +1830,7 @@ export async function speakMessageAction(msgId) {
     renderMessages();
     toast(S.ttsError, "error");
   }
-};
+}
 
 export function stopSpeaking() {
   if (_currentAudio) {
@@ -1840,4 +1840,4 @@ export function stopSpeaking() {
   S.speakingMsgId = null;
   S.ttsLoading = false;
   renderMessages();
-};
+}
