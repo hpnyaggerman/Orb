@@ -63,7 +63,7 @@ async def test_context_size_returns_breakdown(client):
     assert set(bd.keys()) == expected_keys
 
     # Each component has chars and tokens_est
-    for key, val in bd.items():
+    for _, val in bd.items():
         assert "chars" in val
         assert "tokens_est" in val
         assert isinstance(val["chars"], int)

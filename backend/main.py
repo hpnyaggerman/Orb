@@ -1559,7 +1559,9 @@ async def api_get_context_size(cid: str):
     )
 
     def _resolve(text):
-        return prompt_builder.replace_placeholders(text, user_name, conv["character_name"])
+        return prompt_builder.replace_placeholders(
+            text, user_name, conv["character_name"]
+        )
 
     # Measure each component individually
     sys_text = system_prompt or ""
