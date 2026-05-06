@@ -67,7 +67,14 @@ async def _run_pipeline(
     editor_reasoning_on = bool(reasoning_passes.get("editor", False))
 
     active_moods = director["active_moods"]
-    progressive_state: dict = director.get("progressive_fields", {})
+    _valid_progressive_ids = {
+        df["id"] for df in director_fragments if df.get("field_type") == "progressive"
+    }
+    progressive_state: dict = {
+        k: v
+        for k, v in director.get("progressive_fields", {}).items()
+        if k in _valid_progressive_ids
+    }
     agent_raw, calls, latency = "", [], 0
     rewritten_msg: str | None = None
     extra_fields: dict = {}

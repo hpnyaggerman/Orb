@@ -157,7 +157,7 @@ def build_tool_prompt(
             and (progressive_state or {}).get(df["id"])
         ]
         if progressive_lines:
-            parts.append("Progressive fields:\n" + "\n".join(progressive_lines))
+            parts.append("Progressive fields - dynamically update these:\n" + "\n".join(progressive_lines))
         parts.append(
             f'User\'s next message (for context, take this into account when directing):\n"""{user_message}"""'
         )
