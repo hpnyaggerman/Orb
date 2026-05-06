@@ -771,11 +771,55 @@ export function renderMessages() {
 }
 
 function updateContextCounter() {
-  const el = document.getElementById("burger-context-counter");
+  fetchContextSize();
+}
+
+async function getContextSize(convId) {
+  const r = await fetch(`/api/conversations/${convId}/context-size`);
+  if (!r.ok) return null;
+  return r.json();
+}
+
+async function fetchContextSize() {
+  if (!S.activeConvId) return;
+  try {
+    const data = await getContextSize(S.activeConvId);
+    if (data) {
+      S.contextSize = data;
+      renderContextSize();
+      const el = document.getElementById("burger-context-counter");
+      if (el) el.textContent = `Context: ~${data.total_tokens_est.toLocaleString()} tokens`;
+    }
+  } catch (e) {
+    /* ignore */
+  }
+}
+
+function renderContextSize() {
+  const el = document.getElementById("inspector-context-size");
   if (!el) return;
-  const chars = (S.messages || []).reduce((sum, m) => sum + (m.content?.length || 0), 0);
-  const tokens = Math.round(chars / 3.5);
-  el.textContent = `Context: ~${tokens.toLocaleString()} tokens`;
+  const data = S.contextSize;
+  if (!data) {
+    el.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">—</div>';
+    return;
+  }
+  const total = data.total_tokens_est;
+  const rows = Object.entries(data.breakdown)
+    .filter(([_, v]) => v.tokens_est > 0)
+    .sort((a, b) => b[1].tokens_est - a[1].tokens_est)
+    .map(([key, val]) => {
+      const pct = ((val.tokens_est / total) * 100).toFixed(0);
+      const label = key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+      return `<div class="ctx-row">
+        <span class="ctx-label">${esc(label)}</span>
+        <span class="ctx-bar"><span class="ctx-bar-fill" style="width:${pct}%"></span></span>
+        <span class="ctx-tokens">${val.tokens_est.toLocaleString()}</span>
+      </div>`;
+    })
+    .join("");
+  el.innerHTML = `
+    <div class="ctx-total">~${total.toLocaleString()} tokens <span class="ctx-msgs">(${data.message_count} msgs)</span></div>
+    ${rows}`;
 }
 
 export function startEdit(msgId) {
@@ -1628,6 +1672,7 @@ export function toggleInspector() {
 export function renderInspector() {
   if (S.isStreaming && S.lastDirectorData === null) {
     $("inspector-content").innerHTML = `${_buildReasoningHtml()}
+       <div class="inspector-block" id="inspector-context-size"></div>
        <div style="color:var(--text-muted);font-size:12px;display:flex;align-items:center;gap:8px">
          <span class="typing-indicator"><span></span><span></span><span></span></span> Director thinking…
        </div>`;
@@ -1643,6 +1688,7 @@ export function renderInspector() {
 
   if (!hasDirectorData) {
     $("inspector-content").innerHTML = `${_buildReasoningHtml()}
+       <div class="inspector-block" id="inspector-context-size"></div>
        <div style="color:var(--text-muted);font-size:12px;">
          Send a message to see director output
        </div>`;
@@ -1659,6 +1705,7 @@ export function renderInspector() {
   const tc = ld.tool_calls || [];
   const inj = ld.injection_block || "";
   $("inspector-content").innerHTML = `
+    <div class="inspector-block" id="inspector-context-size"></div>
     <div class="inspector-block"><h4>Moods</h4>
       <div>${stylesHtml || '<span style="color:var(--text-muted);font-size:12px">None</span>'}</div>
     </div>
@@ -1684,6 +1731,7 @@ export function renderInspector() {
   // Scroll the freshly rendered reasoning box to bottom
   const _rb = document.getElementById("reasoning-box");
   if (_rb) _rb.scrollTop = _rb.scrollHeight;
+  renderContextSize();
 }
 
 export function showAvatarPopup() {
