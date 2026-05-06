@@ -174,10 +174,13 @@ def parse(image_path: str) -> Union[TavernCardV2, TavernCardV1]:
 
     if is_v2:
         config = dacite.Config(
-            type_hooks=cast(Dict[Type[Any], Any], {
-                PositionType: position_converter,
-                float: float_converter,
-            }),
+            type_hooks=cast(
+                Dict[Type[Any], Any],
+                {
+                    PositionType: position_converter,
+                    float: float_converter,
+                },
+            ),
             strict=False,
         )
         try:
