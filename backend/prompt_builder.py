@@ -208,6 +208,7 @@ def compute_style_injection_block(
     director_fragments: list[dict],
     direct_scene_enabled: bool,
     extra_fields: dict | None = None,
+    prior_progressive_state: dict | None = None,
 ) -> str:
     """Compute the style injection block from director-pass outputs.
 
@@ -240,7 +241,9 @@ def compute_style_injection_block(
     if not (active or deactivated or inj_extra):
         return ""
 
-    return build_style_injection(active, deactivated, director_fragments, inj_extra)
+    return build_style_injection(
+        active, deactivated, director_fragments, inj_extra, prior_progressive_state
+    )
 
 
 def build_style_injection(
@@ -248,6 +251,7 @@ def build_style_injection(
     deactivated: list[dict] | None = None,
     director_fragments: list[dict] | None = None,
     extra_fields: dict | None = None,
+    prior_progressive_state: dict | None = None,
 ) -> str:
     """Render the Scene Direction injection block for the writer pass.
 
@@ -264,7 +268,11 @@ def build_style_injection(
         if df["field_type"] == "array" and isinstance(val, list):
             parts.append(label + ":\n" + "\n".join(f"- {item}" for item in val))
         elif df["field_type"] == "progressive":
-            parts.append(f"{label} ({df['description']}): {val}")
+            old_val = (prior_progressive_state or {}).get(df["id"])
+            transition = (
+                f"{old_val} -> {val}" if old_val and old_val != val else str(val)
+            )
+            parts.append(f"{label} ({df['description']}): {transition}")
         else:
             parts.append(f"{label}: {val}")
 
