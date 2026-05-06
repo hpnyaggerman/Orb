@@ -17,6 +17,7 @@ from .prompt_builder import (
     build_prefix,
     compute_style_injection_block,
     compute_lorebook_injection_block,
+    replace_placeholders,
 )
 from .kv_tracker import _KVCacheTracker
 from .pipeline_utils import extract_hyperparams
@@ -28,6 +29,53 @@ logger = logging.getLogger(__name__)
 
 
 # ── Core pipeline ─────────────────────────────────────────────────────────────
+
+
+def _replace_in_messages(
+    messages: list[dict], user_name: str, char_name: str
+) -> list[dict]:
+    result = []
+    for msg in messages:
+        content = msg.get("content")
+        if isinstance(content, str):
+            content = replace_placeholders(content, user_name, char_name)
+        elif isinstance(content, list):
+            content = [
+                (
+                    {
+                        **part,
+                        "text": replace_placeholders(
+                            part["text"], user_name, char_name
+                        ),
+                    }
+                    if part.get("type") == "text"
+                    else part
+                )
+                for part in content
+            ]
+        result.append({**msg, "content": content})
+    return result
+
+
+class _PlaceholderClient:
+    """Thin wrapper that replaces {{user}}/{{char}} in messages before completion."""
+
+    def __init__(self, inner: LLMClient, user_name: str, char_name: str) -> None:
+        self._inner = inner
+        self._user_name = user_name
+        self._char_name = char_name
+
+    def abort(self) -> None:
+        self._inner.abort()
+
+    @property
+    def is_aborted(self) -> bool:
+        return self._inner.is_aborted
+
+    async def complete(self, messages: list[dict], **kwargs):
+        msgs = _replace_in_messages(messages, self._user_name, self._char_name)
+        async for item in self._inner.complete(msgs, **kwargs):
+            yield item
 
 
 async def _run_pipeline(
@@ -44,6 +92,8 @@ async def _run_pipeline(
     editor_audit_msgs: list[str] | None = None,
     agent_client: LLMClient | None = None,
     agent_prefix: list[dict] | None = None,
+    user_name: str = "User",
+    char_name: str = "",
 ) -> AsyncIterator[dict]:
     """Three-pass pipeline: director → writer → editor.
 
@@ -111,8 +161,12 @@ async def _run_pipeline(
 
     do_edit = audit_enabled or (length_guard_enabled and agent_on)
 
-    director_client = agent_client or client
-    editor_client = agent_client or client
+    def _wrap(c):
+        return _PlaceholderClient(c, user_name, char_name)
+
+    director_client = _wrap(agent_client or client)
+    editor_client = _wrap(agent_client or client)
+    writer_client = _wrap(client)
     director_prefix = agent_prefix or prefix
     editor_prefix = agent_prefix or prefix
     agent_model = (
@@ -180,13 +234,17 @@ async def _run_pipeline(
 
     # Style injection
     direct_scene_enabled = agent_on and bool(enabled_tools.get("direct_scene", False))
-    inj_block = compute_style_injection_block(
-        active_moods,
-        director["active_moods"],
-        mood_fragments,
-        director_fragments,
-        direct_scene_enabled,
-        extra_fields,
+    inj_block = replace_placeholders(
+        compute_style_injection_block(
+            active_moods,
+            director["active_moods"],
+            mood_fragments,
+            director_fragments,
+            direct_scene_enabled,
+            extra_fields,
+        ),
+        user_name,
+        char_name,
     )
 
     yield {
@@ -212,7 +270,7 @@ async def _run_pipeline(
     )
     resp_text = ""
     async for item in _writer_pass(
-        client,
+        writer_client,
         prefix,
         settings,
         enabled_tools,
@@ -778,6 +836,7 @@ async def handle_turn(
                 res.get("progressive_fields"),
             )
 
+        user_name, char_name = _ctx_names(ctx)
         pipeline = _run_pipeline(
             ctx["client"],
             settings,
@@ -791,6 +850,8 @@ async def handle_turn(
             lorebook_block=lorebook_block,
             agent_client=ctx.get("agent_client"),
             agent_prefix=agent_prefix,
+            user_name=user_name,
+            char_name=char_name,
         )
         async for event in _consume_pipeline(
             pipeline,
@@ -838,6 +899,7 @@ async def handle_regenerate(
             ctx, history + [{"role": "user", "content": user_msg["content"]}]
         )
 
+        user_name, char_name = _ctx_names(ctx)
         pipeline = _run_pipeline(
             ctx["client"],
             settings,
@@ -851,6 +913,8 @@ async def handle_regenerate(
             lorebook_block=lorebook_block,
             agent_client=ctx.get("agent_client"),
             agent_prefix=agent_prefix,
+            user_name=user_name,
+            char_name=char_name,
         )
         async for event in _consume_pipeline(
             pipeline, conversation_id, settings, user_msg_id, target["turn_index"]
@@ -920,6 +984,7 @@ async def handle_super_regenerate(
             if msg.get("role") == "assistant"
         ][:3]
 
+        user_name, char_name = _ctx_names(ctx)
         pipeline = _run_pipeline(
             ctx["client"],
             super_regen_settings,
@@ -934,6 +999,8 @@ async def handle_super_regenerate(
             editor_audit_msgs=editor_audit_msgs,
             agent_client=ctx.get("agent_client"),
             agent_prefix=agent_prefix,
+            user_name=user_name,
+            char_name=char_name,
         )
         # Save result as a sibling of the original: same parent_id and turn_index.
         async for event in _consume_pipeline(

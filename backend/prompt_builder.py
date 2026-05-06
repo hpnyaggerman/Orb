@@ -158,7 +158,7 @@ def build_tool_prompt(
         ]
         if progressive_lines:
             parts.append(
-                "Progressive fields - dynamically update these:\n"
+                "Previous progressive fields - dynamically update these:\n"
                 + "\n".join(progressive_lines)
             )
         parts.append(
