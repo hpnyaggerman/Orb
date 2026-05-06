@@ -57,7 +57,7 @@ def _replace_in_messages(
     return result
 
 
-class _PlaceholderClient:
+class _PlaceholderClient(LLMClient):
     """Thin wrapper that replaces {{user}}/{{char}} in messages before completion."""
 
     def __init__(self, inner: LLMClient, user_name: str, char_name: str) -> None:
@@ -72,9 +72,18 @@ class _PlaceholderClient:
     def is_aborted(self) -> bool:
         return self._inner.is_aborted
 
-    async def complete(self, messages: list[dict], **kwargs):
+    async def complete(
+        self,
+        messages: list[dict],
+        model: str,
+        tools: list[dict] | None = None,
+        tool_choice: dict | str | None = None,
+        **params,
+    ):
         msgs = _replace_in_messages(messages, self._user_name, self._char_name)
-        async for item in self._inner.complete(msgs, **kwargs):
+        async for item in self._inner.complete(
+            msgs, model, tools=tools, tool_choice=tool_choice, **params
+        ):
             yield item
 
 
@@ -242,6 +251,7 @@ async def _run_pipeline(
             director_fragments,
             direct_scene_enabled,
             extra_fields,
+            progressive_state,
         ),
         user_name,
         char_name,
