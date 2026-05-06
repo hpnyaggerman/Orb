@@ -14,7 +14,7 @@ import {
   formatRelativeDate,
   resolvePlaceholders,
 } from "./utils.js";
-import { api, getContextSize } from "./api.js";
+import { api } from "./api.js";
 import { showModal, closeModal, showConfirmModal } from "./modal.js";
 import { renderCharacters, loadCharacters, refreshCharacters } from "./library.js";
 import { activateAndPrioritizeWorld, deactivateWorld } from "./lorebooks.js";
@@ -774,6 +774,12 @@ function updateContextCounter() {
   fetchContextSize();
 }
 
+async function getContextSize(convId) {
+  const r = await fetch(`/api/conversations/${convId}/context-size`);
+  if (!r.ok) return null;
+  return r.json();
+}
+
 async function fetchContextSize() {
   if (!S.activeConvId) return;
   try {
@@ -784,7 +790,9 @@ async function fetchContextSize() {
       const el = document.getElementById("burger-context-counter");
       if (el) el.textContent = `Context: ~${data.total_tokens_est.toLocaleString()} tokens`;
     }
-  } catch (e) { /* ignore */ }
+  } catch (e) {
+    /* ignore */
+  }
 }
 
 function renderContextSize() {
@@ -800,14 +808,15 @@ function renderContextSize() {
     .filter(([_, v]) => v.tokens_est > 0)
     .sort((a, b) => b[1].tokens_est - a[1].tokens_est)
     .map(([key, val]) => {
-      const pct = (val.tokens_est / total * 100).toFixed(0);
-      const label = key.replace(/_/g, " ").replace(/\b\w/g, c => c.toUpperCase());
+      const pct = ((val.tokens_est / total) * 100).toFixed(0);
+      const label = key.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
       return `<div class="ctx-row">
         <span class="ctx-label">${esc(label)}</span>
         <span class="ctx-bar"><span class="ctx-bar-fill" style="width:${pct}%"></span></span>
         <span class="ctx-tokens">${val.tokens_est.toLocaleString()}</span>
       </div>`;
-    }).join("");
+    })
+    .join("");
   el.innerHTML = `
     <div class="ctx-total">~${total.toLocaleString()} tokens <span class="ctx-msgs">(${data.message_count} msgs)</span></div>
     ${rows}`;

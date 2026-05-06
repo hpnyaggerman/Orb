@@ -96,7 +96,7 @@ from .orchestrator import (
 from .llm_client import LLMClient
 from .endpoint_profiles import profile_for
 from . import tavern_cards
-from . import prompt_builder as pb
+from . import prompt_builder
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -1548,7 +1548,7 @@ async def api_get_context_size(cid: str):
     )
 
     def _resolve(text):
-        return pb.replace_placeholders(text, user_name, conv["character_name"])
+        return prompt_builder.replace_placeholders(text, user_name, conv["character_name"])
 
     # Measure each component individually
     sys_text = system_prompt or ""
@@ -1563,7 +1563,7 @@ async def api_get_context_size(cid: str):
 
     # Director injection
     active_moods = director.get("active_moods", []) if director else []
-    inj_block = pb.compute_style_injection_block(
+    inj_block = prompt_builder.compute_style_injection_block(
         active_moods,
         active_moods,
         mood_frags,
@@ -1573,7 +1573,7 @@ async def api_get_context_size(cid: str):
     )
 
     # Lorebook injection
-    lorebook_block = pb.compute_lorebook_injection_block(
+    lorebook_block = prompt_builder.compute_lorebook_injection_block(
         lorebook_entries, messages[-6:] if len(messages) >= 6 else messages
     )
 
