@@ -238,7 +238,7 @@ async def _run_pipeline(
             }
 
     # Bail out if stop was clicked during the director pass
-    if client.is_aborted:
+    if client.is_aborted or (agent_client is not None and agent_client.is_aborted):
         return
 
     # Style injection
@@ -318,7 +318,7 @@ async def _run_pipeline(
         },
     }
 
-    if client.is_aborted:
+    if client.is_aborted or (agent_client is not None and agent_client.is_aborted):
         return
 
     # --- Editor pass ---
@@ -777,6 +777,8 @@ async def handle_turn(
 
         if client_ref is not None:
             client_ref.append(ctx["client"])
+            if ctx.get("agent_client"):
+                client_ref.append(ctx["agent_client"])
 
         settings = ctx["settings"]
         messages = await db.get_messages(conversation_id)
@@ -891,6 +893,8 @@ async def handle_regenerate(
 
         if client_ref is not None:
             client_ref.append(ctx["client"])
+            if ctx.get("agent_client"):
+                client_ref.append(ctx["agent_client"])
 
         settings = ctx["settings"]
         result = await _resolve_target_and_parent(conversation_id, assistant_msg_id)
@@ -952,6 +956,8 @@ async def handle_super_regenerate(
 
         if client_ref is not None:
             client_ref.append(ctx["client"])
+            if ctx.get("agent_client"):
+                client_ref.append(ctx["agent_client"])
 
         settings = ctx["settings"]
         result = await _resolve_target_and_parent(conversation_id, assistant_msg_id)

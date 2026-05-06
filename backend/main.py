@@ -117,7 +117,7 @@ app = FastAPI(title="Orb", lifespan=lifespan)
 
 # Active LLM generations keyed by conversation ID.
 # Populated when streaming starts; cleared when it ends or is aborted.
-_active_clients: dict[str, LLMClient] = {}
+_active_clients: dict[str, list[LLMClient]] = {}
 
 
 @app.middleware("http")
@@ -1302,7 +1302,8 @@ async def _sse_stream(
             while True:
                 if await request.is_disconnected():
                     if client_ref:
-                        client_ref[0].abort()
+                        for c in client_ref:
+                            c.abort()
                     return
                 await asyncio.sleep(0.5)
         except asyncio.CancelledError:
@@ -1314,7 +1315,7 @@ async def _sse_stream(
             # Register client in _active_clients on the first event (by which
             # point handle_turn has already populated client_ref).
             if cid and client_ref and cid not in _active_clients:
-                _active_clients[cid] = client_ref[0]
+                _active_clients[cid] = list(client_ref)
             evt_type = event["event"]
             evt_data = event.get("data", "")
             if isinstance(evt_data, dict):
@@ -1340,9 +1341,10 @@ async def _sse_stream(
 @app.post("/api/conversations/{cid}/stop")
 async def api_stop_generation(cid: str):
     """Abort the active LLM generation for this conversation, if any."""
-    client = _active_clients.get(cid)
-    if client:
-        client.abort()
+    clients = _active_clients.get(cid)
+    if clients:
+        for c in clients:
+            c.abort()
         logger.info("Stop requested for conversation %s — aborted", cid)
     return {"ok": True}
 

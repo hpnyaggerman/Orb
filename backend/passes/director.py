@@ -135,6 +135,8 @@ async def _director_pass(
 
     t0 = time.monotonic()
     for name in tool_names:
+        if client.is_aborted:
+            break
         tool_tail = build_tool_prompt(
             name,
             user_message,

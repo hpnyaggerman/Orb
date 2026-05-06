@@ -34,8 +34,8 @@ def build_writer_content(
         tail += "___\n\n" + lorebook_block + "\n\n"
     if inj_block:
         tail += "___\n\n" + inj_block + "\n\n"
-    # if enabled_tools and len(enabled_tools) > 0:
-    # tail += "**Do not use tool or function calls this turn.**\n\n"
+    if enabled_tools and len(enabled_tools) > 0:
+        tail += "**Do not use tool or function calls this turn.**\n\n"
     if length_guard_enforce and length_guard and length_guard.get("enabled"):
         max_words = length_guard.get("max_words", 240)
         max_paragraphs = length_guard.get("max_paragraphs", 4)
