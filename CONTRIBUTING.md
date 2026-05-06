@@ -8,6 +8,15 @@ Make sure the feature or fix works first.
 
 Start the backend with `./run_unix.sh` (or `run_windows.bat` on Windows). Python 3.9+ required.
 
+### Optional: Auto-formatting on commit
+
+Run `npm install` to set up git hooks via Lefthook. This auto-formats staged files before each commit:
+
+- **Python** — Black (formatting) + Flake8 (linting)
+- **JavaScript** — Biome (formatting)
+
+No more CI failures from formatting issues. Requires Node.js.
+
 ## 2. Run the checks
 
 Everything lives in `scripts/`. Run them before you push:
