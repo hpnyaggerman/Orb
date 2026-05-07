@@ -110,8 +110,8 @@ FRONTEND_DIR = os.path.join(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    run_pending(DB_PATH)
     await init_db()
+    run_pending(DB_PATH)
     logger.info("Database initialized")
     yield
 
