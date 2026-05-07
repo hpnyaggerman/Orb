@@ -1,0 +1,15 @@
+{
+  "name": "orb",
+  "private": true,
+  "devDependencies": {
+    "@biomejs/biome": "^2.0.0",
+    "@evilmartians/lefthook": "^1.11.0"
+  },
+  "scripts": {
+    "prepare": "lefthook install",
+    "format:frontend": "biome format frontend/ --write",
+    "format:backend": "python3 -m black backend/ tests/",
+    "lint": "python3 -m flake8 backend/ tests/ && biome check frontend/",
+    "test": "python3 -m pytest tests/"
+  }
+}
