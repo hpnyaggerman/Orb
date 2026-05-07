@@ -127,6 +127,10 @@ export function renderVoicePanel() {
   `;
 }
 
+export function setTtsDebugExpanded(open) {
+  S.ttsDebugExpanded = open;
+}
+
 export function refreshNowPlaying() {
   const duration = S.ttsDuration || 0;
   const current = S.ttsCurrentTime || 0;
