@@ -9,7 +9,9 @@ Server repo: ~/repos/kokoro-tts/
 
 from __future__ import annotations
 
+import io
 import logging
+import wave
 from typing import TYPE_CHECKING
 
 import httpx
@@ -55,10 +57,14 @@ class KokoroTTSAdapter(TTSAdapter):
         api_key: str | None = None,
         **kwargs,
     ) -> SynthesisResult:
-        """Synthesize chunks into WAV audio via Kokoro API server."""
-        text = self._chunks_to_text(chunks)
+        """Synthesize chunks into WAV audio via Kokoro API server.
 
-        if not text.strip():
+        Synthesizes each text chunk individually and concatenates the audio
+        with real silence padding between them (based on pause_before/after_ms).
+        This gives precise pause timing instead of relying on punctuation tricks.
+        """
+        text_chunks = [c for c in chunks if c.text.strip()]
+        if not text_chunks:
             return SynthesisResult(audio_bytes=b"", content_type="audio/wav")
 
         base_url = (api_url or "http://localhost:9200").rstrip("/")
@@ -68,45 +74,51 @@ class KokoroTTSAdapter(TTSAdapter):
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
 
-        # Map language codes to Kokoro lang_code (single char)
-        _LANG_TO_KOKORO = {
-            "en": "a",
-            "us": "a",
-            "gb": "b",
-            "uk": "b",
-            "es": "e",
-            "fr": "f",
-            "hi": "h",
-            "it": "i",
-            "ja": "j",
-            "jp": "j",
-            "pt": "p",
-            "br": "p",
-            "zh": "z",
-            "cn": "z",
-        }
         lang_short = language.split("-")[0].lower() if language else "en"
         kokoro_lang = _LANG_TO_KOKORO.get(lang_short, "a")
 
-        body = {
-            "text": text,
-            "voice": voice_id or "af_heart",
-            "speed": rate,
-            "lang": kokoro_lang,
-        }
+        # Synthesize each chunk and collect raw PCM data
+        audio_parts: list[bytes] = []
+        sample_rate = 24000
 
         async with httpx.AsyncClient(timeout=60.0) as client:
-            resp = await client.post(url, json=body, headers=headers)
-            resp.raise_for_status()
+            for i, chunk in enumerate(text_chunks):
+                # Prepend silence for pause_before_ms
+                if chunk.pause_before_ms > 0 and i > 0:
+                    audio_parts.append(_silence_pcm(chunk.pause_before_ms, sample_rate))
+
+                body = {
+                    "text": chunk.text,
+                    "voice": voice_id or "af_heart",
+                    "speed": rate,
+                    "lang": kokoro_lang,
+                }
+                resp = await client.post(url, json=body, headers=headers)
+                resp.raise_for_status()
+
+                # Strip WAV header, keep raw PCM
+                audio_parts.append(_wav_strip_header(resp.content))
+
+                # Append silence for pause_after_ms
+                if chunk.pause_after_ms > 0:
+                    audio_parts.append(_silence_pcm(chunk.pause_after_ms, sample_rate))
+
+        if not audio_parts or all(p == b"" for p in audio_parts):
+            return SynthesisResult(audio_bytes=b"", content_type="audio/wav")
+
+        # Wrap concatenated PCM in a WAV container
+        raw_pcm = b"".join(audio_parts)
+        wav_bytes = _pcm_to_wav(raw_pcm, sample_rate)
 
         logger.info(
-            "Kokoro synthesis: %d bytes, voice=%s",
-            len(resp.content),
+            "Kokoro synthesis: %d chunks, %d bytes, voice=%s",
+            len(text_chunks),
+            len(wav_bytes),
             voice_id or "af_heart",
         )
 
         return SynthesisResult(
-            audio_bytes=resp.content,
+            audio_bytes=wav_bytes,
             content_type="audio/wav",
         )
 
@@ -139,6 +151,53 @@ class KokoroTTSAdapter(TTSAdapter):
     @property
     def supports_streaming(self) -> bool:
         return False
+
+
+# ---------------------------------------------------------------------------
+# WAV helpers for per-chunk concatenation
+# ---------------------------------------------------------------------------
+
+
+def _silence_pcm(duration_ms: int, sample_rate: int = 24000) -> bytes:
+    """Generate silent PCM frames (16-bit mono)."""
+    n_samples = int(sample_rate * duration_ms / 1000)
+    return b"\x00\x00" * n_samples
+
+
+def _wav_strip_header(wav_bytes: bytes) -> bytes:
+    """Extract raw PCM data from a WAV byte string."""
+    with wave.open(io.BytesIO(wav_bytes), "rb") as w:
+        return w.readframes(w.getnframes())
+
+
+def _pcm_to_wav(raw_pcm: bytes, sample_rate: int = 24000) -> bytes:
+    """Wrap raw 16-bit mono PCM bytes in a WAV container."""
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(sample_rate)
+        w.writeframes(raw_pcm)
+    return buf.getvalue()
+
+
+# Map language codes to Kokoro lang_code (single char)
+_LANG_TO_KOKORO = {
+    "en": "a",
+    "us": "a",
+    "gb": "b",
+    "uk": "b",
+    "es": "e",
+    "fr": "f",
+    "hi": "h",
+    "it": "i",
+    "ja": "j",
+    "jp": "j",
+    "pt": "p",
+    "br": "p",
+    "zh": "z",
+    "cn": "z",
+}
 
 
 # Default voice list (used when server is not reachable)

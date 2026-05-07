@@ -753,6 +753,10 @@ async def init_db():
             await db.execute(
                 "ALTER TABLE voice_profiles ADD COLUMN model TEXT DEFAULT ''"
             )
+        if "speech_prompt" not in vp_cols:
+            await db.execute(
+                "ALTER TABLE voice_profiles ADD COLUMN speech_prompt TEXT DEFAULT ''"
+            )
 
         # Seed settings if empty
         row = list(await db.execute_fetchall("SELECT COUNT(*) as c FROM settings"))
@@ -2672,8 +2676,6 @@ async def upsert_voice_profile(character_card_id: str, data: dict) -> dict:
             "pitch",
             "enabled",
             "endpoint_id",
-            "scripter_model",
-            "scripter_temperature",
             "speech_prompt",
             "api_url",
             "api_key",

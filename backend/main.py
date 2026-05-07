@@ -1681,6 +1681,28 @@ def _tts_cache_media_type(profile: dict) -> tuple[str, str]:
     return "audio/mpeg", "mp3"
 
 
+def _format_script(chunks: list) -> str:
+    """Format speakable chunks into a human-readable speech script."""
+    lines = []
+    for c in chunks:
+        if not c.text.strip():
+            continue
+        parts = []
+        if c.pause_before_ms >= 500:
+            parts.append(f"[...{c.pause_before_ms}ms]")
+        elif c.pause_before_ms >= 200:
+            parts.append(f"[{c.pause_before_ms}ms]")
+        parts.append(c.text)
+        if c.pause_after_ms >= 500:
+            parts.append(f"[...{c.pause_after_ms}ms]")
+        elif c.pause_after_ms >= 200:
+            parts.append(f"[{c.pause_after_ms}ms]")
+        if c.emotion and c.emotion != "neutral":
+            parts.append(f"({c.emotion})")
+        lines.append(" ".join(parts))
+    return "\n".join(lines)
+
+
 def _tts_cache_path(cid: str, msg_id: int, profile: dict, content: str = "") -> str:
     """Cache path keyed by message content and voice configuration."""
     import hashlib
@@ -1858,7 +1880,7 @@ async def api_speak_message(cid: str, msg_id: int):
 
     metadata = {
         "extraction_method": "regex",
-        "extracted_text": " ".join(chunk.text for chunk in chunks),
+        "extracted_text": _format_script(chunks),
     }
 
     # Synthesize audio
