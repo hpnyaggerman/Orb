@@ -1666,11 +1666,6 @@ async def serve_frontend():
     return FileResponse(os.path.join(FRONTEND_DIR, "index.html"))
 
 
-# Mount static files last
-if os.path.isdir(FRONTEND_DIR):
-    app.mount("/static", StaticFiles(directory=FRONTEND_DIR), name="static")
-
-
 TTS_CACHE_DIR = os.path.join(os.path.dirname(__file__), "data", "tts_cache")
 
 
@@ -1871,11 +1866,10 @@ async def api_speak_message(cid: str, msg_id: int):
         raise HTTPException(400, str(e))
 
     # Algorithm path — zero LLM, zero latency
-    adapter_obj = get_adapter(profile["backend"])
     chunks = regex_extract(
         text=msg["content"],
         backend_type=profile["backend"],
-        supports_emotion_tags=adapter_obj.supports_emotion_tags,
+        supports_emotion_tags=adapter.supports_emotion_tags,
     )
 
     metadata = {

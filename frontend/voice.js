@@ -164,7 +164,6 @@ export function toggleVoicePanel() {
     const open = () => {
       panel.classList.add("open");
       btn.classList.add("btn-active");
-      renderVoicePanel();
       _loadVoiceProfile();
     };
     if (switching) setTimeout(open, 180);

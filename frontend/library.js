@@ -980,22 +980,8 @@ export async function saveCharEdit(id, exportAfter = false) {
           av.innerHTML = `<img src="${avatarUrl(id)}?v=${_avatarBust.get(id)}" onerror="this.parentElement.textContent='📜'">`;
       }
     }
-    // Capture voice profile data BEFORE closing the modal (which destroys the DOM)
-    const voiceData = {
-      enabled: $("ce-voice-enabled")?.checked ? 1 : 0,
-      backend: $("ce-voice-backend")?.value || "edge",
-      voice_id: $("ce-voice-id")?.value || "",
-      language: $("ce-voice-lang")?.value || "en",
-      rate: parseFloat($("ce-voice-speed")?.value || "1.0"),
-      pitch: parseFloat($("ce-voice-pitch")?.value || "1.0"),
-      speech_prompt: $("ce-voice-custom-prompt")?.value || "",
-      api_url: $("ce-voice-api-url")?.value || "",
-      api_key: $("ce-voice-api-key")?.value || "",
-      model: $("ce-voice-model")?.value || "",
-    };
     try {
-      await api.put("/characters/" + id + "/voice-profile", voiceData);
-      // Refresh voice panel with updated profile
+      await saveVoiceProfileFromTab(id, "ce");
       if (S.activeCharId === id) {
         const { loadVoiceProfile } = await import("./voice.js");
         loadVoiceProfile();
@@ -1101,20 +1087,8 @@ export async function saveImportedChar() {
   _pendingCharacterBook = null;
   try {
     const created = await api.post("/characters", d);
-    const voiceData = {
-      enabled: $("ce-voice-enabled")?.checked ? 1 : 0,
-      backend: $("ce-voice-backend")?.value || "edge",
-      voice_id: $("ce-voice-id")?.value || "",
-      language: $("ce-voice-lang")?.value || "en",
-      rate: parseFloat($("ce-voice-speed")?.value || "1.0"),
-      pitch: parseFloat($("ce-voice-pitch")?.value || "1.0"),
-      speech_prompt: $("ce-voice-custom-prompt")?.value || "",
-      api_url: $("ce-voice-api-url")?.value || "",
-      api_key: $("ce-voice-api-key")?.value || "",
-      model: $("ce-voice-model")?.value || "",
-    };
     try {
-      await api.put("/characters/" + created.id + "/voice-profile", voiceData);
+      await saveVoiceProfileFromTab(created.id, "ce");
     } catch (e) {
       closeModal();
       await Promise.all([loadCharacters(), loadWorlds()]);

@@ -12,14 +12,9 @@ from __future__ import annotations
 import io
 import logging
 import wave
-from typing import TYPE_CHECKING
-
 import httpx
 
 from .base import SpeakableChunk, SynthesisResult, TTSAdapter
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 
