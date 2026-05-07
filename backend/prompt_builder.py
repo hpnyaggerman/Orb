@@ -16,6 +16,7 @@ from .tool_defs import (
     EDITOR_REWRITE_INSTRUCTIONS,
     EDITOR_BOTH_INSTRUCTIONS,
     STRUCTURAL_REWRITE_INSTRUCTIONS,
+    build_direct_scene_tool,
 )
 
 LOREBOOK_SCAN_DEPTH = 6
@@ -134,8 +135,12 @@ def build_tool_prompt(
     tool = TOOLS.get(tool_name)
     if not tool:
         return ""
-    desc = tool["schema"]["function"]["description"]
-    params = tool["schema"]["function"]["parameters"].get("properties", {})
+    if tool_name == "direct_scene":
+        schema = build_direct_scene_tool(director_fragments or [], progressive_state)
+    else:
+        schema = tool["schema"]
+    desc = schema["function"]["description"]
+    params = schema["function"]["parameters"].get("properties", {})
     param_order = ", ".join(params.keys()) if params else "N/A"
     preamble = DIRECTOR_PREAMBLE + (REASONING_GUIDANCE if reasoning_on else "")
     parts = [
