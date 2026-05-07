@@ -27,12 +27,10 @@ def _make_client() -> LLMClient:
     return LLMClient("http://localhost:9999")
 
 
-def _flagged_sentence(text: str, canonical: str, variant: str | None = None):
+def _flagged_sentence(text: str, canonical: str):
     return FlaggedSentence(
         sentence=text,
-        cliches=[
-            ClicheHit(canonical=canonical, variant=variant or canonical, score=1.0)
-        ],
+        cliches=[ClicheHit(canonical=canonical, score=1.0)],
     )
 
 

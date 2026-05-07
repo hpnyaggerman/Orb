@@ -438,7 +438,9 @@ async def editor_pass(
             report.total_issues,
         )
         if kv_tracker is not None and iteration == 0:
-            kv_tracker.record("editor", msgs, editor_tools)
+            kv_tracker.record(
+                "editor", msgs, editor_tools, model=model or settings["model_name"]
+            )
         try:
             reasoning_params = reasoning_cfg(reasoning_on)
             if not reasoning_params["reasoning"].get("enabled", True):
