@@ -10,6 +10,8 @@ Start the backend with `./run_unix.sh` (or `run_windows.bat` on Windows). Python
 
 ### Optional: Auto-formatting on commit
 
+Run `pip3 install -r requirements-dev.txt` to set up Python formatters.
+
 Run `npm install` to set up git hooks via Lefthook. This auto-formats staged files before each commit:
 
 - **Python** — Black (formatting) + Flake8 (linting)
