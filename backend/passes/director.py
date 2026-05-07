@@ -157,7 +157,12 @@ async def _director_pass(
             json.dumps(msgs, indent=2, ensure_ascii=False),
         )
         if kv_tracker is not None:
-            kv_tracker.record(f"director:{name}", msgs, tool_schemas)
+            kv_tracker.record(
+                f"director:{name}",
+                msgs,
+                tool_schemas,
+                model=model or settings["model_name"],
+            )
         resp: dict = {}
         try:
             reasoning_params = reasoning_cfg(

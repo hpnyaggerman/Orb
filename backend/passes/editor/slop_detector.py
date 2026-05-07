@@ -29,7 +29,6 @@ _WINDOW_PADDING = 2
 @dataclass
 class ClicheHit:
     canonical: str
-    variant: str
     score: float
 
 
@@ -95,7 +94,6 @@ def _match_sentence(
                         best_score = 1.0
                         best = ClicheHit(
                             canonical=variant_group[0],
-                            variant=variant,
                             score=1.0,
                         )
                 else:
@@ -105,7 +103,6 @@ def _match_sentence(
                         best_score = 1.0
                         best = ClicheHit(
                             canonical=variant_group[0],
-                            variant=variant,
                             score=1.0,
                         )
                 continue
@@ -126,7 +123,6 @@ def _match_sentence(
                     best_score = score
                     best = ClicheHit(
                         canonical=variant_group[0],
-                        variant=variant,
                         score=round(score, 4),
                     )
 
