@@ -787,8 +787,6 @@ async function fetchContextSize() {
     if (data) {
       S.contextSize = data;
       renderContextSize();
-      const el = document.getElementById("burger-context-counter");
-      if (el) el.textContent = `Context: ~${data.total_tokens_est.toLocaleString()} tokens`;
     }
   } catch (e) {
     /* ignore */
