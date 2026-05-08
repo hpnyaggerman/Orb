@@ -78,51 +78,6 @@ def build_direct_scene_tool(
     }
 
 
-# Default tool schema using the seeded director fragments (kept for static reference/fallback).
-# At runtime the schema is always built dynamically via build_direct_scene_tool().
-AGENT_TOOLS = [
-    build_direct_scene_tool(
-        [
-            {
-                "id": "plot_summary",
-                "field_type": "string",
-                "required": True,
-                "description": "A brief and specific summary of what has happened so far. 3 sentences max.",
-            },
-            {
-                "id": "user_intent",
-                "field_type": "string",
-                "required": False,
-                "description": "Hidden/subtle intention of the user — what they want to see.",
-            },
-            {
-                "id": "keywords",
-                "field_type": "array",
-                "required": True,
-                "description": "Key nouns from the scene. Keep under 6 items.",
-            },
-            {
-                "id": "next_event",
-                "field_type": "string",
-                "required": True,
-                "description": "What happens immediately next in the story. Two short sentences.",
-            },
-            {
-                "id": "writing_direction",
-                "field_type": "string",
-                "required": True,
-                "description": "How the scene should be written. One short sentence.",
-            },
-            {
-                "id": "detected_repetitions",
-                "field_type": "array",
-                "required": False,
-                "description": "Specific tropes/phrases/patterns recently overused. Up to 8 items.",
-            },
-        ]
-    )
-]
-
 REWRITE_PROMPT_TOOL = {
     "type": "function",
     "function": {
@@ -264,7 +219,7 @@ MAX_EDITOR_ITERATIONS = 3
 TOOLS: dict[str, dict] = {
     "direct_scene": {
         "choice": {"type": "function", "function": {"name": "direct_scene"}},
-        "schema": AGENT_TOOLS[0],
+        "schema": build_direct_scene_tool([]),
     },
     "rewrite_user_prompt": {
         "choice": {"type": "function", "function": {"name": "rewrite_user_prompt"}},
@@ -282,11 +237,7 @@ TOOLS: dict[str, dict] = {
 
 PRE_WRITER_TOOLS = {"rewrite_user_prompt"}
 POST_WRITER_TOOLS = {"editor_apply_patch", "editor_rewrite"}
-ALL_SCHEMAS = [t["schema"] for t in TOOLS.values()]
 
 
-def enabled_schemas(enabled_tools: dict | None) -> list[dict]:
-    """Return tool schemas. None means 'all enabled', {} means 'all disabled'."""
-    if enabled_tools is None:
-        return ALL_SCHEMAS
+def enabled_schemas(enabled_tools: dict) -> list[dict]:
     return [TOOLS[n]["schema"] for n in TOOLS if enabled_tools.get(n, False)]

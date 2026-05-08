@@ -286,9 +286,9 @@ async def editor_pass(
     draft: str,
     settings: dict,
     phrase_bank: list[list[str]],
+    enabled_tools: dict,
     audit_enabled: bool = True,
     length_guard: dict | None = None,
-    enabled_tools: dict | None = None,
     kv_tracker=None,
     reasoning_on: bool = False,  # If true, use structured tool-use message format (role=tool) for iteration feedback; non-thinking models get a synthetic recap instead
     audit_context_msgs: (
