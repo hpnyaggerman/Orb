@@ -418,23 +418,23 @@ def _build_prefix_from_ctx(
     """
     conv = ctx["conv"]
     active_persona = ctx.get("active_persona")
-
-    if active_persona:
-        user_name = active_persona.get("name", "User")
-        user_description = active_persona.get("description", "")
-    else:
-        user_name = ctx["settings"].get("user_name", "User")
-        user_description = ctx["settings"].get("user_description", "")
+    macros = Macros.from_settings(
+        ctx["settings"], conv["character_name"], active_persona
+    )
+    user_description = (
+        active_persona.get("description", "")
+        if active_persona
+        else ctx["settings"].get("user_description", "")
+    )
 
     return build_prefix(
         system_prompt if system_prompt is not None else ctx["system_prompt"],
-        conv["character_name"],
         ctx["char_persona"],
         conv["character_scenario"],
         ctx["mes_example"],
         conv.get("post_history_instructions", ""),
         history,
-        user_name,
+        macros,
         user_description,
     )
 
@@ -461,8 +461,7 @@ def _compute_lorebook(macros: Macros, ctx: dict, messages: list[dict]) -> str:
     return compute_lorebook_injection_block(
         messages,
         ctx.get("lorebook_entries", []),
-        macros.user,
-        macros.char,
+        macros,
     )
 
 

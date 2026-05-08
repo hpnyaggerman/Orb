@@ -4,10 +4,20 @@ pipeline_utils.py — Shared helpers for the pipeline passes and orchestrator.
 
 from __future__ import annotations
 
+import re
 from typing import List, NamedTuple, Optional
 
 from .llm_client import LLMClient
-from .prompt_builder import replace_placeholders
+
+
+def _sub(text: str, user_name: str, char_name: str) -> str:
+    if not text or not isinstance(text, str):
+        return text or ""
+    if user_name:
+        text = re.sub(r"\{\{user\}\}", user_name, text, flags=re.IGNORECASE)
+    if char_name:
+        text = re.sub(r"\{\{char\}\}", char_name, text, flags=re.IGNORECASE)
+    return text
 
 
 class Macros(NamedTuple):
@@ -31,7 +41,7 @@ class Macros(NamedTuple):
         return cls(user=user, char=char_name)
 
     def resolve(self, text: str) -> str:
-        return replace_placeholders(text, self.user, self.char)
+        return _sub(text, self.user, self.char)
 
     def wrap_client(self, client: LLMClient) -> "_PlaceholderClient":
         return _PlaceholderClient(client, self.user, self.char)
@@ -74,15 +84,13 @@ def _replace_in_messages(
     for msg in messages:
         content = msg.get("content")
         if isinstance(content, str):
-            content = replace_placeholders(content, user_name, char_name)
+            content = _sub(content, user_name, char_name)
         elif isinstance(content, list):
             content = [
                 (
                     {
                         **part,
-                        "text": replace_placeholders(
-                            part["text"], user_name, char_name
-                        ),
+                        "text": _sub(part["text"], user_name, char_name),
                     }
                     if part.get("type") == "text"
                     else part
