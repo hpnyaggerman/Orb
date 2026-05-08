@@ -109,7 +109,7 @@ function buildMsgToolbar(m) {
       : "";
 
   const speakBtn =
-    isAssistant && m.id && !isGreeting
+    isAssistant && m.id
       ? S.speakingMsgId === m.id
         ? `<button class="btn-tts-active" onclick="stopSpeaking()" title="Stop speaking">${ICON_SPEAK}</button>`
         : S.ttsLoading && S.speakingMsgId === m.id
