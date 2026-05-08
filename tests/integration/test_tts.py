@@ -217,11 +217,12 @@ async def test_speak_message_synthesizes_and_reuses_cache(
     client, monkeypatch, tmp_path
 ):
     import backend.main as main
+    import backend.tts.cache as tts_cache
 
     char_id, cid, msg_id = await _create_tts_conversation(client)
     adapter = FakeAdapter(content_type="audio/wav")
 
-    monkeypatch.setattr(main, "TTS_CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(tts_cache, "TTS_CACHE_DIR", str(tmp_path))
     monkeypatch.setattr(main, "get_adapter", lambda backend: adapter)
 
     resp = await client.put(
@@ -251,7 +252,7 @@ async def test_speak_message_synthesizes_and_reuses_cache(
 async def test_voice_profile_update_clears_all_cached_audio_extensions(
     client, monkeypatch, tmp_path
 ):
-    import backend.main as main
+    import backend.tts.cache as tts_cache
 
     char_id, cid, _msg_id = await _create_tts_conversation(client)
     cache_dir = tmp_path / cid
@@ -261,7 +262,7 @@ async def test_voice_profile_update_clears_all_cached_audio_extensions(
     mp3_path.write_bytes(b"mp3")
     wav_path.write_bytes(b"wav")
 
-    monkeypatch.setattr(main, "TTS_CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(tts_cache, "TTS_CACHE_DIR", str(tmp_path))
 
     resp = await client.put(
         f"/api/characters/{char_id}/voice-profile",
