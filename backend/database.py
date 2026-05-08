@@ -2358,6 +2358,9 @@ async def delete_character_card(
     card_id: str, delete_conversations: bool = False
 ) -> bool:
     async with get_db() as db:
+        await db.execute(
+            "DELETE FROM voice_profiles WHERE character_card_id = ?", (card_id,)
+        )
         if delete_conversations:
             await db.execute(
                 "DELETE FROM conversations WHERE character_card_id = ?", (card_id,)
