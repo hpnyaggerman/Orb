@@ -677,8 +677,8 @@ async def init_db():
                 "ALTER TABLE settings ADD COLUMN tts_volume REAL NOT NULL DEFAULT 0.75"
             )
 
-        # Clean up the legacy experiment that briefly stored a TTS scripter toggle
-        # inside reasoning_enabled_passes. TTS extraction is not a reasoning pass.
+        # Remove stale scripter key from reasoning_enabled_passes if present.
+        # TTS settings are stored separately.
         settings_rows = list(
             await db.execute_fetchall(
                 "SELECT id, reasoning_enabled_passes FROM settings WHERE id = 1"
@@ -1066,9 +1066,7 @@ async def get_settings() -> dict:
             s.get("reasoning_enabled_passes")
             or '{"director":true,"writer":false,"editor":false}'
         )
-        # Scripter is a TTS setting, not a reasoning pass. Existing DBs may still
-        # have this legacy key; hide it from callers so the Inspector remains
-        # reasoning-only.
+        # Remove stale scripter key from reasoning_enabled_passes if present.
         s["reasoning_enabled_passes"].pop("scripter", None)
         # Overlay endpoint_url, api_key, model_name, and hyperparameters from the
         # active endpoint's active model config so callers always get live values

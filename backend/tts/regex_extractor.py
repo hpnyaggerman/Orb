@@ -3,7 +3,7 @@ backend/tts/regex_extractor.py — Algorithmic dialogue extractor.
 
 Extracts speakable dialogue from RP text using regex/heuristics.
 Zero LLM calls, zero latency, zero cost. This is the only
-extraction path in this PR; model-backed expressive extraction is deferred.
+extraction path; model-backed expressive extraction is deferred.
 
 Pattern handling:
 - Quoted dialogue ("Hello") → extract
@@ -156,8 +156,8 @@ RE_ASTERISK = re.compile(r"\*([^*]+)\*")
 # Only match if the parens are NOT wrapping quoted dialogue
 RE_PARENTHETICAL = re.compile(r"\(([^)]+)\)")
 
-# Matches double-quoted dialogue: "Hello there"
-RE_QUOTED = re.compile(r'"([^"]+)"')
+# Matches double-quoted dialogue: "Hello there" and \u201cHello there\u201d
+RE_QUOTED = re.compile(r'[\u201c"]([^\u201d"]+)[\u201d"]')
 
 # Matches em-dash dialogue (some RP styles): —Hello.—
 RE_EMDASH = re.compile(r"\u2014([^\u2014]+?)\u2014")
