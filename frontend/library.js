@@ -638,6 +638,11 @@ function charFormTabs(prefix, d, isEdit, worlds = []) {
     ${
       isEdit
         ? `<div id="${prefix}-tvoice" class="tab-content">
+      <div id="${prefix}-voice-fields" class="voice-fields-wrap">
+        <div id="${prefix}-voice-loading" class="voice-loading-overlay hidden">
+          <div class="voice-loading-spinner"></div>
+          <span>Loading voice settings…</span>
+        </div>
       <div class="field">
         <label class="modal-checkbox-label">
           <input type="checkbox" id="${prefix}-voice-enabled">
@@ -646,6 +651,7 @@ function charFormTabs(prefix, d, isEdit, worlds = []) {
       </div>
       <div class="field"><label>TTS Backend</label>
         <select id="${prefix}-voice-backend" onchange="onVoiceBackendChange('${prefix}')">
+          <option value="">Loading…</option>
         </select>
       </div>
       <div class="field" id="${prefix}-voice-api-url-wrap"><label>API URL</label>
@@ -671,7 +677,7 @@ function charFormTabs(prefix, d, isEdit, worlds = []) {
           <option value="it">Italian</option>
         </select>
       </div>
-      <div class="field"><label>Voice</label>
+      <div class="field" id="${prefix}-voice-id-wrap"><label>Voice</label>
         <select id="${prefix}-voice-id"><option value="">Loading voices…</option></select>
       </div>
       <div class="field" id="${prefix}-voice-speed-wrap"><label>Speed <span id="${prefix}-voice-speed-val">1.0</span>x</label>
@@ -689,6 +695,7 @@ function charFormTabs(prefix, d, isEdit, worlds = []) {
       <div class="field" style="display:flex;gap:8px;align-items:center">
         <button class="btn btn-sm" onclick="previewVoice('${prefix}')">🔊 Preview</button>
         <span id="${prefix}-voice-preview-status" style="font-size:12px;color:var(--text-muted)"></span>
+      </div>
       </div>
     </div>`
         : ""
@@ -1402,12 +1409,15 @@ function _updateFieldVisibility(prefix) {
 async function _populateBackendDropdown(prefix) {
   const sel = $(prefix + "-voice-backend");
   if (!sel) return;
+  sel.innerHTML = '<option value="">Loading…</option>';
+  sel.disabled = true;
   try {
     _backendsCache = await api.get("/tts/backends");
   } catch (e) {
     _backendsCache = [{ id: "edge", name: "Microsoft Edge TTS" }];
   }
   sel.innerHTML = _backendsCache.map((b) => `<option value="${esc(b.id)}">${esc(b.name)}</option>`).join("");
+  sel.disabled = false;
 }
 
 async function _loadModelList(prefix) {
@@ -1440,7 +1450,16 @@ async function _loadVoiceList(prefix) {
   const apiKey = $(prefix + "-voice-api-key")?.value || "";
   const sel = $(prefix + "-voice-id");
   if (!sel) return;
-  sel.innerHTML = '<option value="">Loading…</option>';
+  // Show loading state
+  const isSelect = sel.tagName === "SELECT";
+  if (isSelect) {
+    sel.innerHTML = '<option value="">Loading voices…</option>';
+    sel.disabled = true;
+  } else {
+    sel.value = "";
+    sel.placeholder = "Loading voices…";
+    sel.disabled = true;
+  }
   try {
     let qs = `/tts/voices?backend=${backend}&language=${lang}`;
     if (apiUrl) qs += `&api_url=${encodeURIComponent(apiUrl)}`;
@@ -1457,7 +1476,13 @@ async function _loadVoiceList(prefix) {
       sel.outerHTML = `<input type="text" id="${prefix}-voice-id" placeholder="Enter voice name (e.g. alloy)">`;
     }
   } catch (e) {
-    sel.innerHTML = '<option value="">Error loading voices</option>';
+    if (isSelect) {
+      sel.innerHTML = '<option value="">Error loading voices</option>';
+      sel.disabled = false;
+    } else {
+      sel.placeholder = "Error loading voices";
+      sel.disabled = false;
+    }
   }
 }
 
@@ -1502,53 +1527,63 @@ window.previewVoice = async function (prefix) {
   }
 };
 
+function _setVoiceLoading(prefix, loading) {
+  const overlay = $(prefix + "-voice-loading");
+  if (overlay) overlay.classList.toggle("hidden", !loading);
+}
+
 export async function loadVoiceProfileIntoTab(charId, prefix) {
-  // Populate backend dropdown from API
-  await _populateBackendDropdown(prefix);
-  // Load voice list for current defaults
-  await _loadVoiceList(prefix);
-  // Load saved profile
+  _setVoiceLoading(prefix, true);
   try {
-    const profile = await api.get("/characters/" + charId + "/voice-profile");
-    if (!profile || !profile.backend) {
-      _updateFieldVisibility(prefix);
-      return;
-    }
-    const backend = $(prefix + "-voice-backend");
-    const lang = $(prefix + "-voice-lang");
-    const enabled = $(prefix + "-voice-enabled");
-    if (enabled) enabled.checked = profile.enabled === true || profile.enabled === 1;
-    if (backend) backend.value = profile.backend || "edge";
-    // Set language from voice_id locale (e.g. "en-US" → "en")
-    const langCode = (profile.language || "en-US").split("-")[0];
-    if (lang) lang.value = langCode;
+    // Populate backend dropdown from API
+    await _populateBackendDropdown(prefix);
+    // Load voice list for current defaults
     await _loadVoiceList(prefix);
-    const voiceId = $(prefix + "-voice-id");
-    if (voiceId) voiceId.value = profile.voice_id || "";
-    const speed = $(prefix + "-voice-speed");
-    const speedVal = $(prefix + "-voice-speed-val");
-    if (speed) {
-      speed.value = profile.rate || 1.0;
-      if (speedVal) speedVal.textContent = speed.value;
+    // Load saved profile
+    try {
+      const profile = await api.get("/characters/" + charId + "/voice-profile");
+      if (!profile || !profile.backend) {
+        _updateFieldVisibility(prefix);
+        return;
+      }
+      const backend = $(prefix + "-voice-backend");
+      const lang = $(prefix + "-voice-lang");
+      const enabled = $(prefix + "-voice-enabled");
+      if (enabled) enabled.checked = profile.enabled === true || profile.enabled === 1;
+      if (backend) backend.value = profile.backend || "edge";
+      // Set language from voice_id locale (e.g. "en-US" → "en")
+      const langCode = (profile.language || "en-US").split("-")[0];
+      if (lang) lang.value = langCode;
+      await _loadVoiceList(prefix);
+      const voiceId = $(prefix + "-voice-id");
+      if (voiceId) voiceId.value = profile.voice_id || "";
+      const speed = $(prefix + "-voice-speed");
+      const speedVal = $(prefix + "-voice-speed-val");
+      if (speed) {
+        speed.value = profile.rate || 1.0;
+        if (speedVal) speedVal.textContent = speed.value;
+      }
+      const pitch = $(prefix + "-voice-pitch");
+      const pitchVal = $(prefix + "-voice-pitch-val");
+      if (pitch) {
+        pitch.value = profile.pitch || 1.0;
+        if (pitchVal) pitchVal.textContent = pitch.value;
+      }
+      const customPrompt = $(prefix + "-voice-custom-prompt");
+      if (customPrompt) customPrompt.value = profile.speech_prompt || "";
+      const apiUrl = $(prefix + "-voice-api-url");
+      if (apiUrl) apiUrl.value = profile.api_url || "";
+      const apiKey = $(prefix + "-voice-api-key");
+      if (apiKey) apiKey.value = profile.api_key || "";
+      const model = $(prefix + "-voice-model");
+      if (model) model.value = profile.model || "";
+      _updateFieldVisibility(prefix);
+    } catch (e) {
+      // No profile yet — that's fine, defaults are loaded
+      _updateFieldVisibility(prefix);
     }
-    const pitch = $(prefix + "-voice-pitch");
-    const pitchVal = $(prefix + "-voice-pitch-val");
-    if (pitch) {
-      pitch.value = profile.pitch || 1.0;
-      if (pitchVal) pitchVal.textContent = pitch.value;
-    }
-    const customPrompt = $(prefix + "-voice-custom-prompt");
-    if (customPrompt) customPrompt.value = profile.speech_prompt || "";
-    const apiUrl = $(prefix + "-voice-api-url");
-    if (apiUrl) apiUrl.value = profile.api_url || "";
-    const apiKey = $(prefix + "-voice-api-key");
-    if (apiKey) apiKey.value = profile.api_key || "";
-    const model = $(prefix + "-voice-model");
-    if (model) model.value = profile.model || "";
-    _updateFieldVisibility(prefix);
-  } catch (e) {
-    // No profile yet — that's fine, defaults are loaded
-    _updateFieldVisibility(prefix);
+  } finally {
+    _setVoiceLoading(prefix, false);
   }
 }
 
