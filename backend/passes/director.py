@@ -18,7 +18,7 @@ from ..tool_defs import (
     enabled_schemas,
     build_direct_scene_tool,
 )
-from ..prompt_builder import build_tool_prompt
+from ..prompt_builder import build_director_tool_prompt
 from ..pipeline_utils import extract_hyperparams, build_multimodal_content
 
 logger = logging.getLogger(__name__)
@@ -137,7 +137,10 @@ async def _director_pass(
     for name in tool_names:
         if client.is_aborted:
             break
-        tool_tail = build_tool_prompt(
+        tool_schema = next(
+            (s for s in tool_schemas if s["function"]["name"] == name), None
+        )
+        tool_tail = build_director_tool_prompt(
             name,
             user_message,
             active_moods,
@@ -145,6 +148,7 @@ async def _director_pass(
             reasoning_on=reasoning_on,
             director_fragments=director_fragments,
             progressive_state=progressive_state,
+            tool_schema=tool_schema,
         )
         tail = (
             "___\n\n" + lorebook_block + "\n\n" if lorebook_block else ""

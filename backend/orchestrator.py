@@ -20,7 +20,7 @@ from .prompt_builder import (
     replace_placeholders,
 )
 from .kv_tracker import _KVCacheTracker
-from .pipeline_utils import extract_hyperparams
+from .pipeline_utils import extract_hyperparams, _PlaceholderClient
 from .passes.director import _director_pass
 from .passes.writer import _writer_pass, build_writer_content
 from .passes.editor import editor_pass
@@ -29,62 +29,6 @@ logger = logging.getLogger(__name__)
 
 
 # ── Core pipeline ─────────────────────────────────────────────────────────────
-
-
-def _replace_in_messages(
-    messages: list[dict], user_name: str, char_name: str
-) -> list[dict]:
-    result = []
-    for msg in messages:
-        content = msg.get("content")
-        if isinstance(content, str):
-            content = replace_placeholders(content, user_name, char_name)
-        elif isinstance(content, list):
-            content = [
-                (
-                    {
-                        **part,
-                        "text": replace_placeholders(
-                            part["text"], user_name, char_name
-                        ),
-                    }
-                    if part.get("type") == "text"
-                    else part
-                )
-                for part in content
-            ]
-        result.append({**msg, "content": content})
-    return result
-
-
-class _PlaceholderClient(LLMClient):
-    """Thin wrapper that replaces {{user}}/{{char}} in messages before completion."""
-
-    def __init__(self, inner: LLMClient, user_name: str, char_name: str) -> None:
-        self._inner = inner
-        self._user_name = user_name
-        self._char_name = char_name
-
-    def abort(self) -> None:
-        self._inner.abort()
-
-    @property
-    def is_aborted(self) -> bool:
-        return self._inner.is_aborted
-
-    async def complete(
-        self,
-        messages: list[dict],
-        model: str,
-        tools: list[dict] | None = None,
-        tool_choice: dict | str | None = None,
-        **params,
-    ):
-        msgs = _replace_in_messages(messages, self._user_name, self._char_name)
-        async for item in self._inner.complete(
-            msgs, model, tools=tools, tool_choice=tool_choice, **params
-        ):
-            yield item
 
 
 async def _run_pipeline(
@@ -598,8 +542,7 @@ async def _persist_result(
         await db.update_director_state(
             conversation_id,
             res["active_moods"],
-            res.get("extra_fields", {}).get("keywords"),
-            res.get("progressive_fields"),
+            progressive_fields=res.get("progressive_fields"),
         )
     if res.get("rewritten_msg") and user_msg_id:
         await db.update_message_content(user_msg_id, res["effective_msg"])
@@ -646,8 +589,7 @@ async def _fallback_persist(
             await db.update_director_state(
                 conversation_id,
                 res["active_moods"],
-                res.get("extra_fields", {}).get("keywords"),
-                res.get("progressive_fields"),
+                progressive_fields=res.get("progressive_fields"),
             )
         if res.get("rewritten_msg") and user_msg_id:
             await db.update_message_content(user_msg_id, res["effective_msg"])
