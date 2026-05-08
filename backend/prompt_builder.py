@@ -5,7 +5,7 @@ and tool-call prompts for the orchestrator pipeline.
 
 from __future__ import annotations
 
-from .utils import Macros
+from .macros import Macros
 from .tool_defs import (
     TOOLS,
     DIRECTOR_PREAMBLE,
@@ -29,7 +29,7 @@ def format_message_with_attachments(message: dict, macros: Macros | None) -> dic
     """
     role = message["role"]
     raw = message.get("content", "")
-    text = macros.resolve(raw) if macros else raw
+    text = macros.resolve_prompt(raw) if macros else raw
     attachments = message.get("attachments") or []
 
     if not attachments:
@@ -59,7 +59,7 @@ def build_prefix(
     macros: Macros | None = None,
     user_description: str = "",
 ) -> list[dict]:
-    resolve = macros.resolve if macros else (lambda t: t)
+    resolve = macros.resolve_message if macros else (lambda t: t)
     resolved = {
         key: resolve(val)
         for key, val in {
@@ -317,7 +317,7 @@ def compute_lorebook_injection_block(
 
     matched.sort(key=lambda e: e.get("priority", 100), reverse=True)
 
-    resolve = macros.resolve if macros else (lambda t: t)
+    resolve = macros.resolve_message if macros else (lambda t: t)
     parts = ["**Lorebook**"]
     for entry in matched:
         name = resolve(entry.get("name", ""))

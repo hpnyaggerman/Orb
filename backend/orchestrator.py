@@ -19,7 +19,8 @@ from .prompt_builder import (
     compute_lorebook_injection_block,
 )
 from .kv_tracker import _KVCacheTracker
-from .utils import extract_hyperparams, Macros
+from .macros import Macros
+from .utils import extract_hyperparams
 from .passes.director import _director_pass
 from .passes.writer import _writer_pass, build_writer_content
 from .passes.editor import editor_pass
@@ -60,6 +61,9 @@ async def _run_pipeline(
         macros = Macros("User", "")
     if attachments is None:
         attachments = []
+
+    user_message = macros.resolve_message(user_message)
+
     enabled_tools = settings.get("enabled_tools") or {}
     agent_on = bool(settings.get("enable_agent", 1))
     if not agent_on:
@@ -194,7 +198,7 @@ async def _run_pipeline(
 
     # Style injection
     direct_scene_enabled = agent_on and bool(enabled_tools.get("direct_scene", False))
-    inj_block = macros.resolve(
+    inj_block = macros.resolve_message(
         compute_style_injection_block(
             active_moods,
             director["active_moods"],

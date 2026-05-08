@@ -97,7 +97,7 @@ from .orchestrator import (
 )
 from .llm_client import LLMClient
 from .endpoint_profiles import profile_for
-from .utils import Macros
+from .macros import Macros
 from . import tavern_cards
 from . import prompt_builder
 
@@ -1559,12 +1559,14 @@ async def api_get_context_size(cid: str):
 
     # Measure each component individually
     sys_text = system_prompt or ""
-    persona_text = macros.resolve(char_persona or "")
-    scenario_text = macros.resolve(conv.get("character_scenario", "") or "")
-    mes_text = macros.resolve(mes_example or "")
-    post_text = macros.resolve(conv.get("post_history_instructions", "") or "")
+    persona_text = macros.resolve_message(char_persona or "")
+    scenario_text = macros.resolve_message(conv.get("character_scenario", "") or "")
+    mes_text = macros.resolve_message(mes_example or "")
+    post_text = macros.resolve_message(conv.get("post_history_instructions", "") or "")
     user_persona_text = (
-        f"## User: {macros.user}\n{macros.resolve(user_desc)}" if user_desc else ""
+        f"## User: {macros.user}\n{macros.resolve_message(user_desc)}"
+        if user_desc
+        else ""
     )
     msg_chars = sum(len(m.get("content", "") or "") for m in messages)
 
