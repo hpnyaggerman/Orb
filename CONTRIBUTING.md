@@ -43,3 +43,4 @@ If any of these fail, fix it before submitting.
 - Keep the agent's scope tight - less freedom, fewer hallucinations.
 - If something can be done with an algorithm, don't use an LLM for it.
 - AI-generated code is accepted. It will be manually reviewed just like human written code. But must be subjected to more testing.
+- What about support for other languages? => The repo is optimized for English only, especially the tts and detection algorithms. You'd probably wanna fork if your use case is non-English. Can't support grammar for every language under the sun.
