@@ -79,15 +79,15 @@ export function showMoodFragmentModal(fragId = null) {
       <div class="field"><label>ID <span style="font-size:10px;color:var(--text-muted)">(For tool-calling)</span></label>
         <input id="frag-id" value="${esc(d.id)}" ${isEdit ? "disabled" : ""} placeholder="e.g. dramatic"></div>
       <div class="field"><label>Label <span style="font-size:10px;color:var(--text-muted)">(For display only)</span></label>
-        <input id="frag-label" value="${esc(d.label)}"></div>
+        <input id="frag-label" value="${esc(d.label)}" placeholder="Terse"></div>
     </div>
     <div class="field"><label>Description</label>
-      <input id="frag-desc" value="${esc(d.description)}"></div>
+      <input id="frag-desc" value="${esc(d.description)}" placeholder="Short, clipped sentences. Minimal description."></div>
     <div class="field"><label>Prompt Text</label>
-      <textarea id="frag-text" rows="4">${esc(d.prompt_text)}</textarea></div>
+      <textarea id="frag-text" rows="4" placeholder="Write tersely. Short sentences. No flowery language.">${esc(d.prompt_text)}</textarea></div>
     <div class="field">
       <label>Negative Prompt <span style="font-size:10px;color:var(--text-muted)">(injected if this fragment is removed next turn)</span></label>
-      <textarea id="frag-neg" rows="3">${esc(d.negative_prompt || "")}</textarea>
+      <textarea id="frag-neg" rows="3" placeholder="Stop using short, clipped sentences.">${esc(d.negative_prompt || "")}</textarea>
     </div>
     <div class="modal-actions">
       ${isEdit ? `<button class="btn btn-danger btn-sm" onclick="deleteMoodFragment('${esc(d.id)}')">Delete</button>` : ""}
@@ -319,7 +319,7 @@ export function showDirectorFragmentModal(fragId = null) {
       </div>
     </div>
     <div class="field"><label>Description <span style="font-size:10px;color:var(--text-muted)">(shown to the LLM in the tool schema)</span></label>
-      <textarea id="dir-frag-desc" rows="4">${esc(d.description)}</textarea></div>
+      <textarea id="dir-frag-desc" rows="4" placeholder="Set the pace of the narration, e.g. &#39;slow&#39;, &#39;fast&#39;, &#39;time-skip&#39;">${esc(d.description)}</textarea></div>
     <div class="field-row">
       <div class="field" style="align-self:flex-end;padding-bottom:4px">
         <label class="modal-checkbox-label">
@@ -591,7 +591,6 @@ function charFormTabs(prefix, d, isEdit, worlds = []) {
       <div class="tab" onclick="switchTab(this,'${prefix}-ts')">Scenario</div>
       <div class="tab" onclick="switchTab(this,'${prefix}-tm')">Messages</div>
       ${isEdit ? `<div class="tab" onclick="switchTab(this,'${prefix}-ta')">Advanced</div>` : ""}
-      ${isEdit ? `<div class="tab" onclick="switchTab(this,'${prefix}-tmisc')">Misc</div>` : ""}
     </div>
     <div id="${prefix}-tp" class="tab-content active">
       <div class="field"><label>Description</label><textarea id="${prefix}-desc" rows="5">${esc(d.description || "")}</textarea></div>
@@ -613,17 +612,6 @@ function charFormTabs(prefix, d, isEdit, worlds = []) {
       isEdit
         ? `
     <div id="${prefix}-ta" class="tab-content">
-      <div class="field"><label>System Prompt Override</label><textarea id="${prefix}-sysprompt" rows="3">${esc(d.system_prompt || "")}</textarea></div>
-      <div class="field"><label>Post-History Instructions</label><textarea id="${prefix}-posthist" rows="3">${esc(d.post_history_instructions || "")}</textarea></div>
-      <div style="font-size:11px;color:var(--text-muted);margin-top:8px">Source: ${esc(d.source_format)} · ID: ${esc(d.id)}</div>
-    </div>`
-        : ""
-    }
-    ${
-      isEdit
-        ? `
-    <div id="${prefix}-tmisc" class="tab-content">
-      <div class="field"><label>Creator's Note</label><textarea id="${prefix}-creator-notes" rows="4">${esc(d.creator_notes || "")}</textarea></div>
       <div class="field">
         <label>Tags</label>
         <div class="lb-chip-wrap" id="${prefix}-tag-wrap" onclick="document.getElementById('${prefix}-tag-text')?.focus()"></div>
@@ -635,6 +623,9 @@ function charFormTabs(prefix, d, isEdit, worlds = []) {
           ${worldOptions}
         </select>
       </div>
+      <div class="field"><label>Creator's Note</label><textarea id="${prefix}-creator-notes" rows="1">${esc(d.creator_notes || "")}</textarea></div>
+      <div class="field"><label>System Prompt Override</label><textarea id="${prefix}-sysprompt" rows="1">${esc(d.system_prompt || "")}</textarea></div>
+      <div class="field"><label>Post-History Instructions</label><textarea id="${prefix}-posthist" rows="1">${esc(d.post_history_instructions || "")}</textarea></div>
       ${
         d.character_book
           ? `<div style="font-size:11px;color:var(--text-muted);margin-top:8px">Imported card contains an embedded lorebook (${(d.character_book.entries || []).length} entries). It will be imported as a new lorebook unless you select one above.</div>`

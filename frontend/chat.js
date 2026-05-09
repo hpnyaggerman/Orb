@@ -92,7 +92,7 @@ function buildMsgToolbar(m) {
 
   const magicInput =
     isAssistant && m.id && !isGreeting && S.magicInputMsgId === m.id
-      ? `<input class="magic-input" type="text" placeholder="Direction…" id="magic-input-${m.id}" onkeydown="handleMagicKey(event,${m.id})" autofocus>`
+      ? `<input class="magic-input" type="text" placeholder="Direction/Fix…" id="magic-input-${m.id}" onkeydown="handleMagicKey(event,${m.id})" autofocus>`
       : "";
 
   const delBtn = !m.id
