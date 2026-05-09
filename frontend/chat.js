@@ -473,6 +473,10 @@ export function showCompressModal() {
   showModal(`
     <h2>Compress History</h2>
     <p class="modal-subtitle">Summarize the story so far into a new conversation, carrying over the most recent messages.</p>
+    <div style="margin-bottom:14px">
+      <label style="display:block;font-size:0.9em;margin-bottom:6px;color:var(--text-muted)">Custom instructions (optional)</label>
+      <textarea id="compress-instructions" class="modal-textarea" rows="3" spellcheck="false" placeholder="e.g. Past tense, omit small talk…" style="resize:vertical"></textarea>
+    </div>
     <div style="margin-bottom:20px">
       <label style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:0.95em">
         Keep last
@@ -482,9 +486,13 @@ export function showCompressModal() {
       </label>
       <p style="color:var(--text-muted);font-size:0.88em;margin-top:8px">${totalMsgs} messages in this conversation</p>
     </div>
+    <p id="compress-status" class="modal-subtitle" style="display:none"></p>
+    <textarea id="compress-textarea" class="modal-textarea-lg" spellcheck="false" placeholder="Summary will appear here after you click Generate…" style="display:none"></textarea>
     <div class="modal-actions">
-      <button class="btn" onclick="closeModal()">Cancel</button>
-      <button class="btn btn-accent" onclick="generateCompressionSummary()">Generate Summary →</button>
+      <button class="btn" onclick="cancelCompression()">Cancel</button>
+      <button class="btn" id="compress-regen-btn" onclick="generateCompressionSummary()" style="display:none" disabled>Regenerate</button>
+      <button class="btn btn-accent" id="compress-apply-btn" onclick="applyCompression()" style="display:none" disabled>Create New Conversation</button>
+      <button class="btn btn-accent" id="compress-gen-btn" onclick="generateCompressionSummary()">Generate</button>
     </div>`);
 }
 
@@ -505,26 +513,34 @@ export async function generateCompressionSummary() {
 
   const selectEl = document.getElementById("compress-keep-select");
   if (selectEl) _compressKeepCount = parseInt(selectEl.value, 10);
+  const customInstructions = (document.getElementById("compress-instructions")?.value || "").trim() || null;
 
-  // Transition to step 2 in-place
-  const modalEl = document.querySelector(".modal");
-  if (!modalEl) return;
-  modalEl.innerHTML = `
-    <h2>Review Summary</h2>
-    <p id="compress-status" class="modal-subtitle">Generating summary…</p>
-    <textarea id="compress-textarea" class="modal-textarea-lg" spellcheck="false" placeholder="Summary will appear here…"></textarea>
-    <div class="modal-actions">
-      <button class="btn" onclick="cancelCompression()">Cancel</button>
-      <button class="btn" id="compress-regen-btn" onclick="generateCompressionSummary()" disabled>Regenerate</button>
-      <button class="btn btn-accent" id="compress-apply-btn" onclick="applyCompression()" disabled>Create New Conversation</button>
-    </div>`;
-  const overlayEl = modalEl.closest(".modal-overlay");
-  if (overlayEl) overlayEl.setAttribute("onclick", "if(event.target===this)cancelCompression()");
-
-  const textarea = document.getElementById("compress-textarea");
-  const statusEl = document.getElementById("compress-status");
+  const genBtn = document.getElementById("compress-gen-btn");
   const regenBtn = document.getElementById("compress-regen-btn");
   const applyBtn = document.getElementById("compress-apply-btn");
+  const statusEl = document.getElementById("compress-status");
+  const textarea = document.getElementById("compress-textarea");
+
+  if (genBtn) genBtn.style.display = "none";
+  if (regenBtn) {
+    regenBtn.style.display = "";
+    regenBtn.disabled = true;
+  }
+  if (applyBtn) {
+    applyBtn.style.display = "";
+    applyBtn.disabled = true;
+  }
+  if (statusEl) {
+    statusEl.style.display = "";
+    statusEl.textContent = "Generating summary…";
+  }
+  if (textarea) {
+    textarea.style.display = "";
+    textarea.value = "";
+  }
+
+  const overlayEl = document.querySelector(".modal-overlay");
+  if (overlayEl) overlayEl.setAttribute("onclick", "if(event.target===this)cancelCompression()");
 
   _compressAbort = new AbortController();
   let summaryText = "";
@@ -533,7 +549,7 @@ export async function generateCompressionSummary() {
     const resp = await fetch(`/api/conversations/${S.activeConvId}/summarize`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ keep_count: _compressKeepCount }),
+      body: JSON.stringify({ keep_count: _compressKeepCount, custom_instructions: customInstructions }),
       signal: _compressAbort.signal,
     });
 

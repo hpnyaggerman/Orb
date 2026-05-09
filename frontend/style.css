@@ -1647,6 +1647,12 @@ body {
 }
 
 /* Large review/edit textarea (e.g. compress summary) */
+.modal-textarea {
+  width: 100%;
+  resize: vertical;
+  font-family: inherit;
+}
+
 .modal-textarea-lg {
   width: 100%;
   height: 280px;

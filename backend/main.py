@@ -100,6 +100,7 @@ from .endpoint_profiles import profile_for
 from .macros import Macros
 from . import tavern_cards
 from . import prompt_builder
+from .summarizer import ConversationSummarizer
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -296,6 +297,7 @@ class ConversationUpdate(BaseModel):
 
 class SummarizeRequest(BaseModel):
     keep_count: int  # must be one of 2, 4, 6, 8
+    custom_instructions: str | None = None
 
 
 class CompressRequest(BaseModel):
@@ -945,65 +947,51 @@ async def api_summarize_conversation(
 
     settings = await get_settings()
     char_name = conv.get("character_name", "Character") or "Character"
-    char_scenario = conv.get("character_scenario", "") or ""
+    active_persona_id = settings.get("active_persona_id")
+    active_persona = (
+        await get_user_persona(active_persona_id) if active_persona_id else None
+    )
+    system_prompt, char_persona, mes_example = await resolve_char_context(
+        conv, settings
+    )
+    macros = Macros.from_settings(settings, char_name, active_persona)
+    user_description = (
+        active_persona.get("description", "")
+        if active_persona
+        else settings.get("user_description", "")
+    )
 
     client = LLMClient(
         settings["endpoint_url"],
         api_key=settings.get("api_key", ""),
         profile=profile_for(settings["endpoint_url"], settings.get("model_name", "")),
     )
-    client_ref = [client]
+    summarizer = ConversationSummarizer(client, settings)
+    llm_messages = summarizer.build_messages(
+        system_prompt,
+        char_persona,
+        conv.get("character_scenario", "") or "",
+        mes_example,
+        conv.get("post_history_instructions", ""),
+        history_slice,
+        macros,
+        user_description,
+        custom_instructions=data.custom_instructions,
+    )
 
     async def _gen():
-        parts = []
-        for msg in history_slice:
-            label = char_name if msg["role"] == "assistant" else "User"
-            parts.append(f"{label}: {msg['content']}")
-        history_text = "\n\n".join(parts)
-
-        system = (
-            f"You are a narrative scribe summarizing a roleplay story between User and {char_name}."
-            + (f" Setting: {char_scenario}." if char_scenario else "")
-            + " Write a rich prose summary of the events so far."
-            " Preserve significant dialogue verbatim in quotes."
-            " Record key story beats, milestones, and relationship developments."
-            " Write in past tense. Be thorough — this will be the sole context for the story's continuation."
-        )
-
-        llm_messages = [
-            {"role": "system", "content": system},
-            {
-                "role": "user",
-                "content": f"Story to summarize:\n\n{history_text}\n\nWrite the narrative summary now.",
-            },
-        ]
-
-        params = {
-            k: v
-            for k in [
-                "temperature",
-                "max_tokens",
-                "top_p",
-                "min_p",
-                "top_k",
-                "repetition_penalty",
-            ]
-            if (v := settings.get(k)) is not None
-        }
-
         try:
-            async for chunk in client.complete(
-                llm_messages, settings.get("model_name", ""), **params
+            async for delta in summarizer.stream(
+                llm_messages, settings.get("model_name", "")
             ):
-                if chunk["type"] == "content":
-                    yield {"event": "token", "data": chunk["delta"]}
+                yield {"event": "token", "data": delta}
             yield {"event": "done", "data": ""}
         except Exception as e:
             logger.error("Summarize error: %s", e)
             yield {"event": "error", "data": str(e)}
 
     return _CleanupStreamingResponse(
-        _sse_stream(_gen(), request, client_ref=client_ref, cid=cid),
+        _sse_stream(_gen(), request, client_ref=[client], cid=cid),
         media_type="text/event-stream",
     )
 
