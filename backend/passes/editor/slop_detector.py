@@ -28,7 +28,7 @@ _WINDOW_PADDING = 2
 
 @dataclass
 class ClicheHit:
-    canonical: str
+    phrase: str
     score: float
 
 
@@ -92,19 +92,13 @@ def _match_sentence(
                     pattern = rf"\b{re.escape(variant)}\b"
                     if re.search(pattern, sent_lower) and 1.0 > best_score:
                         best_score = 1.0
-                        best = ClicheHit(
-                            canonical=variant_group[0],
-                            score=1.0,
-                        )
+                        best = ClicheHit(phrase=variant, score=1.0)
                 else:
                     # 2–3 tokens: compare normalised forms (strips commas)
                     normalised_variant = " ".join(var_tokens)
                     if normalised_variant in sent_normalised and 1.0 > best_score:
                         best_score = 1.0
-                        best = ClicheHit(
-                            canonical=variant_group[0],
-                            score=1.0,
-                        )
+                        best = ClicheHit(phrase=variant, score=1.0)
                 continue
 
             # --- Longer phrases: trigram containment ---
@@ -121,16 +115,35 @@ def _match_sentence(
 
                 if score >= threshold and score > best_score:
                     best_score = score
-                    best = ClicheHit(
-                        canonical=variant_group[0],
-                        score=round(score, 4),
-                    )
+                    best = ClicheHit(phrase=variant, score=round(score, 4))
 
         if best:
             hits.append(best)
 
     hits.sort(key=lambda h: h.score, reverse=True)
-    return hits
+    return _deduplicate_hits(hits)
+
+
+def _deduplicate_hits(hits: list[ClicheHit]) -> list[ClicheHit]:
+    """Drop hits whose phrase tokens substantially overlap with a higher-scored hit.
+
+    Prevents trigram-sharing phrases (e.g. "tension in the air" and
+    "hanging in the air") from both firing when only one is in the text.
+    """
+    if len(hits) <= 1:
+        return hits
+    kept: list[ClicheHit] = []
+    for hit in hits:
+        hit_toks = set(_tokenize(hit.phrase))
+        dominated = any(
+            len(hit_toks & set(_tokenize(better.phrase)))
+            / len(hit_toks | set(_tokenize(better.phrase)))
+            >= 0.5
+            for better in kept
+        )
+        if not dominated:
+            kept.append(hit)
+    return kept
 
 
 def detect_cliches(
@@ -140,7 +153,7 @@ def detect_cliches(
 ) -> DetectionResult:
     sentences = _split_sentences(text)
     flagged: list[FlaggedSentence] = []
-    all_canonicals: set[str] = set()
+    all_phrases: set[str] = set()
 
     for sentence in sentences:
         tokens = _tokenize(sentence)
@@ -148,11 +161,11 @@ def detect_cliches(
         hits = _match_sentence(tokens, sent_lower, phrase_bank, threshold)
         if hits:
             flagged.append(FlaggedSentence(sentence=sentence, cliches=hits))
-            all_canonicals.update(h.canonical for h in hits)
+            all_phrases.update(h.phrase for h in hits)
 
     return DetectionResult(
         flagged_sentences=flagged,
-        unique_cliches=sorted(all_canonicals),
+        unique_cliches=sorted(all_phrases),
         total_sentences=len(sentences),
         flagged_count=len(flagged),
     )

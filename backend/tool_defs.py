@@ -176,7 +176,7 @@ EDITOR_PATCH_INSTRUCTIONS = (
     "- The `search` field must be copied EXACTLY from the draft text above, including all punctuation and quotes if they exist.\n"
     "- Each patch must target a DIFFERENT, non-overlapping piece of text.\n"
     "- Do NOT send a patch where `search` and `replace` are identical.\n"
-    "- For banned phrases: completely rewrite the sentence to eliminate the banned phrase. Make a creative and bold effort; do not just substitute with similar, related words. Note: The audit report may show the canonical phrase name, but you need to remove the actual variant that appears in the sentence.\n"
+    "- For banned phrases: completely rewrite the sentence to eliminate the banned phrase. Make a creative and bold effort; do not just substitute with similar, related words.\n"
     "- For repetitive openers: rewrite and replace flagged sentences so they no longer begin with the same opening words. Vary the sentence structure.\n"
     "- For repetitive templates: restructure flagged sentences so they no longer follow the same POS pattern. Change clause order, combine sentences, or vary syntax.\n"
     "- For contrastive negation ('not X, but Y'): rewrite sentences that use this cliché construction. Consider alternative phrasing that avoids this rhetorical formula.\n\n"

@@ -175,7 +175,7 @@ async def _create_tts_conversation(client, *, first_mes: str = "Hello there."):
 async def test_speak_message_rejects_non_assistant_message(client, db):
     char_id, cid, assistant_id = await _create_tts_conversation(client)
     async with db.execute(
-        "INSERT INTO messages (conversation_id, role, content, turn_index, swipe_index, is_active, parent_id, created_at) VALUES (?, 'user', 'Hi', 1, 0, 1, ?, datetime('now'))",
+        "INSERT INTO messages (conversation_id, role, content, turn_index, parent_id, created_at) VALUES (?, 'user', 'Hi', 1, ?, datetime('now'))",
         (cid, assistant_id),
     ) as cur:
         user_msg_id = cur.lastrowid

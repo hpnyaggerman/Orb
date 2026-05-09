@@ -149,7 +149,7 @@ def format_report(report: AuditReport) -> str:
         lines = ["Banned Phrases"]
         for fs in cr.flagged_sentences:
             for hit in fs.cliches:
-                lines.append(f'   - "{hit.canonical}" in sentence: {fs.sentence}')
+                lines.append(f'   - "{hit.phrase}" in sentence: {fs.sentence}')
         sections.append("\n".join(lines))
 
     # 2. Repetitive openers
