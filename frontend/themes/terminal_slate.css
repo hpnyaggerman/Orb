@@ -1,0 +1,60 @@
+:root {
+  --bg-deep:#0d0d0c;--bg-primary:#131312;--bg-surface:#181816;--bg-elevated:#1e1d1c;
+  --bg-hover:#242321;--border:#2c2b28;--border-light:#383631;
+
+  --text-primary:#97886d;
+  --text-secondary:#b6a686;
+  --text-muted:#544c3c;
+
+  --accent:#d8c89e;
+  --accent-dim:#6b6049;
+  --accent-glow:rgba(216,200,158,0.06);
+
+  --red:#c45d3a;
+
+  --font-prose:'Fira Code','Cascadia Code','Courier New',Consolas,monospace;
+  --font-ui:'Fira Code','Cascadia Code','Courier New',Consolas,monospace;
+  --font-mono:'Fira Code','Cascadia Code','Courier New',Consolas,monospace;
+  --radius:0px;
+  --font-prose-size:15px;
+  --sidebar-width:300px;--inspector-width:340px;--tools-width:260px;
+}
+
+/* Scrollbars */
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border-light); border-radius: 0; }
+::-webkit-scrollbar-thumb:hover { background: var(--accent-dim); }
+* { scrollbar-width: thin; scrollbar-color: var(--border-light) transparent; }
+
+textarea { appearance: none; -webkit-appearance: none; }
+textarea::-webkit-resizer { background: transparent; }
+
+/* Full-width messages */
+.message {
+  max-width: 100% !important;
+  margin-left: 0 !important;
+  margin-right: 0 !important;
+}
+
+.message.user {
+  margin-left: 0 !important;
+}
+
+.message .msg-body {
+  border-radius: 0 !important;
+  border-left: none !important;
+  border-right: none !important;
+  border-top: none !important;
+  border-bottom: 1px solid var(--border) !important;
+  padding: 10px 20px !important;
+}
+
+.message.user .msg-body {
+  background: var(--bg-elevated) !important;
+  border-color: var(--border-light) !important;
+}
+
+#chat-messages {
+  padding: 1 !important;
+}
