@@ -1448,11 +1448,15 @@ input[type="range"]::-moz-range-track {
 .modal-checkbox-label {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   align-self: flex-start;
   gap: 8px;
   cursor: pointer;
   color: var(--text-primary);
   font-size: 13px;
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
   margin-bottom: 20px;
 }
 

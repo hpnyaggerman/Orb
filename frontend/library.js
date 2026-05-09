@@ -645,11 +645,11 @@ function charFormTabs(prefix, d, isEdit, worlds = []) {
         </div>
       <div class="field voice-enable-row">
         <label class="modal-checkbox-label">
+          Enable speech generation for this character
           <label class="tog" onclick="event.stopPropagation()">
             <input type="checkbox" id="${prefix}-voice-enabled">
             <span class="tog-slider"></span>
           </label>
-          Enable speech generation for this character
         </label>
       </div>
       <div class="field"><label>TTS Backend</label>
