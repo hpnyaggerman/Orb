@@ -643,9 +643,12 @@ function charFormTabs(prefix, d, isEdit, worlds = []) {
           <div class="voice-loading-spinner"></div>
           <span>Loading voice settings…</span>
         </div>
-      <div class="field">
+      <div class="field voice-enable-row">
         <label class="modal-checkbox-label">
-          <input type="checkbox" id="${prefix}-voice-enabled">
+          <label class="tog" onclick="event.stopPropagation()">
+            <input type="checkbox" id="${prefix}-voice-enabled">
+            <span class="tog-slider"></span>
+          </label>
           Enable speech generation for this character
         </label>
       </div>

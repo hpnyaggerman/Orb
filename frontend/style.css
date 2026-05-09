@@ -1456,6 +1456,12 @@ input[type="range"]::-moz-range-track {
   margin-bottom: 20px;
 }
 
+.voice-enable-row {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 12px;
+  margin-bottom: 12px;
+}
+
 /* ═══════════════════════════════════════════
    6. Generation Status Bar
    ═══════════════════════════════════════════ */
