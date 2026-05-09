@@ -47,7 +47,7 @@ export const S = {
   reasoningUserOverride: false,
   reasoningOpen: true,
   contextSizeOpen: true,
-  reasoningEnabled: { director: true, writer: false, editor: false },
+  reasoningEnabled: { director: true, writer: false, editor: false, scripter: false },
   pendingRefineDiff: null, // {original, ops} set on writer_rewrite, cleared on next stream
   showEditorDiff: true, // when false, editor-pass diff highlights + "clear diff" button are suppressed
   hideUntilBaked: false, // when true, in-flight streaming message is kept detached from DOM until stream finalizes
@@ -56,4 +56,13 @@ export const S = {
   hasMultipleTabs: false, // true if multiple tabs of the app are open
   editingPendingUserMsg: false, // true when the pending (not-yet-persisted) user message is in edit mode
   pendingUserMsgEdit: null, // stores edited content for a pending user message to apply after streaming
+  speakingMsgId: null, // message ID currently being spoken (null = idle)
+  ttsLoading: false, // true while fetching TTS audio
+  ttsError: null, // last TTS error message
+  ttsAutoSpeak: false, // automatically speak new assistant messages
+  ttsVolume: 0.75, // audio playback volume, 0.0 - 1.0
+  ttsVoiceProfile: null, // cached voice profile for active character
+  ttsCurrentTime: 0,
+  ttsDuration: 0,
+  ttsEnabled: false, // loaded from settings
 };

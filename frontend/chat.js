@@ -1,25 +1,26 @@
+import { api, speakMessage as apiSpeakMessage } from "./api.js";
+import { loadCharacters, refreshCharacters, renderCharacters } from "./library.js";
+import { activateAndPrioritizeWorld, deactivateWorld } from "./lorebooks.js";
+import { closeModal, showConfirmModal, showModal } from "./modal.js";
 import { S } from "./state.js";
+import { requestSendPermission } from "./tabLock.js";
 import {
   $,
+  avatarUrl,
+  convUrl,
   esc,
   formatBytes,
   formatProse,
   formatProseWithDiff,
-  sentenceDiff,
-  toast,
-  scrollToBottom,
-  scrollToMessage,
-  avatarUrl,
-  convUrl,
   formatRelativeDate,
   resolvePlaceholders,
+  scrollToBottom,
+  scrollToMessage,
+  sentenceDiff,
+  toast,
 } from "./utils.js";
-import { api } from "./api.js";
-import { showModal, closeModal, showConfirmModal } from "./modal.js";
-import { renderCharacters, loadCharacters, refreshCharacters } from "./library.js";
-import { activateAndPrioritizeWorld, deactivateWorld } from "./lorebooks.js";
 import { validate } from "./validate.js";
-import { requestSendPermission } from "./tabLock.js";
+import { refreshTtsBar } from "./voice.js";
 
 function canStartGeneration() {
   if (S.isStreaming) return false;
@@ -58,6 +59,7 @@ const ICON_DEL = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" str
 const ICON_CLEAR = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/></svg>`;
 const ICON_SUPER_REGEN = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>`;
 const ICON_MAGIC = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><path d="M15 4V2"/><path d="M15 16v-2"/><path d="M8 9h2"/><path d="M20 9h2"/><path d="M17.8 11.8 19 13"/><path d="M15 9h.01"/><path d="M17.8 6.2 19 5"/><path d="m3 21 9-9"/><path d="M12.2 6.2 11 5"/></svg>`;
+const ICON_SPEAK = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>`;
 
 function buildMsgToolbar(m) {
   const isAssistant = m.role === "assistant";
@@ -106,7 +108,16 @@ function buildMsgToolbar(m) {
       ? `<button onclick="clearRefineDiff()" title="Clear diff highlights" class="btn-clear-diff">${ICON_CLEAR}</button>`
       : "";
 
-  return `${editBtn}${regenBtn}${superRegenBtn}${magicBtn}${magicInput}${delBtn}${diffBtn}`;
+  const speakBtn =
+    isAssistant && m.id && S.ttsEnabled
+      ? S.speakingMsgId === m.id
+        ? `<button class="btn-tts-active" onclick="stopSpeaking()" title="Stop speaking">${ICON_SPEAK}</button>`
+        : S.ttsLoading && S.speakingMsgId === m.id
+          ? `<button disabled class="btn-tts-loading" title="Loading audio…">${ICON_SPEAK}</button>`
+          : `<button onclick="speakMessage(${m.id})" title="Speak message">${ICON_SPEAK}</button>`
+      : "";
+
+  return `${speakBtn}${editBtn}${regenBtn}${superRegenBtn}${magicBtn}${magicInput}${delBtn}${diffBtn}`;
 }
 
 // ── Attachments rendering
@@ -249,6 +260,7 @@ export function resetChatUI() {
   S.messages = [];
   S.lastDirectorData = null;
   S.directorState = null;
+  S.ttsVoiceProfile = null;
   $("chat-title-text").textContent = "Select a character";
   $("chat-avatar").textContent = "📜";
   $("chat-input").disabled = true;
@@ -786,6 +798,17 @@ export function renderMessages() {
   if (!S.isStreaming) updateContextCounter();
 }
 
+function refreshMessageToolbar(msgId) {
+  if (!msgId) return;
+  const msg = S.messages.find((m) => m.id === msgId);
+  const toolbar = document.querySelector(`[data-msg-id="${msgId}"] .msg-toolbar`);
+  if (msg && toolbar) toolbar.innerHTML = buildMsgToolbar(msg);
+}
+
+function refreshTtsMessageToolbars(...msgIds) {
+  for (const msgId of new Set(msgIds.filter(Boolean))) refreshMessageToolbar(msgId);
+}
+
 function updateContextCounter() {
   fetchContextSize();
 }
@@ -1163,6 +1186,10 @@ async function afterStream() {
   renderInspector();
   scrollToBottom(true);
   refreshCharacters();
+
+  if (!wasAborted && S.ttsEnabled && S.ttsAutoSpeak && lastMsg?.role === "assistant" && lastMsg.id) {
+    speakMessageAction(lastMsg.id, { silentErrors: true });
+  }
 }
 
 async function processSSEStream(resp, container, msgDiv, signal) {
@@ -1769,4 +1796,100 @@ export function showAvatarPopup() {
 export function hideAvatarPopup() {
   const popup = document.getElementById("avatar-popup");
   if (popup) popup.classList.add("hidden");
+}
+
+// ── TTS / Speak ──────────────────────────────────────────────
+
+let _currentAudio = null;
+
+function resetTtsPlaybackState() {
+  S.speakingMsgId = null;
+  S.ttsLoading = false;
+  S.ttsCurrentTime = 0;
+  S.ttsDuration = 0;
+}
+
+export function setCurrentTtsVolume(volume) {
+  if (_currentAudio) _currentAudio.volume = Math.max(0, Math.min(1, Number(volume) || 0));
+}
+
+export async function speakMessageAction(msgId, opts = {}) {
+  if (!S.activeConvId || !msgId) return;
+
+  // If something is already playing, stop it first.
+  // Only patch the affected toolbar(s); re-rendering the whole chat log makes it blink.
+  const previousMsgId = S.speakingMsgId;
+  if (_currentAudio) {
+    _currentAudio.pause();
+    _currentAudio = null;
+  }
+
+  const msg = S.messages.find((m) => m.id === msgId);
+  S.speakingMsgId = msgId;
+  S.ttsLoading = true;
+  S.ttsError = null;
+  S.ttsCurrentTime = 0;
+  S.ttsDuration = 0;
+  refreshTtsMessageToolbars(previousMsgId, msgId);
+  refreshTtsBar();
+
+  try {
+    const { audioUrl } = await apiSpeakMessage(S.activeConvId, msgId);
+
+    const audio = new Audio(audioUrl);
+    audio.volume = Math.max(0, Math.min(1, S.ttsVolume ?? 0.75));
+    _currentAudio = audio;
+
+    audio.onloadedmetadata = () => {
+      S.ttsDuration = Number.isFinite(audio.duration) ? audio.duration : 0;
+      refreshTtsBar();
+    };
+
+    audio.ontimeupdate = () => {
+      S.ttsCurrentTime = audio.currentTime || 0;
+      S.ttsDuration = Number.isFinite(audio.duration) ? audio.duration : S.ttsDuration;
+      refreshTtsBar();
+    };
+
+    audio.onended = () => {
+      const endedMsgId = S.speakingMsgId;
+      resetTtsPlaybackState();
+      _currentAudio = null;
+      refreshTtsMessageToolbars(endedMsgId);
+      refreshTtsBar();
+    };
+
+    audio.onerror = () => {
+      const erroredMsgId = S.speakingMsgId;
+      resetTtsPlaybackState();
+      S.ttsError = "Audio playback failed";
+      _currentAudio = null;
+      refreshTtsMessageToolbars(erroredMsgId);
+      refreshTtsBar();
+    };
+
+    S.ttsLoading = false;
+    refreshTtsMessageToolbars(msgId);
+    refreshTtsBar();
+    await audio.play();
+  } catch (err) {
+    const erroredMsgId = S.speakingMsgId;
+    resetTtsPlaybackState();
+    S.ttsError = err.message || "TTS failed";
+    _currentAudio = null;
+    refreshTtsMessageToolbars(erroredMsgId);
+    refreshTtsBar();
+    if (!opts.silentErrors) toast(S.ttsError, "error");
+  }
+}
+
+export function stopSpeaking() {
+  const stoppedMsgId = S.speakingMsgId;
+  if (_currentAudio) {
+    _currentAudio.pause();
+    _currentAudio = null;
+  }
+  resetTtsPlaybackState();
+  refreshTtsMessageToolbars(stoppedMsgId);
+  refreshTtsBar();
 }
