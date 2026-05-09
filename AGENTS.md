@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Orb is an **agentic AI roleplay/writing frontend** with a Python/FastAPI backend and a vanilla JS frontend. It orchestrates multi-pass LLM pipelines (Director → Writer → Editor) with tool-calling agents that control scene direction, rewrite prompts, audit output quality, and enforce length constraints. Characters are imported as PNG cards (V2 spec). Conversations support branching (message tree with parent_id), lorebooks, mood fragments, and user personas.
+Orb is an **agentic AI roleplay/writing frontend** with a Python/FastAPI backend and a vanilla JS frontend. It orchestrates multi-pass LLM pipelines (Director → Writer → Editor) with tool-calling agents that control scene direction, rewrite prompts, and audit output quality. Characters are imported as PNG cards (V2 spec). Conversations support branching (message tree with parent_id), lorebooks, mood/director fragments, and user personas.
 
 **Stack:** Python 3.9+, FastAPI, aiosqlite, vanilla JS (no framework), SQLite DB, uvicorn
 
@@ -22,11 +22,11 @@ graph TD
         orch["handle_turn() in orchestrator.py"]
 
         pre["[Pre-Writer] Prompt Rewriter (optional)<br/>Rewrites vague user messages"]
-        dir["Director Pass (passes/director.py)<br/>LLM calls direct_scene tool → fills fragments<br/>Returns: moods, plot_summary, keywords, next_event,<br/>writing_direction, detected_repetitions, etc."]
-        writer["Writer Pass (passes/writer.py)<br/>Main generation pass. System prompt + history +<br/>Scene Direction injection block + user message.<br/>Streams response tokens via SSE."]
+        dir["Director Pass (passes/director.py)<br/>LLM calls direct_scene tool → fills fragments<br/>Fragments are user-defined (director_fragments table),<br/>except moods (mood_fragments table).<br/>Returns: moods, plot_summary, keywords, next_event,<br/>writing_direction, detected_repetitions, etc."]
+        writer["Writer Pass (passes/writer.py)<br/>Main generation pass. System prompt + history +<br/>Lorebook entries + Scene Direction injection block + user message.<br/>Streams response tokens via SSE."]
         editor["[Post-Writer] Editor Pass (passes/editor/) (optional)<br/>Checks: slop, banned phrases, repetitive openers,<br/>templates, structural repetition, length guard.<br/>Tools: editor_apply_patch or editor_rewrite.<br/>Up to 3 iterations."]
         tts["TTS Layer (tts/)<br/>Regex speech extraction → backend synthesis<br/>Adapters: Edge, ElevenLabs, Fish, Kokoro, OpenAI"]
-        summarizer["Summarizer (summarizer.py)<br/>Narrative summary + compress flow"]
+        summarizer["Summarizer (summarizer.py)<br/>Narrative summary + compress flow<br/>Not part of the pipeline — triggered manually"]
 
         orch --> pre --> dir --> writer --> editor
         writer -.-> tts
@@ -413,6 +413,6 @@ When running under Codex's filesystem/network sandbox, `aiosqlite` integration t
 
 13. **TTS regex extractor** — Splits text into speech/non-speech chunks using quotation marks. The `regex_extractor.py` handles edge cases (nested quotes, em-dashes) but isn't perfect for all writing styles. Only speech chunks are sent to the TTS backend.
 
-14. **Agent endpoint separation** — The Director can use a separate endpoint from the Writer (`agent_endpoint_id` in settings). If `agent_same_as_writer` is true, they share. Make sure to check which endpoint you're targeting when modifying agent-related code.
+14. **Agent endpoint separation** — Both the Director and Editor can use separate endpoints from the Writer (`agent_endpoint_id` in settings). If `agent_same_as_writer` is true, they share. When using a separate endpoint, note that a different prompt caching mechanism applies, and the instruction prompt has a small difference. Make sure to check which endpoint you're targeting when modifying agent-related code.
 
 15. **Macros resolve at different levels** — `resolve_message()` expands everything ({{user}}, {{char}}, inline macros like {{roll}}). `resolve_prompt()` only does {{user}}/{{char}} substitution. Use `resolve_prompt()` for historical messages where inline macros shouldn't fire.
