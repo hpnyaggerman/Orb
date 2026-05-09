@@ -1326,6 +1326,27 @@ body {
   width: 100%;
 }
 
+/* Range inputs — theme-aware (uses --accent, --bg-*) */
+input[type="range"] {
+  -webkit-appearance: none; appearance: none;
+  width: 100%; height: 6px;
+  background: var(--bg-elevated); border-radius: var(--radius); outline: none;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 14px; height: 14px; border-radius: 50%;
+  background: var(--accent); cursor: pointer;
+  border: 2px solid var(--bg-deep);
+}
+input[type="range"]::-moz-range-thumb {
+  width: 14px; height: 14px; border-radius: 50%;
+  background: var(--accent); cursor: pointer;
+  border: 2px solid var(--bg-deep);
+}
+input[type="range"]::-moz-range-track {
+  height: 6px; background: var(--bg-elevated); border-radius: var(--radius);
+}
+
 .agent-master-row {
   display: flex;
   align-items: center;
