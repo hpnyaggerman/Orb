@@ -411,10 +411,6 @@ class EditMessage(BaseModel):
     attachments: List[AttachmentIn] = []
 
 
-class SwitchSwipe(BaseModel):
-    swipe_index: int
-
-
 class RegenerateMsg(BaseModel):
     enable_agent: bool = True
 
@@ -877,7 +873,6 @@ async def api_create_conversation(data: ConversationCreate):
         title=title,
         char_name=char_name,
         char_scenario=char_scenario,
-        first_mes=first_mes,
         post_history_instructions=post_hist,
         character_card_id=card_id,
     )
@@ -1024,7 +1019,6 @@ async def api_compress_conversation(cid: str, data: CompressRequest):
         title=new_title,
         char_name=char_name,
         char_scenario=conv.get("character_scenario", "") or "",
-        first_mes="",
         post_history_instructions=conv.get("post_history_instructions", "") or "",
         character_card_id=conv.get("character_card_id"),
     )
