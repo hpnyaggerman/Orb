@@ -36,6 +36,10 @@ If any of these fail, fix it before submitting.
 - Write a summary in the PR description that explains the what and the why.
 - Link any related issues.
 
+## 4. AI-assisted contributions
+
+AI-generated code is welcome, but it needs extra scrutiny. If you're using an AI coding tool (Claude Code, Codex, Cursor, etc.), read `AGENTS.md` at the repo root first. It contains the architecture, database schema, API reference, and gotchas specific to this project — the stuff these tools need to produce correct code.
+
 ## Quick rules
 
 - Small models first. If a feature doesn't work on something like Gemma 4 26B4A, it probably doesn't belong here.
