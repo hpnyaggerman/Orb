@@ -249,6 +249,8 @@ export function resetChatUI() {
   S.messages = [];
   S.lastDirectorData = null;
   S.directorState = null;
+  S.inspectedMsgId = null;
+  S.inspectedDirectorData = null;
   $("chat-title-text").textContent = "Select a character";
   $("chat-avatar").textContent = "📜";
   $("chat-input").disabled = true;
@@ -364,7 +366,7 @@ export async function selectConversation(id) {
   S.editingMsgId = null;
   S.magicInputMsgId = null;
   renderMessages();
-  renderInspector();
+  clearInspectedMessage();
   scrollToBottom();
 }
 
@@ -855,12 +857,33 @@ export function startEdit(msgId) {
     scrollToMessage(msgId);
   }
   focusEditTextarea($("edit-textarea-" + msgId), cancelEdit);
+  inspectMessage(msgId);
 }
 
 export function cancelEdit() {
   S.editingMsgId = null;
   S.editingPendingUserMsg = false;
   renderMessages();
+  clearInspectedMessage();
+}
+
+export async function inspectMessage(msgId) {
+  if (!S.activeConvId) return;
+  try {
+    S.inspectedMsgId = msgId;
+    S.inspectedDirectorData = await api.get(convUrl(S.activeConvId, "messages", msgId, "director-log"));
+    renderInspector();
+  } catch (e) {
+    // If the log doesn't exist (e.g. very old messages before logs were added), silently ignore
+    S.inspectedDirectorData = null;
+    renderInspector();
+  }
+}
+
+export function clearInspectedMessage() {
+  S.inspectedMsgId = null;
+  S.inspectedDirectorData = null;
+  renderInspector();
 }
 
 function focusEditTextarea(ta, onEscape) {
@@ -893,7 +916,7 @@ export async function deleteMessage(msgId) {
         // Re-fetch director state so moods are correct after deletion
         S.directorState = await api.get(convUrl(S.activeConvId, "director"));
         renderMessages();
-        renderInspector();
+        clearInspectedMessage();
         scrollToBottom();
         toast("Message deleted");
       } catch (e) {
@@ -920,7 +943,7 @@ export async function switchBranch(msgId) {
     // Re-fetch director state so moods are correct for this branch
     S.directorState = await api.get(convUrl(S.activeConvId, "director"));
     renderMessages();
-    renderInspector();
+    await inspectMessage(msgId);
 
     if (anchorMsgId && anchorOffset !== null) {
       const newAnchorEl = ct.querySelector(`[data-msg-id="${anchorMsgId}"]`);
@@ -1082,7 +1105,7 @@ async function afterStream() {
     setStreaming(false);
     $("send-btn").disabled = false;
     renderMessages();
-    renderInspector();
+    clearInspectedMessage();
     return;
   }
 
@@ -1160,7 +1183,7 @@ async function afterStream() {
   } else {
     renderMessages();
   }
-  renderInspector();
+  clearInspectedMessage();
   scrollToBottom(true);
   refreshCharacters();
 }
@@ -1243,6 +1266,8 @@ function handleSSEEvent(event, data, container, msgDiv, onToken, onRewrite) {
     case "director_start":
       setGenerationPhase("directing");
       S.lastDirectorData = null;
+      S.inspectedMsgId = null;
+      S.inspectedDirectorData = null;
       renderInspector();
       break;
     case "director_done": {
@@ -1697,6 +1722,47 @@ export function renderInspector() {
        </div>`;
     const _rb = document.getElementById("reasoning-box");
     if (_rb) _rb.scrollTop = _rb.scrollHeight;
+    return;
+  }
+
+  const insp = S.inspectedMsgId && S.inspectedDirectorData ? S.inspectedDirectorData : null;
+
+  if (insp) {
+    const activeIds = insp.active_moods || [];
+    const stylesHtml = S.moodFragments
+      .map((f) => `<span class="style-tag ${activeIds.includes(f.id) ? "active" : ""}">${esc(f.label)}</span>`)
+      .join("");
+    const lat = insp.agent_latency_ms || 0;
+    const tc = insp.tool_calls || [];
+    const inj = insp.injection_block || "";
+    $("inspector-content").innerHTML = `
+      <div class="inspector-block" id="inspector-context-size"></div>
+      <div class="inspector-block">
+        <h4>Moods</h4>
+        <div>${stylesHtml || '<span style="color:var(--text-muted);font-size:12px">None</span>'}</div>
+      </div>
+      ${_buildReasoningHtml()}
+      ${
+        lat
+          ? `<div class="inspector-block"><h4>Agent Latency</h4>
+                 <div style="font-size:12px;color:var(--text-secondary)">${lat}ms</div></div>`
+          : ""
+      }
+      ${
+        tc.length
+          ? `<div class="inspector-block"><h4>Tool Calls</h4>
+                      <div class="injection-box">${esc(tc.map((c) => JSON.stringify(c)).join("\n\n"))}</div></div>`
+          : ""
+      }
+      ${
+        inj
+          ? `<div class="inspector-block"><h4>Injection Block</h4>
+                 <div class="injection-box">${esc(inj)}</div></div>`
+          : ""
+      }`;
+    const _rb = document.getElementById("reasoning-box");
+    if (_rb) _rb.scrollTop = _rb.scrollHeight;
+    renderContextSize();
     return;
   }
 

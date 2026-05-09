@@ -43,6 +43,7 @@ from .database import (
     get_messages_with_branch_info,
     get_director_state,
     get_conversation_logs,
+    get_director_log_for_message,
     list_character_cards,
     get_character_card,
     create_character_card,
@@ -1513,6 +1514,30 @@ async def api_get_logs(cid: str):
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return await get_conversation_logs(cid)
+
+
+@app.get("/api/conversations/{cid}/messages/{msg_id}/director-log")
+async def api_get_message_director_log(cid: str, msg_id: int):
+    conv = await get_conversation(cid)
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    msg = await get_message_by_id(msg_id)
+    if not msg or msg.get("conversation_id") != cid:
+        raise HTTPException(status_code=404, detail="Message not found")
+    log = await get_director_log_for_message(msg_id)
+    if not log:
+        return {
+            "active_moods": [],
+            "tool_calls": [],
+            "injection_block": "",
+            "agent_latency_ms": 0,
+        }
+    return {
+        "active_moods": log.get("active_moods_after", []),
+        "tool_calls": log.get("tool_calls", []),
+        "injection_block": log.get("injection_block", ""),
+        "agent_latency_ms": log.get("agent_latency_ms", 0),
+    }
 
 
 @app.get("/api/conversations/{cid}/context-size")

@@ -681,6 +681,16 @@ async def init_db():
                 "ALTER TABLE character_cards ADD COLUMN world_id TEXT DEFAULT NULL REFERENCES worlds(id) ON DELETE SET NULL"
             )
 
+        # Migration for conversation_logs message_id column
+        log_cols = {
+            row[1]
+            for row in await db.execute_fetchall("PRAGMA table_info(conversation_logs)")
+        }
+        if "message_id" not in log_cols:
+            await db.execute(
+                "ALTER TABLE conversation_logs ADD COLUMN message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL"
+            )
+
         # Seed settings if empty
         row = list(await db.execute_fetchall("SELECT COUNT(*) as c FROM settings"))
         if row[0]["c"] == 0:
@@ -1889,11 +1899,12 @@ async def add_conversation_log(
     injection: str,
     latency_ms: int,
     progressive_fields: dict | None = None,
+    message_id: int | None = None,
 ):
     async with get_db() as db:
         now = datetime.now(timezone.utc).isoformat()
         await db.execute(
-            "INSERT INTO conversation_logs (conversation_id, turn_index, agent_raw_output, tool_calls, active_moods_after, progressive_fields_after, injection_block, agent_latency_ms, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO conversation_logs (conversation_id, turn_index, agent_raw_output, tool_calls, active_moods_after, progressive_fields_after, injection_block, agent_latency_ms, created_at, message_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 cid,
                 turn_index,
@@ -1904,6 +1915,7 @@ async def add_conversation_log(
                 injection,
                 latency_ms,
                 now,
+                message_id,
             ),
         )
         await db.commit()
@@ -1954,6 +1966,47 @@ async def get_conversation_logs(cid: str) -> list[dict]:
             )
             result.append(d)
         return result
+
+
+async def get_director_log_for_message(message_id: int) -> dict | None:
+    async with get_db() as db:
+        rows = list(
+            await db.execute_fetchall(
+                "SELECT * FROM conversation_logs WHERE message_id = ? ORDER BY id DESC LIMIT 1",
+                (message_id,),
+            )
+        )
+        if not rows:
+            return None
+        d = dict(rows[0])
+        d["tool_calls"] = json.loads(d["tool_calls"]) if d["tool_calls"] else []
+        d["active_moods_after"] = (
+            json.loads(d["active_moods_after"]) if d["active_moods_after"] else []
+        )
+        return d
+
+
+async def get_director_log_for_turn(cid: str, turn_index: int) -> dict | None:
+    """Return the most recent conversation_log entry at or before a given turn_index.
+
+    Logs are stored with the user-message turn_index (next_turn), while assistant
+    messages are stored at next_turn+1, so we use <= to bridge that off-by-one.
+    """
+    async with get_db() as db:
+        rows = list(
+            await db.execute_fetchall(
+                "SELECT * FROM conversation_logs WHERE conversation_id = ? AND turn_index <= ? ORDER BY turn_index DESC, id DESC LIMIT 1",
+                (cid, turn_index),
+            )
+        )
+        if not rows:
+            return None
+        d = dict(rows[0])
+        d["tool_calls"] = json.loads(d["tool_calls"]) if d["tool_calls"] else []
+        d["active_moods_after"] = (
+            json.loads(d["active_moods_after"]) if d["active_moods_after"] else []
+        )
+        return d
 
 
 # --- Phrase Bank ---
