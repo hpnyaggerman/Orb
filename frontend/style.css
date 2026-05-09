@@ -1454,7 +1454,6 @@ input[type="range"]::-moz-range-track {
 .modal-checkbox-label {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   align-self: flex-start;
   gap: 8px;
   cursor: pointer;
@@ -1464,6 +1463,10 @@ input[type="range"]::-moz-range-track {
   text-transform: none;
   letter-spacing: 0;
   margin-bottom: 20px;
+}
+
+.voice-enable-row .modal-checkbox-label {
+  justify-content: space-between;
 }
 
 .voice-enable-row {
