@@ -798,7 +798,7 @@ function renderContextSize() {
   if (!el) return;
   const data = S.contextSize;
   if (!data) {
-    el.innerHTML = '<div style="color:var(--text-muted);font-size:12px;">—</div>';
+    el.outerHTML = `<div class="inspector-block" id="inspector-context-size"><div style="color:var(--text-muted);font-size:12px;">—</div></div>`;
     return;
   }
   const total = data.total_tokens_est;
@@ -815,9 +815,14 @@ function renderContextSize() {
       </div>`;
     })
     .join("");
-  el.innerHTML = `
-    <div class="ctx-total">~${total.toLocaleString()} tokens <span class="ctx-msgs">(${data.message_count} msgs)</span></div>
-    ${rows}`;
+  const openAttr = S.contextSizeOpen ? " open" : "";
+  el.outerHTML = `<details class="inspector-block ctx-section" id="inspector-context-size"${openAttr} ontoggle="S.contextSizeOpen=this.open">
+    <summary class="ctx-summary">
+      <span class="reasoning-summary-arrow">▶</span>
+      <span class="ctx-total">~${total.toLocaleString()} tokens <span class="ctx-msgs">(${data.message_count} msgs)</span></span>
+    </summary>
+    <div class="ctx-rows">${rows}</div>
+  </details>`;
 }
 
 export function startEdit(msgId) {
