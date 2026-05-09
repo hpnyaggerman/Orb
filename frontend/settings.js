@@ -291,7 +291,7 @@ export function renderSettings() {
           <span class="tog-slider"></span>
         </label>
       </div>
-      <div class="tool-card-desc">Hide the assistant's reply while the pipeline runs. The phase indicator stays visible.</div>
+      <div class="tool-card-desc">Hide the assistant's reply while the pipeline runs.</div>
     </div>
     <div class="field" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--accent-dim)">
       <button class="btn btn-danger" onclick="showResetConfirmModal()" style="width:100%;justify-content:center">Reset to Defaults</button>
