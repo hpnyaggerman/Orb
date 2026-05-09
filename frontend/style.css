@@ -264,6 +264,10 @@ body {
   font-size: 10px;
   color: var(--text-muted);
   margin-top: 1px;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .char-item-actions {
