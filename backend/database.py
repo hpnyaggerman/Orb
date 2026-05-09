@@ -208,6 +208,7 @@ DEFAULT_SETTINGS = {
     "character_library_sort": "time-added",
     "show_editor_diff": 1,
     "hide_streaming_until_baked": 0,
+    "prevent_prompt_overrides": 0,
     "agent_same_as_writer": True,
     "agent_shared_system_prompt": "",
     "tts_enabled": 0,
@@ -357,6 +358,7 @@ async def init_db():
                 character_library_sort TEXT NOT NULL DEFAULT 'time-added',
                 show_editor_diff INTEGER NOT NULL DEFAULT 1,
                 hide_streaming_until_baked INTEGER NOT NULL DEFAULT 0,
+                prevent_prompt_overrides INTEGER NOT NULL DEFAULT 0,
                 agent_same_as_writer INTEGER NOT NULL DEFAULT 1,
                 agent_endpoint_id INTEGER REFERENCES endpoints(id) ON DELETE SET NULL,
                 agent_shared_system_prompt TEXT NOT NULL DEFAULT '',
@@ -1196,6 +1198,7 @@ async def update_settings(data: dict) -> dict:
             "active_endpoint_id",
             "show_editor_diff",
             "hide_streaming_until_baked",
+            "prevent_prompt_overrides",
             "agent_same_as_writer",
             "agent_endpoint_id",
             "agent_shared_system_prompt",
@@ -2446,7 +2449,9 @@ async def resolve_char_context(
                 filter(None, [card.get("description", ""), card.get("personality", "")])
             )
             mes_example = card.get("mes_example", "")
-            if card.get("system_prompt"):
+            if card.get("system_prompt") and not settings.get(
+                "prevent_prompt_overrides"
+            ):
                 # Character card system_prompt completely overrides
                 system_prompt = card["system_prompt"]
     return system_prompt, char_persona, mes_example

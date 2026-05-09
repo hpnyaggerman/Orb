@@ -436,7 +436,11 @@ def _build_prefix_from_ctx(
         ctx["char_persona"],
         conv["character_scenario"],
         ctx["mes_example"],
-        conv.get("post_history_instructions", ""),
+        (
+            ""
+            if ctx["settings"].get("prevent_prompt_overrides")
+            else conv.get("post_history_instructions", "")
+        ),
         history,
         macros,
         user_description,

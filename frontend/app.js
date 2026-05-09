@@ -123,6 +123,7 @@ import {
   toggleHideUntilBaked,
   toggleLengthGuard,
   toggleLengthGuardEnforce,
+  togglePreventPromptOverrides,
   toggleShowEditorDiff,
   toggleToolEnabled,
   toggleToolsPanel,
@@ -277,6 +278,7 @@ Object.assign(window, {
   toggleLengthGuardEnforce,
   toggleShowEditorDiff,
   toggleHideUntilBaked,
+  togglePreventPromptOverrides,
   // phrase bank
   showPhraseBankModal,
   showAddPhraseGroupModal,

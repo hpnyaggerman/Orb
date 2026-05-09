@@ -142,6 +142,11 @@ export async function loadSettings() {
   else if (typeof S.settings.hide_streaming_until_baked === "boolean")
     S.hideUntilBaked = S.settings.hide_streaming_until_baked;
 
+  if (typeof S.settings.prevent_prompt_overrides === "number")
+    S.preventPromptOverrides = S.settings.prevent_prompt_overrides !== 0;
+  else if (typeof S.settings.prevent_prompt_overrides === "boolean")
+    S.preventPromptOverrides = S.settings.prevent_prompt_overrides;
+
   if (typeof S.settings.agent_same_as_writer === "number") S.agentSameAsWriter = S.settings.agent_same_as_writer !== 0;
   else if (typeof S.settings.agent_same_as_writer === "boolean") S.agentSameAsWriter = S.settings.agent_same_as_writer;
   S.agentEndpointId = S.settings.agent_endpoint_id || null;
@@ -296,7 +301,17 @@ export function renderSettings() {
           <span class="tog-slider"></span>
         </label>
       </div>
-      <div class="tool-card-desc">Hide the assistant's reply while the pipeline runs.</div>
+      <div class="tool-card-desc">Hide replies until completion.</div>
+    </div>
+    <div class="tool-card ${S.preventPromptOverrides ? "tool-on" : ""}">
+      <div class="tool-card-header">
+        <span class="tool-card-name">Prevent prompt overrides</span>
+        <label class="tog" onclick="event.stopPropagation()">
+          <input type="checkbox" ${S.preventPromptOverrides ? "checked" : ""} onchange="togglePreventPromptOverrides(this.checked)">
+          <span class="tog-slider"></span>
+        </label>
+      </div>
+      <div class="tool-card-desc">Ignore system prompt and post-history instructions from character cards.</div>
     </div>
     <div style="display:flex;align-items:center;gap:12px;margin:12px 0 8px"><div style="flex:1;height:1px;background:var(--accent-dim)"></div><span style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--accent-dim)">Audio</span><div style="flex:1;height:1px;background:var(--accent-dim)"></div></div>
     <div class="tool-card ${S.ttsEnabled ? "tool-on" : ""}">
@@ -1075,6 +1090,12 @@ export async function toggleHideUntilBaked(on) {
   renderMessages();
   renderSettings();
   await persistSettings({ hide_streaming_until_baked: on });
+}
+
+export async function togglePreventPromptOverrides(on) {
+  S.preventPromptOverrides = on;
+  renderSettings();
+  await persistSettings({ prevent_prompt_overrides: on });
 }
 
 export async function toggleTtsEnabled(checked) {

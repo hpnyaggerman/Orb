@@ -33,6 +33,7 @@ MIGRATIONS: list[str] = [
     "0014_progressive_director_state",
     "0015_voice_profiles",
     "0016_drop_stale_columns",
+    "0017_prevent_prompt_overrides",
 ]
 
 

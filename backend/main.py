@@ -177,6 +177,7 @@ class SettingsUpdate(BaseModel):
     active_endpoint_id: Optional[int] = None
     show_editor_diff: Optional[bool] = None
     hide_streaming_until_baked: Optional[bool] = None
+    prevent_prompt_overrides: Optional[bool] = None
     agent_same_as_writer: Optional[bool] = None
     agent_endpoint_id: Optional[int] = None
     agent_shared_system_prompt: Optional[str] = None
@@ -984,7 +985,11 @@ async def api_summarize_conversation(
         char_persona,
         conv.get("character_scenario", "") or "",
         mes_example,
-        conv.get("post_history_instructions", ""),
+        (
+            ""
+            if settings.get("prevent_prompt_overrides")
+            else conv.get("post_history_instructions", "")
+        ),
         history_slice,
         macros,
         user_description,
@@ -1589,7 +1594,11 @@ async def api_get_context_size(cid: str):
     persona_text = macros.resolve_message(char_persona or "")
     scenario_text = macros.resolve_message(conv.get("character_scenario", "") or "")
     mes_text = macros.resolve_message(mes_example or "")
-    post_text = macros.resolve_message(conv.get("post_history_instructions", "") or "")
+    post_text = macros.resolve_message(
+        ""
+        if settings.get("prevent_prompt_overrides")
+        else (conv.get("post_history_instructions", "") or "")
+    )
     user_persona_text = (
         f"## User: {macros.user}\n{macros.resolve_message(user_desc)}"
         if user_desc
