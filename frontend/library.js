@@ -1496,6 +1496,8 @@ window.previewVoice = async (prefix) => {
   const apiUrl = $(prefix + "-voice-api-url")?.value || "";
   const apiKey = $(prefix + "-voice-api-key")?.value || "";
   const model = $(prefix + "-voice-model")?.value || "";
+  const speed = parseFloat($(prefix + "-voice-speed")?.value || "1.0");
+  const pitch = parseFloat($(prefix + "-voice-pitch")?.value || "1.0");
   statusEl.textContent = "Generating preview…";
   try {
     const resp = await fetch("/api/tts/preview", {
@@ -1508,6 +1510,8 @@ window.previewVoice = async (prefix) => {
         api_url: apiUrl,
         api_key: apiKey,
         model,
+        speed,
+        pitch,
       }),
     });
     if (!resp.ok) throw new Error("HTTP " + resp.status);

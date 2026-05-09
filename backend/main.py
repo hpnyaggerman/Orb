@@ -1720,12 +1720,15 @@ async def api_tts_preview(body: dict):
         raise HTTPException(400, str(e))
     from .tts.base import SpeakableChunk
 
+    speed = float(body.get("speed", 1.0))
+    pitch = float(body.get("pitch", 1.0))
+
     chunk = SpeakableChunk(text=text, emotion="neutral")
     result = await adapter.synthesize(
         [chunk],
         voice_id=voice_id,
-        rate=1.0,
-        pitch=1.0,
+        rate=speed,
+        pitch=pitch,
         api_url=body.get("api_url", ""),
         api_key=body.get("api_key", "") or None,
         model=body.get("model", ""),
