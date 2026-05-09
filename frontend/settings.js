@@ -1300,7 +1300,7 @@ export async function showResetConfirmModal() {
     {
       title: "Reset to Defaults",
       message:
-        "This will reset Mood Fragments, Director Fragments, Phrase Bank, and all Settings to their original default values. All custom data will be lost.<br><br>The following will be retained: Characters, Conversations.",
+        "This will reset Mood Fragments, Director Fragments, Phrase Bank, and all Settings to their original default values. All custom data will be lost.<br><br>The following will be retained: Characters, Conversations, Lorebooks.",
       confirmText: "Reset Everything",
     },
     async () => {
