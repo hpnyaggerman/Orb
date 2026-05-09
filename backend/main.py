@@ -298,7 +298,7 @@ class ConversationUpdate(BaseModel):
 
 class SummarizeRequest(BaseModel):
     keep_count: int  # must be one of 2, 4, 6, 8
-    custom_instructions: str | None = None
+    custom_instructions: Optional[str] = None
 
 
 class CompressRequest(BaseModel):
@@ -1267,7 +1267,11 @@ class _CleanupStreamingResponse(StreamingResponse):
 
 
 async def _sse_stream(
-    gen, request: Request, *, client_ref: list | None = None, cid: str | None = None
+    gen,
+    request: Request,
+    *,
+    client_ref: list | None = None,
+    cid: str | None = None,
 ):
     """Wrap an event-dict async generator as SSE, stopping cleanly on client disconnect.
 
