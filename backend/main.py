@@ -947,6 +947,16 @@ async def api_summarize_conversation(
     char_name = conv.get("character_name", "Character") or "Character"
     char_scenario = conv.get("character_scenario", "") or ""
 
+    active_persona_id = settings.get("active_persona_id")
+    active_persona = await get_user_persona(active_persona_id) if active_persona_id else None
+    system_prompt, char_persona, mes_example = await resolve_char_context(conv, settings)
+    macros = Macros.from_settings(settings, char_name, active_persona)
+    user_description = (
+        active_persona.get("description", "")
+        if active_persona
+        else settings.get("user_description", "")
+    )
+
     client = LLMClient(
         settings["endpoint_url"],
         api_key=settings.get("api_key", ""),
@@ -955,27 +965,26 @@ async def api_summarize_conversation(
     client_ref = [client]
 
     async def _gen():
-        parts = []
-        for msg in history_slice:
-            label = char_name if msg["role"] == "assistant" else "User"
-            parts.append(f"{label}: {msg['content']}")
-        history_text = "\n\n".join(parts)
-
-        system = (
-            f"You are a narrative scribe summarizing a roleplay story between User and {char_name}."
-            + (f" Setting: {char_scenario}." if char_scenario else "")
-            + " Write a rich prose summary of the events so far."
-            " Preserve significant dialogue verbatim in quotes."
-            " Record key story beats, milestones, and relationship developments."
-            " Write in past tense. Be thorough — this will be the sole context for the story's continuation."
+        prefix = prompt_builder.build_prefix(
+            system_prompt,
+            char_persona,
+            char_scenario,
+            mes_example,
+            conv.get("post_history_instructions", ""),
+            history_slice,
+            macros,
+            user_description,
         )
-
-        llm_messages = [
-            {"role": "system", "content": system},
+        llm_messages = prefix + [
             {
                 "role": "user",
-                "content": f"Story to summarize:\n\n{history_text}\n\nWrite the narrative summary now.",
-            },
+                "content": (
+                    "[OOC: Write a rich prose narrative summary of the story so far. "
+                    "Preserve significant dialogue verbatim in quotes. "
+                    "Record key story beats, milestones, and relationship developments. "
+                    "Write in past tense. Be thorough — this will be the sole context for the story's continuation.]"
+                ),
+            }
         ]
 
         params = {
