@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import shutil
+import time
 import urllib.parse
 from typing import TYPE_CHECKING
 
@@ -84,6 +86,144 @@ def invalidate_cache_for_card(conv_ids: list[str]) -> None:
         _cache_dir = os.path.join(TTS_CACHE_DIR, cid)
         if os.path.isdir(_cache_dir):
             shutil.rmtree(_cache_dir)
+
+
+# ---------------------------------------------------------------------------
+# Cache eviction
+# ---------------------------------------------------------------------------
+
+logger = logging.getLogger(__name__)
+
+# Defaults — override per-installation if needed.
+DEFAULT_MAX_CACHE_BYTES = 500 * 1024 * 1024  # 500 MB
+DEFAULT_TTL_SECONDS = 7 * 24 * 3600          # 7 days
+
+
+def cache_stats() -> dict:
+    """Return total file count and bytes used by the TTS cache."""
+    total_bytes = 0
+    total_files = 0
+    if not os.path.isdir(TTS_CACHE_DIR):
+        return {"files": 0, "bytes": 0, "mb": 0.0}
+    for dirpath, _, filenames in os.walk(TTS_CACHE_DIR):
+        for f in filenames:
+            fp = os.path.join(dirpath, f)
+            try:
+                total_bytes += os.path.getsize(fp)
+                total_files += 1
+            except OSError:
+                pass
+    return {
+        "files": total_files,
+        "bytes": total_bytes,
+        "mb": round(total_bytes / (1024 * 1024), 2),
+    }
+
+
+def evict_expired(ttl_seconds: int = DEFAULT_TTL_SECONDS) -> int:
+    """Remove cache entries older than *ttl_seconds*. Returns count deleted."""
+    if not os.path.isdir(TTS_CACHE_DIR):
+        return 0
+    cutoff = time.time() - ttl_seconds
+    removed = 0
+    for dirpath, _, filenames in os.walk(TTS_CACHE_DIR):
+        for f in filenames:
+            fp = os.path.join(dirpath, f)
+            try:
+                if os.path.getmtime(fp) < cutoff:
+                    os.remove(fp)
+                    removed += 1
+            except OSError:
+                pass
+    _prune_empty_dirs()
+    if removed:
+        logger.info("TTS cache TTL eviction: removed %d files (ttl=%ds)", removed, ttl_seconds)
+    return removed
+
+
+def evict_lru(max_bytes: int = DEFAULT_MAX_CACHE_BYTES) -> int:
+    """Delete oldest files until total cache is under *max_bytes*.
+
+    Returns count of deleted files.
+    """
+    if not os.path.isdir(TTS_CACHE_DIR):
+        return 0
+    entries: list[tuple[str, float, int]] = []  # (path, mtime, size)
+    total = 0
+    for dirpath, _, filenames in os.walk(TTS_CACHE_DIR):
+        for f in filenames:
+            fp = os.path.join(dirpath, f)
+            try:
+                st = os.stat(fp)
+                entries.append((fp, st.st_mtime, st.st_size))
+                total += st.st_size
+            except OSError:
+                pass
+    if total <= max_bytes:
+        return 0
+    # Oldest first
+    entries.sort(key=lambda e: e[1])
+    removed = 0
+    for fp, _, sz in entries:
+        try:
+            os.remove(fp)
+        except OSError:
+            continue
+        total -= sz
+        removed += 1
+        if total <= max_bytes:
+            break
+    _prune_empty_dirs()
+    if removed:
+        logger.info(
+            "TTS cache LRU eviction: removed %d files (%.1f MB → %.1f MB budget)",
+            removed,
+            (total + sum(e[2] for e in entries[:removed])) / (1024 * 1024),
+            max_bytes / (1024 * 1024),
+        )
+    return removed
+
+
+def invalidate_cache_for_conversation(cid: str) -> bool:
+    """Remove cached TTS audio for a single conversation. Returns True if existed."""
+    _cache_dir = os.path.join(TTS_CACHE_DIR, cid)
+    if os.path.isdir(_cache_dir):
+        shutil.rmtree(_cache_dir)
+        return True
+    return False
+
+
+def run_eviction_cycle(
+    max_bytes: int = DEFAULT_MAX_CACHE_BYTES,
+    ttl_seconds: int = DEFAULT_TTL_SECONDS,
+) -> dict:
+    """Run a full eviction cycle: TTL purge first, then LRU if still over budget.
+
+    Returns a summary dict.
+    """
+    ttl_removed = evict_expired(ttl_seconds)
+    lru_removed = evict_lru(max_bytes)
+    stats = cache_stats()
+    return {
+        "ttl_removed": ttl_removed,
+        "lru_removed": lru_removed,
+        "stats": stats,
+    }
+
+
+def _prune_empty_dirs() -> None:
+    """Remove leaf directories under TTS_CACHE_DIR that have no files."""
+    if not os.path.isdir(TTS_CACHE_DIR):
+        return
+    for dirpath, dirnames, filenames in os.walk(TTS_CACHE_DIR, topdown=False):
+        # Only prune sub-directories, not TTS_CACHE_DIR itself
+        if dirpath == TTS_CACHE_DIR:
+            continue
+        if not dirnames and not filenames:
+            try:
+                os.rmdir(dirpath)
+            except OSError:
+                pass
 
 
 async def synthesize_and_cache(
