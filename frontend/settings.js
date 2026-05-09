@@ -648,7 +648,7 @@ async function _syncModelConfigRecord(ctx, modelName, hyperparams) {
     const mc = await api.post(`/endpoints/${S[ctx.endpointIdKey]}/models`, {
       role: ctx.role,
       model_name: modelName,
-      system_prompt: get("system_prompt", "") || get("shared_system_prompt", ""),
+      system_prompt: get("system_prompt", ""),
       temperature: get("temperature", 0.8),
       min_p: get("min_p", 0),
       top_k: get("top_k", 40),
