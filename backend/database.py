@@ -210,6 +210,9 @@ DEFAULT_SETTINGS = {
     "hide_streaming_until_baked": 0,
     "agent_same_as_writer": True,
     "agent_shared_system_prompt": "",
+    "tts_enabled": 0,
+    "tts_auto_speak": 0,
+    "tts_volume": 0.75,
 }
 
 SEED_PHRASE_BANK = [
@@ -356,7 +359,10 @@ async def init_db():
                 hide_streaming_until_baked INTEGER NOT NULL DEFAULT 0,
                 agent_same_as_writer INTEGER NOT NULL DEFAULT 1,
                 agent_endpoint_id INTEGER REFERENCES endpoints(id) ON DELETE SET NULL,
-                agent_shared_system_prompt TEXT NOT NULL DEFAULT ''
+                agent_shared_system_prompt TEXT NOT NULL DEFAULT '',
+                tts_enabled INTEGER NOT NULL DEFAULT 0,
+                tts_auto_speak INTEGER NOT NULL DEFAULT 0,
+                tts_volume REAL NOT NULL DEFAULT 0.75
             );
 
             CREATE TABLE IF NOT EXISTS mood_fragments (
@@ -512,6 +518,24 @@ async def init_db():
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS voice_profiles (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                character_card_id TEXT NOT NULL UNIQUE,
+                backend TEXT NOT NULL DEFAULT 'edge',
+                voice_id TEXT NOT NULL DEFAULT 'en-US-JennyNeural',
+                language TEXT NOT NULL DEFAULT 'en-US',
+                rate REAL NOT NULL DEFAULT 1.0,
+                pitch REAL NOT NULL DEFAULT 1.0,
+                enabled INTEGER NOT NULL DEFAULT 0,
+                endpoint_id INTEGER,
+                api_url TEXT DEFAULT '',
+                api_key TEXT DEFAULT '',
+                model TEXT DEFAULT '',
+                created_at TEXT DEFAULT (datetime('now')),
+                updated_at TEXT DEFAULT (datetime('now')),
+                FOREIGN KEY (character_card_id) REFERENCES character_cards(id)
+            );
         """
         )
 
@@ -643,6 +667,40 @@ async def init_db():
             await db.execute(
                 "ALTER TABLE settings ADD COLUMN agent_shared_system_prompt TEXT NOT NULL DEFAULT ''"
             )
+        if "tts_enabled" not in existing_cols:
+            await db.execute(
+                "ALTER TABLE settings ADD COLUMN tts_enabled INTEGER NOT NULL DEFAULT 0"
+            )
+        if "tts_auto_speak" not in existing_cols:
+            await db.execute(
+                "ALTER TABLE settings ADD COLUMN tts_auto_speak INTEGER NOT NULL DEFAULT 0"
+            )
+        if "tts_volume" not in existing_cols:
+            await db.execute(
+                "ALTER TABLE settings ADD COLUMN tts_volume REAL NOT NULL DEFAULT 0.75"
+            )
+
+        # Remove stale scripter key from reasoning_enabled_passes if present.
+        # TTS settings are stored separately.
+        settings_rows = list(
+            await db.execute_fetchall(
+                "SELECT id, reasoning_enabled_passes FROM settings WHERE id = 1"
+            )
+        )
+        if settings_rows:
+            settings_row = dict(settings_rows[0])
+            try:
+                passes = json.loads(
+                    settings_row.get("reasoning_enabled_passes") or "{}"
+                )
+            except json.JSONDecodeError:
+                passes = {}
+            if "scripter" in passes:
+                passes.pop("scripter", None)
+                await db.execute(
+                    "UPDATE settings SET reasoning_enabled_passes = ? WHERE id = 1",
+                    (json.dumps(passes),),
+                )
 
         # Migration for director_state keywords column
         director_cols = {
@@ -676,6 +734,24 @@ async def init_db():
         if "world_id" not in character_cols:
             await db.execute(
                 "ALTER TABLE character_cards ADD COLUMN world_id TEXT DEFAULT NULL REFERENCES worlds(id) ON DELETE SET NULL"
+            )
+
+        # Migrate voice_profiles — add columns for new backends
+        vp_cols = {
+            row[1]
+            for row in await db.execute_fetchall("PRAGMA table_info(voice_profiles)")
+        }
+        if "api_url" not in vp_cols:
+            await db.execute(
+                "ALTER TABLE voice_profiles ADD COLUMN api_url TEXT DEFAULT ''"
+            )
+        if "api_key" not in vp_cols:
+            await db.execute(
+                "ALTER TABLE voice_profiles ADD COLUMN api_key TEXT DEFAULT ''"
+            )
+        if "model" not in vp_cols:
+            await db.execute(
+                "ALTER TABLE voice_profiles ADD COLUMN model TEXT DEFAULT ''"
             )
 
         # Migration for conversation_logs message_id column
@@ -1004,6 +1080,8 @@ async def get_settings() -> dict:
             s.get("reasoning_enabled_passes")
             or '{"director":true,"writer":false,"editor":false}'
         )
+        # Remove stale scripter key from reasoning_enabled_passes if present.
+        s["reasoning_enabled_passes"].pop("scripter", None)
         # Overlay endpoint_url, api_key, model_name, and hyperparameters from the
         # active endpoint's active model config so callers always get live values
         # rather than the stale flat columns.
@@ -1121,6 +1199,9 @@ async def update_settings(data: dict) -> dict:
             "agent_same_as_writer",
             "agent_endpoint_id",
             "agent_shared_system_prompt",
+            "tts_enabled",
+            "tts_auto_speak",
+            "tts_volume",
         ]
         sets, vals = _build_set_clause(
             allowed, data, json_fields={"enabled_tools", "reasoning_enabled_passes"}
@@ -2218,6 +2299,9 @@ async def delete_character_card(
     card_id: str, delete_conversations: bool = False
 ) -> bool:
     async with get_db() as db:
+        await db.execute(
+            "DELETE FROM voice_profiles WHERE character_card_id = ?", (card_id,)
+        )
         if delete_conversations:
             await db.execute(
                 "DELETE FROM conversations WHERE character_card_id = ?", (card_id,)
@@ -2496,3 +2580,71 @@ async def reset_to_defaults() -> None:
             )
 
         await db.commit()
+
+
+# Voice Profiles (TTS)
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+async def get_voice_profile(character_card_id: str) -> dict | None:
+    """Return the voice profile for a character, or None."""
+    async with get_db() as db:
+        row = await db.execute(
+            "SELECT * FROM voice_profiles WHERE character_card_id = ?",
+            (character_card_id,),
+        )
+        r = await row.fetchone()
+        return dict(r) if r else None
+
+
+async def upsert_voice_profile(character_card_id: str, data: dict) -> dict:
+    """Create or update a voice profile for a character.
+
+    Accepts a subset of voice_profiles columns. Missing fields keep their
+    current or default values.
+    """
+    async with get_db() as db:
+        allowed = {
+            "backend",
+            "voice_id",
+            "language",
+            "rate",
+            "pitch",
+            "enabled",
+            "endpoint_id",
+            "api_url",
+            "api_key",
+            "model",
+        }
+        updates = {k: v for k, v in data.items() if k in allowed}
+
+        # Check if profile exists
+        row = await db.execute(
+            "SELECT id FROM voice_profiles WHERE character_card_id = ?",
+            (character_card_id,),
+        )
+        existing = await row.fetchone()
+
+        if existing:
+            if updates:
+                sets = ", ".join(f"{k} = ?" for k in updates)
+                vals = list(updates.values()) + [character_card_id]
+                await db.execute(
+                    f"UPDATE voice_profiles SET {sets}, updated_at = datetime('now') WHERE character_card_id = ?",
+                    vals,
+                )
+                await db.commit()
+        else:
+            cols = ["character_card_id"] + list(updates.keys())
+            placeholders = ", ".join("?" * len(cols))
+            vals = [character_card_id] + list(updates.values())
+            await db.execute(
+                f"INSERT INTO voice_profiles ({', '.join(cols)}) VALUES ({placeholders})",
+                vals,
+            )
+            await db.commit()
+
+    profile = await get_voice_profile(character_card_id)
+    if profile is None:
+        raise RuntimeError("Failed to load saved voice profile")
+    return profile

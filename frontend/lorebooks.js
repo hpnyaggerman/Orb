@@ -1,6 +1,6 @@
 import { api } from "./api.js";
+import { closeModal, showConfirmModal, showModal } from "./modal.js";
 import { $, esc, toast } from "./utils.js";
-import { showConfirmModal, showModal, closeModal } from "./modal.js";
 
 // ── Module state
 let _worlds = [];
@@ -10,7 +10,7 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "Escape" && _lorebookOpen) closeLorebook();
 });
 let _focusWorldId = null;
-let _entries = {}; // worldId -> entry[]
+const _entries = {}; // worldId -> entry[]
 let _selectedEntryId = null;
 let _dirty = false;
 let _draft = { name: "", content: "", keywords: [], priority: 100, case_insensitive: true, enabled: true };

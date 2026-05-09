@@ -1,9 +1,9 @@
+import { api } from "./api.js";
+import { renderMessages } from "./chat.js";
+import { closeModal, showConfirmModal, showModal } from "./modal.js";
 import { S } from "./state.js";
 import { $, esc, toast } from "./utils.js";
-import { api } from "./api.js";
-import { showModal, closeModal, showConfirmModal } from "./modal.js";
 import { validate } from "./validate.js";
-import { renderMessages } from "./chat.js";
 
 // ── Theme
 let _themes = null;
@@ -129,6 +129,11 @@ export async function loadSettings() {
   if (S.settings.reasoning_enabled_passes)
     S.reasoningEnabled = { ...S.reasoningEnabled, ...S.settings.reasoning_enabled_passes };
 
+  if (typeof S.settings.tts_enabled === "number") S.ttsEnabled = S.settings.tts_enabled !== 0;
+  else if (typeof S.settings.tts_enabled === "boolean") S.ttsEnabled = S.settings.tts_enabled;
+  if (typeof S.settings.tts_auto_speak === "number") S.ttsAutoSpeak = S.settings.tts_auto_speak !== 0;
+  else if (typeof S.settings.tts_auto_speak === "boolean") S.ttsAutoSpeak = S.settings.tts_auto_speak;
+  if (typeof S.settings.tts_volume === "number") S.ttsVolume = S.settings.tts_volume;
   if (typeof S.settings.show_editor_diff === "number") S.showEditorDiff = S.settings.show_editor_diff !== 0;
   else if (typeof S.settings.show_editor_diff === "boolean") S.showEditorDiff = S.settings.show_editor_diff;
 
@@ -283,6 +288,31 @@ function updateAgentModelWarning() {
 
 export function renderSettings() {
   $("settings-form").innerHTML = `
+    <div class="tool-card ${S.ttsEnabled ? "tool-on" : ""}">
+      <div class="tool-card-header">
+        <span class="tool-card-name">Audio / TTS</span>
+        <label class="tog" onclick="event.stopPropagation()">
+          <input type="checkbox" ${S.ttsEnabled ? "checked" : ""} onchange="toggleTtsEnabled(this.checked)">
+          <span class="tog-slider"></span>
+        </label>
+      </div>
+    </div>
+    <div id="tts-fields" style="${S.ttsEnabled ? "" : "display:none"}">
+      <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-secondary);margin:8px 0 4px">
+        <span>Volume</span><span id="tts-volume-pct" style="margin-left:auto">${Math.round((S.ttsVolume ?? 0.75) * 100)}%</span>
+      </div>
+      <input class="voice-range" type="range" min="0" max="100" value="${Math.round((S.ttsVolume ?? 0.75) * 100)}" oninput="setTtsVolumeLive(this.value)" onchange="setTtsVolume(this.value)">
+      <div class="tool-card" style="margin-top:8px">
+        <div class="tool-card-header">
+          <span class="tool-card-name">Auto-speak</span>
+          <label class="tog" onclick="event.stopPropagation()">
+            <input type="checkbox" ${S.ttsAutoSpeak ? "checked" : ""} onchange="setTtsAutoSpeak(this.checked)">
+            <span class="tog-slider"></span>
+          </label>
+        </div>
+        <div class="tool-card-desc">Automatically speak new character messages.</div>
+      </div>
+    </div>
     <div class="tool-card ${S.hideUntilBaked ? "tool-on" : ""}">
       <div class="tool-card-header">
         <span class="tool-card-name">Hide until baked</span>
@@ -337,7 +367,7 @@ function initComboboxes() {
 }
 
 // Global delete function for combobox items
-window.deleteComboboxItem = function (btn, type, id, isAgent = false) {
+window.deleteComboboxItem = (btn, type, id, isAgent = false) => {
   const typeName = type === "endpoint" ? "endpoint" : "model configuration";
   showConfirmModal(
     {
@@ -1045,6 +1075,17 @@ export async function toggleHideUntilBaked(on) {
   await persistSettings({ hide_streaming_until_baked: on });
 }
 
+export async function toggleTtsEnabled(checked) {
+  S.ttsEnabled = !!checked;
+  renderSettings();
+  renderMessages();
+  try {
+    S.settings = await api.put("/settings", { tts_enabled: checked ? 1 : 0 });
+  } catch (e) {
+    toast("Failed to save TTS setting", true);
+  }
+}
+
 export async function saveLengthGuardConfig() {
   const words = parseInt($("lg-max-words").value, 10);
   const paras = parseInt($("lg-max-paragraphs").value, 10);
@@ -1210,7 +1251,7 @@ export function showAddPhraseGroupModal(editId = null, initialVariants = []) {
 }
 
 // Helper functions exposed to window
-window.addVariantRow = function () {
+window.addVariantRow = () => {
   const container = document.getElementById("variant-list");
   const row = document.createElement("div");
   row.className = "variant-row";
@@ -1226,7 +1267,7 @@ window.addVariantRow = function () {
   row.scrollIntoView({ behavior: "smooth", block: "nearest" });
 };
 
-window.removeVariantRow = function (btn) {
+window.removeVariantRow = (btn) => {
   const rows = document.querySelectorAll(".variant-row");
   if (rows.length > 1) {
     btn.closest(".variant-row").remove();
@@ -1236,7 +1277,7 @@ window.removeVariantRow = function (btn) {
   }
 };
 
-window.editPhraseGroup = async function (groupId) {
+window.editPhraseGroup = async (groupId) => {
   const groups = await api.get("/phrase-bank");
   const group = groups.find((g) => g.id === groupId);
   if (group) {
@@ -1244,7 +1285,7 @@ window.editPhraseGroup = async function (groupId) {
   }
 };
 
-window.deletePhraseGroup = async function (groupId) {
+window.deletePhraseGroup = async (groupId) => {
   showConfirmModal(
     {
       title: "Delete Phrase Group",
@@ -1263,7 +1304,7 @@ window.deletePhraseGroup = async function (groupId) {
   );
 };
 
-window.savePhraseGroup = async function (editId) {
+window.savePhraseGroup = async (editId) => {
   const variantInputs = document.querySelectorAll(".variant-input");
   const rawVariants = Array.from(variantInputs).map((input) => input.value);
   const variants = rawVariants.map((v) => v.trim()).filter((v) => v.length > 0);
@@ -1320,7 +1361,7 @@ window.showResetConfirmModal = showResetConfirmModal;
 window.saveAgentSetting = saveAgentSetting;
 window.toggleAgentSameAsWriter = toggleAgentSameAsWriter;
 
-window.toggleApiKeyVisibility = function (btn) {
+window.toggleApiKeyVisibility = (btn) => {
   const input = btn.closest(".api-key-wrap").querySelector(".api-key-input");
   const visible = btn.dataset.visible === "1";
   if (!visible) {

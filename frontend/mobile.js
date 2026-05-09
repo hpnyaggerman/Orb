@@ -1,5 +1,5 @@
+import { closeCropModal, closeModal } from "./modal.js";
 import { $ } from "./utils.js";
-import { closeModal, closeCropModal } from "./modal.js";
 
 // ── Mobile config
 const MOBILE_SIDEBAR_BREAKPOINT = 900;
