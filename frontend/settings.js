@@ -310,7 +310,7 @@ export function renderSettings() {
       <div class="tool-card-desc">Read character dialogue aloud.</div>
     </div>
     <div id="tts-fields" style="${S.ttsEnabled ? "" : "display:none"}">
-      <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-secondary);margin:8px 0 4px">
+      <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-secondary);margin:8px 0 0">
         <span>Volume</span><span id="tts-volume-pct" style="margin-left:auto">${Math.round((S.ttsVolume ?? 0.75) * 100)}%</span>
       </div>
       <input class="voice-range" type="range" min="0" max="100" value="${Math.round((S.ttsVolume ?? 0.75) * 100)}" oninput="setTtsVolumeLive(this.value)" onchange="setTtsVolume(this.value)">
