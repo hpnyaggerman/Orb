@@ -46,6 +46,7 @@ export const S = {
   reasoningPassSelected: 0,
   reasoningUserOverride: false,
   reasoningOpen: true,
+  contextSizeOpen: true,
   reasoningEnabled: { director: true, writer: false, editor: false },
   pendingRefineDiff: null, // {original, ops} set on writer_rewrite, cleared on next stream
   showEditorDiff: true, // when false, editor-pass diff highlights + "clear diff" button are suppressed

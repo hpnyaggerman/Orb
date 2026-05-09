@@ -180,6 +180,7 @@ export async function toggleAgentSameAsWriter(checked) {
     initComboboxes();
     _fillEndpointFields(AGENT_CTX);
   }
+  updateAgentModelWarning();
 }
 
 export async function loadPersonas() {
@@ -215,6 +216,10 @@ export function renderEndpoints() {
     if (f.k === "endpoint_url" || f.k === "model_name" || f.k === "agent_endpoint_url" || f.k === "agent_model_name") {
       const ph =
         f.k === "endpoint_url" || f.k === "agent_endpoint_url" ? "http://localhost:5000/v1" : "google/gemma-4-31b-it";
+      const warningHtml =
+        f.k === "agent_model_name"
+          ? `<div id="agent-model-match-warning" class="field-warning" style="display:none">Warning: Same endpoint and model as writer detected - this increases cache cost significantly.</div>`
+          : "";
       return `<div class="field"><label>${f.l}</label>
         <div class="cb-root" data-combobox="${f.k}">
           <div class="cb-control">
@@ -223,6 +228,7 @@ export function renderEndpoints() {
           </div>
           <div class="cb-dropdown" hidden><div class="cb-list"></div></div>
         </div>
+        ${warningHtml}
       </div>`;
     }
     const attrs = f.s ? `step="${f.s}" min="${f.mn}" max="${f.mx}"` : "";
@@ -251,6 +257,28 @@ export function renderEndpoints() {
     </div>
   `;
   initComboboxes();
+  updateAgentModelWarning();
+}
+
+function updateAgentModelWarning() {
+  const el = document.getElementById("agent-model-match-warning");
+  if (!el) return;
+  if (S.agentSameAsWriter) {
+    el.style.display = "none";
+    return;
+  }
+  const writerUrlEl = document.querySelector('[data-key="endpoint_url"]');
+  const writerModelEl = document.querySelector('[data-key="model_name"]');
+  const agentUrlEl = document.querySelector('[data-key="agent_endpoint_url"]');
+  const agentModelEl = document.querySelector('[data-key="agent_model_name"]');
+  if (!writerUrlEl || !writerModelEl || !agentUrlEl || !agentModelEl) return;
+  const writerUrl = writerUrlEl.value.trim();
+  const writerModel = writerModelEl.value.trim();
+  const agentUrl = agentUrlEl.value.trim();
+  const agentModel = agentModelEl.value.trim();
+  const same =
+    writerUrl && agentUrl && writerUrl === agentUrl && writerModel && agentModel && writerModel === agentModel;
+  el.style.display = same ? "" : "none";
 }
 
 export function renderSettings() {
@@ -677,6 +705,7 @@ async function _saveEndpointSetting(ctx, el) {
   } catch (e) {
     console.error("Endpoint/model sync error:", e);
   }
+  updateAgentModelWarning();
 }
 
 async function _onHybridInputCtx(ctx, el) {
@@ -723,6 +752,7 @@ async function _onHybridInputCtx(ctx, el) {
       console.error("Failed to save active model config:", e);
     }
   }
+  updateAgentModelWarning();
 }
 
 // ── Public API

@@ -97,6 +97,7 @@ from .orchestrator import (
 )
 from .llm_client import LLMClient
 from .endpoint_profiles import profile_for
+from .macros import Macros
 from . import tavern_cards
 from . import prompt_builder
 
@@ -1544,9 +1545,7 @@ async def api_get_context_size(cid: str):
     # Resolve persona
     persona_id = settings.get("active_persona_id")
     active_persona = await get_user_persona(persona_id) if persona_id else None
-    user_name = (
-        active_persona["name"] if active_persona else settings.get("user_name", "User")
-    )
+    macros = Macros.from_settings(settings, conv["character_name"], active_persona)
     user_desc = (
         active_persona.get("description", "")
         if active_persona
@@ -1558,19 +1557,16 @@ async def api_get_context_size(cid: str):
         conv, settings
     )
 
-    def _resolve(text):
-        return prompt_builder.replace_placeholders(
-            text, user_name, conv["character_name"]
-        )
-
     # Measure each component individually
     sys_text = system_prompt or ""
-    persona_text = _resolve(char_persona or "")
-    scenario_text = _resolve(conv.get("character_scenario", "") or "")
-    mes_text = _resolve(mes_example or "")
-    post_text = _resolve(conv.get("post_history_instructions", "") or "")
+    persona_text = macros.resolve_message(char_persona or "")
+    scenario_text = macros.resolve_message(conv.get("character_scenario", "") or "")
+    mes_text = macros.resolve_message(mes_example or "")
+    post_text = macros.resolve_message(conv.get("post_history_instructions", "") or "")
     user_persona_text = (
-        f"## User: {user_name}\n{_resolve(user_desc)}" if user_desc else ""
+        f"## User: {macros.user}\n{macros.resolve_message(user_desc)}"
+        if user_desc
+        else ""
     )
     msg_chars = sum(len(m.get("content", "") or "") for m in messages)
 
@@ -1587,7 +1583,7 @@ async def api_get_context_size(cid: str):
 
     # Lorebook injection
     lorebook_block = prompt_builder.compute_lorebook_injection_block(
-        lorebook_entries, messages[-6:] if len(messages) >= 6 else messages
+        lorebook_entries, messages[-6:] if len(messages) >= 6 else messages, macros
     )
 
     def est(chars):

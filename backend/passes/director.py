@@ -18,8 +18,8 @@ from ..tool_defs import (
     enabled_schemas,
     build_direct_scene_tool,
 )
-from ..prompt_builder import build_tool_prompt
-from ..pipeline_utils import extract_hyperparams, build_multimodal_content
+from ..prompt_builder import build_director_tool_prompt
+from ..utils import extract_hyperparams, build_multimodal_content
 
 logger = logging.getLogger(__name__)
 
@@ -66,7 +66,7 @@ async def _director_pass(
     director: dict,
     mood_fragments: list[dict],
     director_fragments: list[dict],
-    enabled_tools: dict | None = None,
+    enabled_tools: dict,
     attachments: Optional[List[dict]] = None,
     kv_tracker=None,
     reasoning_on: bool = True,
@@ -89,15 +89,11 @@ async def _director_pass(
     all_calls: list[dict] = []
     last_raw = ""
 
-    tool_names = (
-        ["direct_scene"]
-        if enabled_tools is None
-        else [
-            n
-            for n, on in enabled_tools.items()
-            if on and n in TOOLS and n not in POST_WRITER_TOOLS
-        ]
-    )
+    tool_names = [
+        n
+        for n, on in enabled_tools.items()
+        if on and n in TOOLS and n not in POST_WRITER_TOOLS
+    ]
 
     # Enforce priority order: rewrite_user_prompt first so users can abort
     # early if they dislike the rewrite before the full director runs.
@@ -137,7 +133,10 @@ async def _director_pass(
     for name in tool_names:
         if client.is_aborted:
             break
-        tool_tail = build_tool_prompt(
+        tool_schema = next(
+            (s for s in tool_schemas if s["function"]["name"] == name), None
+        )
+        tool_tail = build_director_tool_prompt(
             name,
             user_message,
             active_moods,
@@ -145,6 +144,7 @@ async def _director_pass(
             reasoning_on=reasoning_on,
             director_fragments=director_fragments,
             progressive_state=progressive_state,
+            tool_schema=tool_schema,
         )
         tail = (
             "___\n\n" + lorebook_block + "\n\n" if lorebook_block else ""

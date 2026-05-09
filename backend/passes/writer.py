@@ -10,7 +10,7 @@ from typing import AsyncIterator, List, Optional
 
 from ..llm_client import LLMClient, reasoning_cfg
 from ..tool_defs import enabled_schemas
-from ..pipeline_utils import extract_hyperparams, build_multimodal_content
+from ..utils import extract_hyperparams, build_multimodal_content
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 def build_writer_content(
     lorebook_block: str,
     inj_block: str,
-    enabled_tools: dict | None,
+    enabled_tools: dict,
     effective_msg: str,
     attachments: list[dict] | None,
     length_guard_enforce: bool,
@@ -34,7 +34,7 @@ def build_writer_content(
         tail += "___\n\n" + lorebook_block + "\n\n"
     if inj_block:
         tail += "___\n\n" + inj_block + "\n\n"
-    if enabled_tools and len(enabled_tools) > 0:
+    if enabled_tools:
         tail += "**Do not use tool or function calls this turn.**\n\n"
     if length_guard_enforce and length_guard and length_guard.get("enabled"):
         max_words = length_guard.get("max_words", 240)
@@ -49,7 +49,7 @@ async def _writer_pass(
     client: LLMClient,
     prefix: list[dict],
     settings: dict,
-    enabled_tools: dict | None = None,
+    enabled_tools: dict,
     *,
     inj_block: str = "",
     lorebook_block: str = "",

@@ -17,10 +17,10 @@ from .prompt_builder import (
     build_prefix,
     compute_style_injection_block,
     compute_lorebook_injection_block,
-    replace_placeholders,
 )
 from .kv_tracker import _KVCacheTracker
-from .pipeline_utils import extract_hyperparams
+from .macros import Macros
+from .utils import extract_hyperparams
 from .passes.director import _director_pass
 from .passes.writer import _writer_pass, build_writer_content
 from .passes.editor import editor_pass
@@ -29,62 +29,6 @@ logger = logging.getLogger(__name__)
 
 
 # ── Core pipeline ─────────────────────────────────────────────────────────────
-
-
-def _replace_in_messages(
-    messages: list[dict], user_name: str, char_name: str
-) -> list[dict]:
-    result = []
-    for msg in messages:
-        content = msg.get("content")
-        if isinstance(content, str):
-            content = replace_placeholders(content, user_name, char_name)
-        elif isinstance(content, list):
-            content = [
-                (
-                    {
-                        **part,
-                        "text": replace_placeholders(
-                            part["text"], user_name, char_name
-                        ),
-                    }
-                    if part.get("type") == "text"
-                    else part
-                )
-                for part in content
-            ]
-        result.append({**msg, "content": content})
-    return result
-
-
-class _PlaceholderClient(LLMClient):
-    """Thin wrapper that replaces {{user}}/{{char}} in messages before completion."""
-
-    def __init__(self, inner: LLMClient, user_name: str, char_name: str) -> None:
-        self._inner = inner
-        self._user_name = user_name
-        self._char_name = char_name
-
-    def abort(self) -> None:
-        self._inner.abort()
-
-    @property
-    def is_aborted(self) -> bool:
-        return self._inner.is_aborted
-
-    async def complete(
-        self,
-        messages: list[dict],
-        model: str,
-        tools: list[dict] | None = None,
-        tool_choice: dict | str | None = None,
-        **params,
-    ):
-        msgs = _replace_in_messages(messages, self._user_name, self._char_name)
-        async for item in self._inner.complete(
-            msgs, model, tools=tools, tool_choice=tool_choice, **params
-        ):
-            yield item
 
 
 async def _run_pipeline(
@@ -101,8 +45,7 @@ async def _run_pipeline(
     editor_audit_msgs: list[str] | None = None,
     agent_client: LLMClient | None = None,
     agent_prefix: list[dict] | None = None,
-    user_name: str = "User",
-    char_name: str = "",
+    macros: Macros | None = None,
     conversation_id: str | None = None,
 ) -> AsyncIterator[dict]:
     """Three-pass pipeline: director → writer → editor.
@@ -114,8 +57,13 @@ async def _run_pipeline(
     ``editor_rewrite`` is included in the schema set whenever the length guard
     is enabled (mirroring how ``editor_apply_patch`` tracks ``audit_enabled``).
     """
+    if macros is None:
+        macros = Macros("User", "")
     if attachments is None:
         attachments = []
+
+    user_message = macros.resolve_message(user_message)
+
     enabled_tools = settings.get("enabled_tools") or {}
     agent_on = bool(settings.get("enable_agent", 1))
     if not agent_on:
@@ -178,7 +126,7 @@ async def _run_pipeline(
     writer_enabled_tools = {} if agent_is_separate else enabled_tools
 
     def _wrap(c):
-        return _PlaceholderClient(c, user_name, char_name)
+        return macros.wrap_client(c)
 
     director_client = _wrap(agent_client or client)
     editor_client = _wrap(agent_client or client)
@@ -250,7 +198,7 @@ async def _run_pipeline(
 
     # Style injection
     direct_scene_enabled = agent_on and bool(enabled_tools.get("direct_scene", False))
-    inj_block = replace_placeholders(
+    inj_block = macros.resolve_message(
         compute_style_injection_block(
             active_moods,
             director["active_moods"],
@@ -259,9 +207,7 @@ async def _run_pipeline(
             direct_scene_enabled,
             extra_fields,
             progressive_state,
-        ),
-        user_name,
-        char_name,
+        )
     )
 
     yield {
@@ -343,9 +289,9 @@ async def _run_pipeline(
                 resp_text,
                 settings,
                 phrase_bank or [],
+                enabled_tools,
                 audit_enabled,
                 length_guard,
-                enabled_tools,
                 kv_tracker=kv_tracker,
                 reasoning_on=editor_reasoning_on,
                 audit_context_msgs=editor_audit_msgs,
@@ -466,17 +412,6 @@ async def _load_pipeline_context(conversation_id: str) -> dict | None:
     }
 
 
-def _ctx_names(ctx: dict) -> tuple[str, str]:
-    """Return (user_name, char_name) resolved from a pipeline-context dict."""
-    active_persona = ctx.get("active_persona")
-    user_name = (
-        active_persona.get("name", "User")
-        if active_persona
-        else ctx["settings"].get("user_name", "User")
-    )
-    return user_name, ctx["conv"]["character_name"]
-
-
 def _build_prefix_from_ctx(
     ctx: dict, history: list[dict], *, system_prompt: str | None = None
 ) -> list[dict]:
@@ -487,23 +422,23 @@ def _build_prefix_from_ctx(
     """
     conv = ctx["conv"]
     active_persona = ctx.get("active_persona")
-
-    if active_persona:
-        user_name = active_persona.get("name", "User")
-        user_description = active_persona.get("description", "")
-    else:
-        user_name = ctx["settings"].get("user_name", "User")
-        user_description = ctx["settings"].get("user_description", "")
+    macros = Macros.from_settings(
+        ctx["settings"], conv["character_name"], active_persona
+    )
+    user_description = (
+        active_persona.get("description", "")
+        if active_persona
+        else ctx["settings"].get("user_description", "")
+    )
 
     return build_prefix(
         system_prompt if system_prompt is not None else ctx["system_prompt"],
-        conv["character_name"],
         ctx["char_persona"],
         conv["character_scenario"],
         ctx["mes_example"],
         conv.get("post_history_instructions", ""),
         history,
-        user_name,
+        macros,
         user_description,
     )
 
@@ -525,14 +460,12 @@ def _build_prefixes(
     return prefix, agent_prefix
 
 
-def _compute_lorebook(ctx: dict, messages: list[dict]) -> str:
+def _compute_lorebook(macros: Macros, ctx: dict, messages: list[dict]) -> str:
     """Compute the lorebook injection block for a sequence of *messages*."""
-    user_name, char_name = _ctx_names(ctx)
     return compute_lorebook_injection_block(
         messages,
         ctx.get("lorebook_entries", []),
-        user_name,
-        char_name,
+        macros,
     )
 
 
@@ -598,8 +531,7 @@ async def _persist_result(
         await db.update_director_state(
             conversation_id,
             res["active_moods"],
-            res.get("extra_fields", {}).get("keywords"),
-            res.get("progressive_fields"),
+            progressive_fields=res.get("progressive_fields"),
         )
     if res.get("rewritten_msg") and user_msg_id:
         await db.update_message_content(user_msg_id, res["effective_msg"])
@@ -646,8 +578,7 @@ async def _fallback_persist(
             await db.update_director_state(
                 conversation_id,
                 res["active_moods"],
-                res.get("extra_fields", {}).get("keywords"),
-                res.get("progressive_fields"),
+                progressive_fields=res.get("progressive_fields"),
             )
         if res.get("rewritten_msg") and user_msg_id:
             await db.update_message_content(user_msg_id, res["effective_msg"])
@@ -837,10 +768,14 @@ async def handle_turn(
         prefix, agent_prefix = _build_prefixes(ctx, history)
         asst_turn = next_turn + (0 if skip_user_persist else 1)
 
+        macros = Macros.from_settings(
+            ctx["settings"], ctx["conv"]["character_name"], ctx.get("active_persona")
+        )
+
         # Compute lorebook injection — include the current user message so its
         # keywords are scanned, not just prior history.
         lorebook_block = _compute_lorebook(
-            ctx, history + [{"role": "user", "content": user_message}]
+            macros, ctx, history + [{"role": "user", "content": user_message}]
         )
 
         async def _on_result(res, asst_id):
@@ -855,7 +790,6 @@ async def handle_turn(
                 res.get("progressive_fields"),
             )
 
-        user_name, char_name = _ctx_names(ctx)
         pipeline = _run_pipeline(
             ctx["client"],
             settings,
@@ -869,8 +803,7 @@ async def handle_turn(
             lorebook_block=lorebook_block,
             agent_client=ctx.get("agent_client"),
             agent_prefix=agent_prefix,
-            user_name=user_name,
-            char_name=char_name,
+            macros=macros,
             conversation_id=conversation_id,
         )
         async for event in _consume_pipeline(
@@ -917,11 +850,13 @@ async def handle_regenerate(
         )
         prefix, agent_prefix = _build_prefixes(ctx, history)
 
+        macros = Macros.from_settings(
+            ctx["settings"], ctx["conv"]["character_name"], ctx.get("active_persona")
+        )
         lorebook_block = _compute_lorebook(
-            ctx, history + [{"role": "user", "content": user_msg["content"]}]
+            macros, ctx, history + [{"role": "user", "content": user_msg["content"]}]
         )
 
-        user_name, char_name = _ctx_names(ctx)
         pipeline = _run_pipeline(
             ctx["client"],
             settings,
@@ -935,8 +870,7 @@ async def handle_regenerate(
             lorebook_block=lorebook_block,
             agent_client=ctx.get("agent_client"),
             agent_prefix=agent_prefix,
-            user_name=user_name,
-            char_name=char_name,
+            macros=macros,
             conversation_id=conversation_id,
         )
         async for event in _consume_pipeline(
@@ -997,8 +931,13 @@ async def handle_super_regenerate(
             },
         }
 
+        macros = Macros.from_settings(
+            ctx["settings"], ctx["conv"]["character_name"], ctx.get("active_persona")
+        )
         lorebook_block = _compute_lorebook(
-            ctx, extended_history + [{"role": "user", "content": _SUPER_REGEN_MSG}]
+            macros,
+            ctx,
+            extended_history + [{"role": "user", "content": _SUPER_REGEN_MSG}],
         )
 
         # Collect audit context from history only — exclude target["content"] so
@@ -1009,7 +948,6 @@ async def handle_super_regenerate(
             if msg.get("role") == "assistant"
         ][:3]
 
-        user_name, char_name = _ctx_names(ctx)
         pipeline = _run_pipeline(
             ctx["client"],
             super_regen_settings,
@@ -1024,8 +962,7 @@ async def handle_super_regenerate(
             editor_audit_msgs=editor_audit_msgs,
             agent_client=ctx.get("agent_client"),
             agent_prefix=agent_prefix,
-            user_name=user_name,
-            char_name=char_name,
+            macros=macros,
             conversation_id=conversation_id,
         )
         # Save result as a sibling of the original: same parent_id and turn_index.

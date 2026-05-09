@@ -5,8 +5,7 @@ and tool-call prompts for the orchestrator pipeline.
 
 from __future__ import annotations
 
-import re
-
+from .macros import Macros
 from .tool_defs import (
     TOOLS,
     DIRECTOR_PREAMBLE,
@@ -16,29 +15,12 @@ from .tool_defs import (
     EDITOR_REWRITE_INSTRUCTIONS,
     EDITOR_BOTH_INSTRUCTIONS,
     STRUCTURAL_REWRITE_INSTRUCTIONS,
-    build_direct_scene_tool,
 )
 
 LOREBOOK_SCAN_DEPTH = 6
 
-# ── Placeholder replacement
 
-
-def replace_placeholders(text: str, user_name: str, char_name: str) -> str:
-    """Replace {{user}} and {{char}} placeholders with actual names."""
-    if not text or not isinstance(text, str):
-        return text or ""
-    result = text
-    if user_name:
-        result = re.sub(r"\{\{user\}\}", user_name, result, flags=re.IGNORECASE)
-    if char_name:
-        result = re.sub(r"\{\{char\}\}", char_name, result, flags=re.IGNORECASE)
-    return result
-
-
-def format_message_with_attachments(
-    message: dict, user_name: str, char_name: str
-) -> dict:
+def format_message_with_attachments(message: dict, macros: Macros | None) -> dict:
     """Convert a message dict with optional attachments to OpenAI vision format.
 
     Input message dict expects keys: 'role', 'content' (str), 'attachments' (list of dicts).
@@ -46,21 +28,19 @@ def format_message_with_attachments(
     Returns a dict with 'role' and 'content' (string or list of parts).
     """
     role = message["role"]
-    text = replace_placeholders(message.get("content", ""), user_name, char_name)
+    raw = message.get("content", "")
+    text = macros.resolve_prompt(raw) if macros else raw
     attachments = message.get("attachments") or []
 
     if not attachments:
-        # Simple text message
         return {"role": role, "content": text}
 
-    # Build multimodal content array
     parts = []
     if text:
         parts.append({"type": "text", "text": text})
     for att in attachments:
         mime = att["mime_type"]
         b64 = att["data_b64"]
-        # Ensure proper data URL format
         url = f"data:{mime};base64,{b64}"
         parts.append({"type": "image_url", "image_url": {"url": url}})
     return {"role": role, "content": parts}
@@ -71,17 +51,17 @@ def format_message_with_attachments(
 
 def build_prefix(
     system_prompt: str,
-    char_name: str,
     char_persona: str,
     char_scenario: str,
     mes_example: str = "",
     post_history_instructions: str = "",
     messages: list[dict] | None = None,
-    user_name: str = "User",
+    macros: Macros | None = None,
     user_description: str = "",
 ) -> list[dict]:
+    resolve = macros.resolve_message if macros else (lambda t: t)
     resolved = {
-        key: replace_placeholders(val, user_name, char_name)
+        key: resolve(val)
         for key, val in {
             "persona": char_persona,
             "scenario": char_scenario,
@@ -92,8 +72,8 @@ def build_prefix(
     }
 
     parts = [system_prompt]
-    if char_name:
-        parts.append(f"\n\n## Character: {char_name}")
+    if macros and macros.char:
+        parts.append(f"\n\n## Character: {macros.char}")
     if resolved["persona"]:
         parts.append(f"\n{resolved['persona']}")
     if resolved["scenario"]:
@@ -101,20 +81,18 @@ def build_prefix(
     if resolved["mes_example"]:
         mes = resolved["mes_example"]
         if "<START>" in mes:
-            # Replace each <START> with header, no outer header
             processed_example = mes.replace("<START>", "## Example Dialogue")
             parts.append(f"\n\n{processed_example}")
         else:
-            # No <START> – add a single header as outer wrapper
             parts.append(f"\n\n## Example Dialogue\n{mes}")
     if resolved["post_history"]:
         parts.append(f"\n\n## Additional Instructions\n{resolved['post_history']}")
     if resolved["user_desc"]:
-        parts.append(f"\n\n## User: {user_name or 'User'}\n{resolved['user_desc']}")
+        user_label = macros.user if macros else "User"
+        parts.append(f"\n\n## User: {user_label}\n{resolved['user_desc']}")
 
     processed_messages = [
-        format_message_with_attachments(m, user_name, char_name)
-        for m in (messages or [])
+        format_message_with_attachments(m, macros) for m in (messages or [])
     ]
 
     return [{"role": "system", "content": "".join(parts)}] + processed_messages
@@ -123,7 +101,7 @@ def build_prefix(
 # ── Tool-call prompt
 
 
-def build_tool_prompt(
+def build_director_tool_prompt(
     tool_name: str,
     user_message: str,
     active_moods: list[str],
@@ -131,14 +109,12 @@ def build_tool_prompt(
     reasoning_on: bool = False,
     director_fragments: list[dict] | None = None,
     progressive_state: dict | None = None,
+    tool_schema: dict | None = None,
 ) -> str:
     tool = TOOLS.get(tool_name)
     if not tool:
         return ""
-    if tool_name == "direct_scene":
-        schema = build_direct_scene_tool(director_fragments or [], progressive_state)
-    else:
-        schema = tool["schema"]
+    schema = tool_schema if tool_schema is not None else tool["schema"]
     desc = schema["function"]["description"]
     params = schema["function"]["parameters"].get("properties", {})
     param_order = ", ".join(params.keys()) if params else "N/A"
@@ -296,8 +272,7 @@ def build_style_injection(
 def compute_lorebook_injection_block(
     messages: list[dict],
     entries: list[dict],
-    user_name: str = "User",
-    char_name: str = "",
+    macros: Macros | None = None,
 ) -> str:
     """Compute the lorebook injection block from active entries whose keywords
     appear in the 6 most recent messages (any role).
@@ -342,10 +317,11 @@ def compute_lorebook_injection_block(
 
     matched.sort(key=lambda e: e.get("priority", 100), reverse=True)
 
+    resolve = macros.resolve_message if macros else (lambda t: t)
     parts = ["**Lorebook**"]
     for entry in matched:
-        name = replace_placeholders(entry.get("name", ""), user_name, char_name)
-        content = replace_placeholders(entry.get("content", ""), user_name, char_name)
+        name = resolve(entry.get("name", ""))
+        content = resolve(entry.get("content", ""))
         if name and content:
             parts.append(f"{name}: {content}")
         elif content:

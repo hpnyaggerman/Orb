@@ -1,5 +1,5 @@
 """
-pipeline_utils.py — Shared helpers for the pipeline passes and orchestrator.
+utils.py — Shared helpers.
 """
 
 from __future__ import annotations
