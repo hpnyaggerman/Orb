@@ -374,7 +374,6 @@ async def init_db():
                 character_card_id TEXT DEFAULT NULL,
                 character_name TEXT NOT NULL DEFAULT '',
                 character_scenario TEXT NOT NULL DEFAULT '',
-                first_mes TEXT NOT NULL DEFAULT '',
                 post_history_instructions TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
                 updated_at TEXT,
@@ -410,8 +409,6 @@ async def init_db():
                 role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
                 content TEXT NOT NULL,
                 turn_index INTEGER NOT NULL,
-                swipe_index INTEGER NOT NULL DEFAULT 0,
-                is_active BOOLEAN NOT NULL DEFAULT 1,
                 parent_id INTEGER REFERENCES messages(id) ON DELETE CASCADE,
                 progressive_fields TEXT NOT NULL DEFAULT '{}',
                 created_at TEXT NOT NULL
@@ -1466,7 +1463,6 @@ async def create_conversation(
     title: str,
     char_name: str,
     char_scenario: str,
-    first_mes: str = "",
     post_history_instructions: str = "",
     character_card_id: str | None = None,
 ) -> dict:
@@ -1475,15 +1471,14 @@ async def create_conversation(
         await db.execute(
             """INSERT INTO conversations
                (id, title, character_card_id, character_name, character_scenario,
-                first_mes, post_history_instructions, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                post_history_instructions, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 cid,
                 title,
                 character_card_id,
                 char_name,
                 char_scenario,
-                first_mes,
                 post_history_instructions,
                 now,
                 now,
@@ -1536,7 +1531,7 @@ async def update_conversation(cid: str, data: dict) -> dict | None:
 # --- Messages ---
 
 
-async def _get_path_to_leaf(cid: str, leaf_id: int) -> list[dict]:
+async def get_path_to_leaf(cid: str, leaf_id: int) -> list[dict]:
     """Walk parent_id chain from leaf to root, return ordered root→leaf."""
     async with get_db() as db:
         path = []
@@ -1559,6 +1554,26 @@ async def _get_path_to_leaf(cid: str, leaf_id: int) -> list[dict]:
         return path
 
 
+async def _attach_attachments(messages: list[dict]) -> None:
+    """Populate msg["attachments"] for each message using a single IN query."""
+    if not messages:
+        return
+    ids = [m["id"] for m in messages]
+    placeholders = ",".join("?" * len(ids))
+    async with get_db() as db:
+        rows = list(
+            await db.execute_fetchall(
+                f"SELECT * FROM message_attachments WHERE message_id IN ({placeholders}) ORDER BY id",  # nosec B608
+                ids,
+            )
+        )
+    by_msg: dict[int, list] = {m["id"]: [] for m in messages}
+    for r in rows:
+        by_msg[r["message_id"]].append(dict(r))
+    for m in messages:
+        m["attachments"] = by_msg[m["id"]]
+
+
 async def get_messages(cid: str) -> list[dict]:
     """Get active path messages (root→leaf) for LLM prompt construction."""
     conv = await get_conversation(cid)
@@ -1567,10 +1582,8 @@ async def get_messages(cid: str) -> list[dict]:
     leaf_id = conv.get("active_leaf_id")
     if not leaf_id:
         return []
-    messages = await _get_path_to_leaf(cid, leaf_id)
-    # Add attachments to each message
-    for msg in messages:
-        msg["attachments"] = await get_attachments_for_message(msg["id"])
+    messages = await get_path_to_leaf(cid, leaf_id)
+    await _attach_attachments(messages)
     return messages
 
 
@@ -1604,10 +1617,7 @@ async def get_messages_with_branch_info(cid: str) -> list[dict]:
             msg["next_branch_id"] = (
                 sibling_ids[idx + 1] if idx < len(sibling_ids) - 1 else None
             )
-        # Add attachments
-        for msg in messages:
-            msg["attachments"] = await get_attachments_for_message(msg["id"])
-        return messages
+    return messages
 
 
 async def add_message(
@@ -1615,7 +1625,6 @@ async def add_message(
     role: str,
     content: str,
     turn_index: int,
-    swipe_index: int = 0,
     parent_id: int | None = None,
     attachments: Optional[List[dict]] = None,
     progressive_fields: dict | None = None,
@@ -1631,13 +1640,12 @@ async def add_message(
         now = datetime.now(timezone.utc).isoformat()
         try:
             cur = await db.execute(
-                "INSERT INTO messages (conversation_id, role, content, turn_index, swipe_index, is_active, parent_id, progressive_fields, created_at) VALUES (?, ?, ?, ?, ?, 1, ?, ?, ?)",
+                "INSERT INTO messages (conversation_id, role, content, turn_index, parent_id, progressive_fields, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (
                     cid,
                     role,
                     content,
                     turn_index,
-                    swipe_index,
                     parent_id,
                     json.dumps(progressive_fields or {}),
                     now,
@@ -1746,92 +1754,6 @@ async def switch_to_branch(cid: str, message_id: int) -> bool:
     return True
 
 
-async def create_swipe(cid: str, turn_index: int, content: str) -> dict:
-    """Create a new swipe at a given turn_index. Deactivates old swipes, activates the new one."""
-    async with get_db() as db:
-        # Get the role and next swipe_index
-        rows = list(
-            await db.execute_fetchall(
-                "SELECT role, MAX(swipe_index) as max_si FROM messages WHERE conversation_id = ? AND turn_index = ?",
-                (cid, turn_index),
-            )
-        )
-        if not rows or rows[0]["role"] is None:
-            raise ValueError(f"No messages at turn_index {turn_index}")
-
-        role = rows[0]["role"]
-        new_si = (rows[0]["max_si"] or 0) + 1
-
-        # Deactivate all swipes at this turn
-        await db.execute(
-            "UPDATE messages SET is_active = 0 WHERE conversation_id = ? AND turn_index = ?",
-            (cid, turn_index),
-        )
-
-        # Insert new active swipe
-        now = datetime.now(timezone.utc).isoformat()
-        await db.execute(
-            "INSERT INTO messages (conversation_id, role, content, turn_index, swipe_index, is_active, created_at) VALUES (?, ?, ?, ?, ?, 1, ?)",
-            (cid, role, content, turn_index, new_si, now),
-        )
-        await db.commit()
-
-        return {"turn_index": turn_index, "swipe_index": new_si, "role": role}
-
-
-async def switch_swipe(cid: str, turn_index: int, target_swipe_index: int) -> bool:
-    """Switch the active swipe at a given turn_index."""
-    async with get_db() as db:
-        # Verify the target exists
-        rows = list(
-            await db.execute_fetchall(
-                "SELECT id FROM messages WHERE conversation_id = ? AND turn_index = ? AND swipe_index = ?",
-                (cid, turn_index, target_swipe_index),
-            )
-        )
-        if not rows:
-            return False
-
-        # Deactivate all, activate target
-        await db.execute(
-            "UPDATE messages SET is_active = 0 WHERE conversation_id = ? AND turn_index = ?",
-            (cid, turn_index),
-        )
-        await db.execute(
-            "UPDATE messages SET is_active = 1 WHERE conversation_id = ? AND turn_index = ? AND swipe_index = ?",
-            (cid, turn_index, target_swipe_index),
-        )
-        await db.commit()
-        return True
-
-
-async def truncate_after_turn(cid: str, turn_index: int):
-    """Delete all messages with turn_index > the given value."""
-    async with get_db() as db:
-        await db.execute(
-            "DELETE FROM messages WHERE conversation_id = ? AND turn_index > ?",
-            (cid, turn_index),
-        )
-        # Also delete conversation logs after this turn
-        await db.execute(
-            "DELETE FROM conversation_logs WHERE conversation_id = ? AND turn_index > ?",
-            (cid, turn_index),
-        )
-        await db.commit()
-
-
-async def get_next_turn_index(cid: str) -> int:
-    """Get the next turn_index based on the active leaf's position."""
-    conv = await get_conversation(cid)
-    if not conv:
-        return 0
-    leaf_id = conv.get("active_leaf_id")
-    if not leaf_id:
-        return 0
-    msg = await get_message_by_id(leaf_id)
-    return (msg["turn_index"] + 1) if msg else 0
-
-
 # --- Director State ---
 
 
@@ -1935,20 +1857,6 @@ async def get_moods_before_turn(cid: str, turn_index: int) -> list[str]:
         return []
 
 
-async def get_progressive_fields_before_turn(cid: str, turn_index: int) -> dict:
-    """Return progressive_fields_after from the most recent log entry before turn_index."""
-    async with get_db() as db:
-        rows = list(
-            await db.execute_fetchall(
-                "SELECT progressive_fields_after FROM conversation_logs WHERE conversation_id = ? AND turn_index < ? ORDER BY turn_index DESC LIMIT 1",
-                (cid, turn_index),
-            )
-        )
-        if rows and rows[0]["progressive_fields_after"]:
-            return json.loads(rows[0]["progressive_fields_after"])
-        return {}
-
-
 async def get_conversation_logs(cid: str) -> list[dict]:
     async with get_db() as db:
         rows = list(
@@ -1974,29 +1882,6 @@ async def get_director_log_for_message(message_id: int) -> dict | None:
             await db.execute_fetchall(
                 "SELECT * FROM conversation_logs WHERE message_id = ? ORDER BY id DESC LIMIT 1",
                 (message_id,),
-            )
-        )
-        if not rows:
-            return None
-        d = dict(rows[0])
-        d["tool_calls"] = json.loads(d["tool_calls"]) if d["tool_calls"] else []
-        d["active_moods_after"] = (
-            json.loads(d["active_moods_after"]) if d["active_moods_after"] else []
-        )
-        return d
-
-
-async def get_director_log_for_turn(cid: str, turn_index: int) -> dict | None:
-    """Return the most recent conversation_log entry at or before a given turn_index.
-
-    Logs are stored with the user-message turn_index (next_turn), while assistant
-    messages are stored at next_turn+1, so we use <= to bridge that off-by-one.
-    """
-    async with get_db() as db:
-        rows = list(
-            await db.execute_fetchall(
-                "SELECT * FROM conversation_logs WHERE conversation_id = ? AND turn_index <= ? ORDER BY turn_index DESC, id DESC LIMIT 1",
-                (cid, turn_index),
             )
         )
         if not rows:
@@ -2225,31 +2110,28 @@ async def create_character_card(data: dict) -> dict:
 async def insert_alternate_greeting_swipes(
     cid: str, alternate_greetings: list[str]
 ) -> int:
-    """Insert alternate greeting swipes for a conversation in a single transaction.
+    """Insert alternate greetings as sibling root messages (turn_index=0, parent_id=NULL).
 
-    Swipe indices are assigned sequentially (1, 2, …) based on the order of
-    non-empty greetings, skipping blanks. Swipe 0 is reserved for the
-    materialised first_mes message created by the caller.
-
-    Returns the number of swipes inserted.
+    These become branch siblings of the primary greeting and are navigable via
+    switch_to_branch. Returns the number of greetings inserted.
     """
     if not alternate_greetings:
         return 0
     async with get_db() as db:
         now = datetime.now(timezone.utc).isoformat()
-        swipe_index = 0
+        count = 0
         for greeting in alternate_greetings:
             if greeting and greeting.strip():
-                swipe_index += 1
+                count += 1
                 await db.execute(
                     "INSERT INTO messages "
-                    "(conversation_id, role, content, turn_index, swipe_index, is_active, parent_id, created_at) "
-                    "VALUES (?, ?, ?, ?, ?, 0, NULL, ?)",
-                    (cid, "assistant", greeting.strip(), 0, swipe_index, now),
+                    "(conversation_id, role, content, turn_index, parent_id, created_at) "
+                    "VALUES (?, ?, ?, 0, NULL, ?)",
+                    (cid, "assistant", greeting.strip(), now),
                 )
-        if swipe_index:
+        if count:
             await db.commit()
-        return swipe_index
+        return count
 
 
 async def update_character_card(card_id: str, data: dict) -> dict | None:

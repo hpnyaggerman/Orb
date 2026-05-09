@@ -1,0 +1,35 @@
+"""Migration 0015: drop stale columns that are no longer used.
+
+- messages.swipe_index  — only referenced by the old flat-swipe API (removed).
+                          The tree system uses parent_id + active_leaf_id for branching.
+- messages.is_active    — same; the tree traversal never filtered on this column.
+- conversations.first_mes — write-once at creation, never read back. The value is
+                            materialised as a message node immediately after creation.
+"""
+
+from __future__ import annotations
+
+import sqlite3
+
+
+def migrate(conn: sqlite3.Connection) -> None:
+    message_cols = {
+        row[1] for row in conn.execute("PRAGMA table_info(messages)").fetchall()
+    }
+    if "swipe_index" in message_cols:
+        conn.execute("ALTER TABLE messages DROP COLUMN swipe_index")
+        conn.commit()
+        print("[migrations] 0015: dropped messages.swipe_index")
+
+    if "is_active" in message_cols:
+        conn.execute("ALTER TABLE messages DROP COLUMN is_active")
+        conn.commit()
+        print("[migrations] 0015: dropped messages.is_active")
+
+    conv_cols = {
+        row[1] for row in conn.execute("PRAGMA table_info(conversations)").fetchall()
+    }
+    if "first_mes" in conv_cols:
+        conn.execute("ALTER TABLE conversations DROP COLUMN first_mes")
+        conn.commit()
+        print("[migrations] 0015: dropped conversations.first_mes")
