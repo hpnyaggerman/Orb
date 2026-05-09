@@ -44,6 +44,7 @@ from .database import (
     get_messages_with_branch_info,
     get_director_state,
     get_conversation_logs,
+    get_director_log_for_message,
     list_character_cards,
     get_character_card,
     create_character_card,
@@ -313,7 +314,7 @@ class ConversationUpdate(BaseModel):
 
 class SummarizeRequest(BaseModel):
     keep_count: int  # must be one of 2, 4, 6, 8
-    custom_instructions: str | None = None
+    custom_instructions: Optional[str] = None
 
 
 class CompressRequest(BaseModel):
@@ -424,10 +425,6 @@ class EditMessage(BaseModel):
     regenerate: bool = True
     enable_agent: bool = True
     attachments: List[AttachmentIn] = []
-
-
-class SwitchSwipe(BaseModel):
-    swipe_index: int
 
 
 class RegenerateMsg(BaseModel):
@@ -892,7 +889,6 @@ async def api_create_conversation(data: ConversationCreate):
         title=title,
         char_name=char_name,
         char_scenario=char_scenario,
-        first_mes=first_mes,
         post_history_instructions=post_hist,
         character_card_id=card_id,
     )
@@ -1039,7 +1035,6 @@ async def api_compress_conversation(cid: str, data: CompressRequest):
         title=new_title,
         char_name=char_name,
         char_scenario=conv.get("character_scenario", "") or "",
-        first_mes="",
         post_history_instructions=conv.get("post_history_instructions", "") or "",
         character_card_id=conv.get("character_card_id"),
     )
@@ -1288,7 +1283,11 @@ class _CleanupStreamingResponse(StreamingResponse):
 
 
 async def _sse_stream(
-    gen, request: Request, *, client_ref: list | None = None, cid: str | None = None
+    gen,
+    request: Request,
+    *,
+    client_ref: list | None = None,
+    cid: str | None = None,
 ):
     """Wrap an event-dict async generator as SSE, stopping cleanly on client disconnect.
 
@@ -1529,6 +1528,30 @@ async def api_get_logs(cid: str):
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
     return await get_conversation_logs(cid)
+
+
+@app.get("/api/conversations/{cid}/messages/{msg_id}/director-log")
+async def api_get_message_director_log(cid: str, msg_id: int):
+    conv = await get_conversation(cid)
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    msg = await get_message_by_id(msg_id)
+    if not msg or msg.get("conversation_id") != cid:
+        raise HTTPException(status_code=404, detail="Message not found")
+    log = await get_director_log_for_message(msg_id)
+    if not log:
+        return {
+            "active_moods": [],
+            "tool_calls": [],
+            "injection_block": "",
+            "agent_latency_ms": 0,
+        }
+    return {
+        "active_moods": log.get("active_moods_after", []),
+        "tool_calls": log.get("tool_calls", []),
+        "injection_block": log.get("injection_block", ""),
+        "agent_latency_ms": log.get("agent_latency_ms", 0),
+    }
 
 
 @app.get("/api/conversations/{cid}/context-size")

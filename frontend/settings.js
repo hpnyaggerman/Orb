@@ -321,7 +321,7 @@ export function renderSettings() {
           <span class="tog-slider"></span>
         </label>
       </div>
-      <div class="tool-card-desc">Hide the assistant's reply while the pipeline runs. The phase indicator stays visible.</div>
+      <div class="tool-card-desc">Hide the assistant's reply while the pipeline runs.</div>
     </div>
     <div class="field" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--accent-dim)">
       <button class="btn btn-danger" onclick="showResetConfirmModal()" style="width:100%;justify-content:center">Reset to Defaults</button>
@@ -678,7 +678,7 @@ async function _syncModelConfigRecord(ctx, modelName, hyperparams) {
     const mc = await api.post(`/endpoints/${S[ctx.endpointIdKey]}/models`, {
       role: ctx.role,
       model_name: modelName,
-      system_prompt: get("system_prompt", "") || get("shared_system_prompt", ""),
+      system_prompt: get("system_prompt", ""),
       temperature: get("temperature", 0.8),
       min_p: get("min_p", 0),
       top_k: get("top_k", 40),

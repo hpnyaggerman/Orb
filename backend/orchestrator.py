@@ -500,7 +500,7 @@ async def _prepare_regen_context(
     """
     parent_id: int | None = user_msg.get("parent_id")
     history = (
-        await db._get_path_to_leaf(conversation_id, parent_id)
+        await db.get_path_to_leaf(conversation_id, parent_id)
         if parent_id is not None
         else []
     )
@@ -788,6 +788,7 @@ async def handle_turn(
                 res["inj_block"],
                 res["latency"],
                 res.get("progressive_fields"),
+                message_id=asst_id,
             )
 
         pipeline = _run_pipeline(
@@ -873,8 +874,27 @@ async def handle_regenerate(
             macros=macros,
             conversation_id=conversation_id,
         )
+
+        async def _on_result(res, asst_id):
+            await db.add_conversation_log(
+                conversation_id,
+                target["turn_index"],
+                res["agent_raw"],
+                res["calls"],
+                res["active_moods"],
+                res["inj_block"],
+                res["latency"],
+                res.get("progressive_fields"),
+                message_id=asst_id,
+            )
+
         async for event in _consume_pipeline(
-            pipeline, conversation_id, settings, user_msg_id, target["turn_index"]
+            pipeline,
+            conversation_id,
+            settings,
+            user_msg_id,
+            target["turn_index"],
+            extra_on_result=_on_result,
         ):
             yield event
 
@@ -965,9 +985,28 @@ async def handle_super_regenerate(
             macros=macros,
             conversation_id=conversation_id,
         )
+
+        async def _on_result(res, asst_id):
+            await db.add_conversation_log(
+                conversation_id,
+                target["turn_index"],
+                res["agent_raw"],
+                res["calls"],
+                res["active_moods"],
+                res["inj_block"],
+                res["latency"],
+                res.get("progressive_fields"),
+                message_id=asst_id,
+            )
+
         # Save result as a sibling of the original: same parent_id and turn_index.
         async for event in _consume_pipeline(
-            pipeline, conversation_id, settings, user_msg_id, target["turn_index"]
+            pipeline,
+            conversation_id,
+            settings,
+            user_msg_id,
+            target["turn_index"],
+            extra_on_result=_on_result,
         ):
             yield event
 
@@ -1000,7 +1039,7 @@ async def handle_magic_rewrite(
 
         parent_id: int | None = user_msg.get("parent_id")
         history = (
-            await db._get_path_to_leaf(conversation_id, parent_id)
+            await db.get_path_to_leaf(conversation_id, parent_id)
             if parent_id is not None
             else []
         )

@@ -32,6 +32,7 @@ MIGRATIONS: list[str] = [
     "0013_agent_endpoint",
     "0014_progressive_director_state",
     "0015_voice_profiles",
+    "0016_drop_stale_columns",
 ]
 
 

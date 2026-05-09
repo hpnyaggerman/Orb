@@ -65,4 +65,6 @@ export const S = {
   ttsCurrentTime: 0,
   ttsDuration: 0,
   ttsEnabled: false, // loaded from settings
+  inspectedMsgId: null, // when set, Inspector shows director data for this message instead of current state
+  inspectedDirectorData: null, // fetched director log data for the inspected message
 };
