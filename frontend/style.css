@@ -1009,7 +1009,7 @@ body {
   max-height: 150px;
   padding: 10px 14px;
   font-family: var(--font-prose);
-  font-size: 15px;
+  font-size: calc(var(--font-prose-size) - 1px);
   line-height: 1.5;
   resize: none;
   background: var(--bg-surface);
