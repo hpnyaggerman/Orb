@@ -476,7 +476,7 @@ export function showCompressModal() {
     <h2>Compress History</h2>
     <p class="modal-subtitle">Summarize the story so far into a new conversation, carrying over the most recent messages.</p>
     <div style="margin-bottom:14px">
-      <label style="display:block;font-size:0.9em;margin-bottom:6px;color:var(--text-muted)">Custom instructions (optional)</label>
+      <label style="display:block;font-size:0.9em;margin-bottom:6px;color:var(--text-muted)">Additional instructions (optional)</label>
       <textarea id="compress-instructions" class="modal-textarea" rows="3" spellcheck="false" placeholder="e.g. Past tense, omit small talk…" style="resize:vertical"></textarea>
     </div>
     <div style="margin-bottom:20px">
@@ -489,7 +489,7 @@ export function showCompressModal() {
       <p style="color:var(--text-muted);font-size:0.88em;margin-top:8px">${totalMsgs} messages in this conversation</p>
     </div>
     <p id="compress-status" class="modal-subtitle" style="display:none"></p>
-    <textarea id="compress-textarea" class="modal-textarea-lg" spellcheck="false" placeholder="Summary will appear here after you click Generate…" style="display:none"></textarea>
+    <textarea id="compress-textarea" class="modal-textarea-lg" spellcheck="false" placeholder="Summary will appear here…" style="display:none"></textarea>
     <div class="modal-actions">
       <button class="btn" onclick="cancelCompression()">Cancel</button>
       <button class="btn" id="compress-regen-btn" onclick="generateCompressionSummary()" style="display:none" disabled>Regenerate</button>
