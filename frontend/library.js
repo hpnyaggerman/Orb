@@ -644,14 +644,17 @@ function charFormTabs(prefix, d, isEdit, worlds = []) {
           <span>Loading voice settings…</span>
         </div>
       <div class="field voice-enable-row">
+        <label>Voice</label>
         <label class="modal-checkbox-label">
           Enable speech generation for this character
           <label class="tog" onclick="event.stopPropagation()">
-            <input type="checkbox" id="${prefix}-voice-enabled">
+            <input type="checkbox" id="${prefix}-voice-enabled"
+              onchange="toggleVoiceFields('${prefix}', this.checked)">
             <span class="tog-slider"></span>
           </label>
         </label>
       </div>
+      <div id="${prefix}-voice-config" class="voice-config">
       <div class="field"><label>TTS Backend</label>
         <select id="${prefix}-voice-backend" onchange="onVoiceBackendChange('${prefix}')">
           <option value="">Loading…</option>
@@ -694,6 +697,7 @@ function charFormTabs(prefix, d, isEdit, worlds = []) {
       <div class="field" style="display:flex;gap:8px;align-items:center">
         <button class="btn btn-sm" onclick="previewVoice('${prefix}')">🔊 Preview</button>
         <span id="${prefix}-voice-preview-status" style="font-size:12px;color:var(--text-muted)"></span>
+      </div>
       </div>
       </div>
     </div>`
@@ -1376,6 +1380,15 @@ const _BACKEND_FIELDS = {
 
 let _backendsCache = null;
 
+window.toggleVoiceFields = (prefix, enabled) => {
+  const config = $(prefix + "-voice-config");
+  if (!config) return;
+  config.classList.toggle("voice-config-disabled", !enabled);
+  config.querySelectorAll("input, select, button").forEach((el) => {
+    el.disabled = !enabled;
+  });
+};
+
 window.onVoiceBackendChange = async (prefix) => {
   _updateFieldVisibility(prefix);
   // Auto-fill default API URL for backends that need one
@@ -1550,6 +1563,7 @@ export async function loadVoiceProfileIntoTab(charId, prefix) {
       const profile = await api.get("/characters/" + charId + "/voice-profile");
       if (!profile || !profile.backend) {
         _updateFieldVisibility(prefix);
+        toggleVoiceFields(prefix, false);
         return;
       }
       const backend = $(prefix + "-voice-backend");
@@ -1582,9 +1596,11 @@ export async function loadVoiceProfileIntoTab(charId, prefix) {
       const model = $(prefix + "-voice-model");
       if (model) model.value = profile.model || "";
       _updateFieldVisibility(prefix);
+      toggleVoiceFields(prefix, enabled?.checked ?? false);
     } catch (e) {
       // No profile yet — that's fine, defaults are loaded
       _updateFieldVisibility(prefix);
+      toggleVoiceFields(prefix, false);
     }
   } finally {
     _setVoiceLoading(prefix, false);
