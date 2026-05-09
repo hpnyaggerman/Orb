@@ -96,7 +96,7 @@ logger = logging.getLogger(__name__)
 
 # Defaults — override per-installation if needed.
 DEFAULT_MAX_CACHE_BYTES = 500 * 1024 * 1024  # 500 MB
-DEFAULT_TTL_SECONDS = 7 * 24 * 3600          # 7 days
+DEFAULT_TTL_SECONDS = 7 * 24 * 3600  # 7 days
 
 
 def cache_stats() -> dict:
@@ -137,7 +137,9 @@ def evict_expired(ttl_seconds: int = DEFAULT_TTL_SECONDS) -> int:
                 pass
     _prune_empty_dirs()
     if removed:
-        logger.info("TTS cache TTL eviction: removed %d files (ttl=%ds)", removed, ttl_seconds)
+        logger.info(
+            "TTS cache TTL eviction: removed %d files (ttl=%ds)", removed, ttl_seconds
+        )
     return removed
 
 
