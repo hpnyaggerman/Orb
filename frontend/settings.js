@@ -288,14 +288,26 @@ function updateAgentModelWarning() {
 
 export function renderSettings() {
   $("settings-form").innerHTML = `
+    <div class="tool-card ${S.hideUntilBaked ? "tool-on" : ""}">
+      <div class="tool-card-header">
+        <span class="tool-card-name">Hide until baked</span>
+        <label class="tog" onclick="event.stopPropagation()">
+          <input type="checkbox" ${S.hideUntilBaked ? "checked" : ""} onchange="toggleHideUntilBaked(this.checked)">
+          <span class="tog-slider"></span>
+        </label>
+      </div>
+      <div class="tool-card-desc">Hide the assistant's reply while the pipeline runs.</div>
+    </div>
+    <div style="display:flex;align-items:center;gap:12px;margin:12px 0 8px"><div style="flex:1;height:1px;background:var(--accent-dim)"></div><span style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--accent-dim)">Audio</span><div style="flex:1;height:1px;background:var(--accent-dim)"></div></div>
     <div class="tool-card ${S.ttsEnabled ? "tool-on" : ""}">
       <div class="tool-card-header">
-        <span class="tool-card-name">Audio / TTS</span>
+        <span class="tool-card-name">Enable TTS</span>
         <label class="tog" onclick="event.stopPropagation()">
           <input type="checkbox" ${S.ttsEnabled ? "checked" : ""} onchange="toggleTtsEnabled(this.checked)">
           <span class="tog-slider"></span>
         </label>
       </div>
+      <div class="tool-card-desc">Read character dialogue aloud.</div>
     </div>
     <div id="tts-fields" style="${S.ttsEnabled ? "" : "display:none"}">
       <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-secondary);margin:8px 0 4px">
@@ -312,16 +324,6 @@ export function renderSettings() {
         </div>
         <div class="tool-card-desc">Automatically speak new character messages.</div>
       </div>
-    </div>
-    <div class="tool-card ${S.hideUntilBaked ? "tool-on" : ""}">
-      <div class="tool-card-header">
-        <span class="tool-card-name">Hide until baked</span>
-        <label class="tog" onclick="event.stopPropagation()">
-          <input type="checkbox" ${S.hideUntilBaked ? "checked" : ""} onchange="toggleHideUntilBaked(this.checked)">
-          <span class="tog-slider"></span>
-        </label>
-      </div>
-      <div class="tool-card-desc">Hide the assistant's reply while the pipeline runs.</div>
     </div>
     <div class="field" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--accent-dim)">
       <button class="btn btn-danger" onclick="showResetConfirmModal()" style="width:100%;justify-content:center">Reset to Defaults</button>
