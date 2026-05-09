@@ -1,11 +1,11 @@
 :root {
   --bg-deep:#04050c;--bg-primary:#080a16;--bg-surface:#0c0f1e;--bg-elevated:#11142a;
   --bg-hover:#181c36;--border:#1a1e40;--border-light:#242856;
-  --text-primary:#dce4f0;--text-secondary:#6070a0;--text-muted:#3e4a6e;
-  --accent:#00d4ee;--accent-dim:#006878;--accent-glow:rgba(0,212,238,0.13);
+  --text-primary:#dce4f0;--text-secondary:#7888b8;--text-muted:#3e4a6e;
+  --accent:#00d4ee;--accent-dim:#006878;--accent-glow:color-mix(in srgb, var(--accent) 8%, var(--bg-surface));
   --red:#ff1a5e;
-  --font-prose:'Lora',Georgia,'Palatino Linotype',Palatino,serif;--font-ui:'SF Mono','Fira Code','Cascadia Code',Consolas,monospace;
-  --font-mono:'SF Mono','Fira Code','Cascadia Code',Consolas,monospace;--radius:3px;
+  --font-prose:'Lora',Georgia,'Palatino Linotype',Palatino,serif;--font-ui:'Fira Code','Cascadia Code',Consolas,monospace;
+  --font-mono:'Fira Code','Cascadia Code',Consolas,monospace;--radius:3px;
   --font-prose-size:16px;
   --sidebar-width:300px;--inspector-width:340px;--tools-width:260px;
 }
