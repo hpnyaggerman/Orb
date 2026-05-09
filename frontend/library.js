@@ -79,15 +79,15 @@ export function showMoodFragmentModal(fragId = null) {
       <div class="field"><label>ID <span style="font-size:10px;color:var(--text-muted)">(For tool-calling)</span></label>
         <input id="frag-id" value="${esc(d.id)}" ${isEdit ? "disabled" : ""} placeholder="e.g. dramatic"></div>
       <div class="field"><label>Label <span style="font-size:10px;color:var(--text-muted)">(For display only)</span></label>
-        <input id="frag-label" value="${esc(d.label)}"></div>
+        <input id="frag-label" value="${esc(d.label)}" placeholder="Terse"></div>
     </div>
     <div class="field"><label>Description</label>
-      <input id="frag-desc" value="${esc(d.description)}"></div>
+      <input id="frag-desc" value="${esc(d.description)}" placeholder="Short, clipped sentences. Minimal description."></div>
     <div class="field"><label>Prompt Text</label>
-      <textarea id="frag-text" rows="4">${esc(d.prompt_text)}</textarea></div>
+      <textarea id="frag-text" rows="4" placeholder="Write tersely. Short sentences. No flowery language.">${esc(d.prompt_text)}</textarea></div>
     <div class="field">
       <label>Negative Prompt <span style="font-size:10px;color:var(--text-muted)">(injected if this fragment is removed next turn)</span></label>
-      <textarea id="frag-neg" rows="3">${esc(d.negative_prompt || "")}</textarea>
+      <textarea id="frag-neg" rows="3" placeholder="Stop using short, clipped sentences.">${esc(d.negative_prompt || "")}</textarea>
     </div>
     <div class="modal-actions">
       ${isEdit ? `<button class="btn btn-danger btn-sm" onclick="deleteMoodFragment('${esc(d.id)}')">Delete</button>` : ""}
@@ -319,7 +319,7 @@ export function showDirectorFragmentModal(fragId = null) {
       </div>
     </div>
     <div class="field"><label>Description <span style="font-size:10px;color:var(--text-muted)">(shown to the LLM in the tool schema)</span></label>
-      <textarea id="dir-frag-desc" rows="4">${esc(d.description)}</textarea></div>
+      <textarea id="dir-frag-desc" rows="4" placeholder="Set the pace of the narration, e.g. &#39;slow&#39;, &#39;fast&#39;, &#39;time-skip&#39;">${esc(d.description)}</textarea></div>
     <div class="field-row">
       <div class="field" style="align-self:flex-end;padding-bottom:4px">
         <label class="modal-checkbox-label">
