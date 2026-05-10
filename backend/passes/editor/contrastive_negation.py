@@ -29,10 +29,7 @@ def _tokenize(sent: str) -> list[str]:
     return re.findall(r"\w+(?:'\w+)?|[^\s\w]", sent)
 
 
-_PRONOUNS = frozenset(
-    "i me my he him his she her it its we us our they them their "
-    "this that these those you your".split()
-)
+_PRONOUNS = frozenset("i me my he him his she her it its we us our they them their " "this that these those you your".split())
 _BE_VERBS = frozenset("is am are was were be been being 's 're 'm".split())
 _DO_VERBS = frozenset("do does did".split())
 _HAVE_VERBS = frozenset("have has had".split())
@@ -212,8 +209,7 @@ def _find_negated_be_pattern(tokens: list[str], tags: list[str]) -> dict | None:
     if aff_idx > boundary + 1:
         pre_aff = tokens[aff_idx - 1]
         same_subject = (
-            pre_aff.lower() in _SAME_SUBJECT_PRONOUNS
-            and (neg_subject is None or neg_subject.lower() not in _PERSONAL_PRONOUNS)
+            pre_aff.lower() in _SAME_SUBJECT_PRONOUNS and (neg_subject is None or neg_subject.lower() not in _PERSONAL_PRONOUNS)
         ) or (neg_subject is not None and pre_aff.lower() == neg_subject.lower())
         if not same_subject:
             return None
@@ -238,9 +234,7 @@ def _find_negated_be_pattern(tokens: list[str], tags: list[str]) -> dict | None:
 # ── Strategy 3: do-support ───────────────────────────────────────────────────
 
 
-def _find_do_support_pattern(
-    tokens: list[str], tags: list[str], lowers: list[str]
-) -> dict | None:
+def _find_do_support_pattern(tokens: list[str], tags: list[str], lowers: list[str]) -> dict | None:
     """Match 'doesn't/hasn't X, ... [it] Ys' but only when the affirmative clause
     shares the same subject and opens with a verb."""
 
@@ -286,9 +280,7 @@ def _find_do_support_pattern(
 
     # A conjunction between the boundary and the verb signals an independent clause
     # ("do not like rain, but I brought …"), not a bare complement.
-    if any(
-        tokens[j].lower() in _CONJUNCTIONS for j in range(boundary + 1, aff_verb_idx)
-    ):
+    if any(tokens[j].lower() in _CONJUNCTIONS for j in range(boundary + 1, aff_verb_idx)):
         return None
 
     # Subject-continuity check
@@ -297,19 +289,14 @@ def _find_do_support_pattern(
     # 1. Explicit subject right before the verb
     if aff_verb_idx > boundary + 1:
         pre_verb = tokens[aff_verb_idx - 1]
-        if pre_verb in _SAME_SUBJECT_PRONOUNS or (
-            neg_subject is not None and pre_verb.lower() == neg_subject.lower()
-        ):
+        if pre_verb in _SAME_SUBJECT_PRONOUNS or (neg_subject is not None and pre_verb.lower() == neg_subject.lower()):
             same_subject = True
 
     # 2. Elided subject (verb immediately after boundary, or boundary + conjunction)
     if not same_subject:
         if aff_verb_idx == boundary + 1:
             same_subject = True
-        elif (
-            aff_verb_idx == boundary + 2
-            and tokens[boundary + 1].lower() in _CONJUNCTIONS
-        ):
+        elif aff_verb_idx == boundary + 2 and tokens[boundary + 1].lower() in _CONJUNCTIONS:
             same_subject = True
 
     if not same_subject:
@@ -320,11 +307,7 @@ def _find_do_support_pattern(
 
     # For "has/have/had + participle", skip the auxiliary so y spans the complement only.
     y_start = aff_verb_idx + 1
-    if (
-        lowers[aff_verb_idx] in _HAVE_VERBS
-        and y_start < len(tags)
-        and tags[y_start] == "VERB"
-    ):
+    if lowers[aff_verb_idx] in _HAVE_VERBS and y_start < len(tags) and tags[y_start] == "VERB":
         y_start += 1
 
     y_tokens = tokens[y_start:]
@@ -350,9 +333,7 @@ def _find_do_support_pattern(
 # ── Strategy 1: "not … but …" ────────────────────────────────────────────────
 
 
-def _find_not_but_pattern(
-    lowers: list[str], words: list[str], tags: list[str]
-) -> dict | None:
+def _find_not_but_pattern(lowers: list[str], words: list[str], tags: list[str]) -> dict | None:
     not_idx = but_idx = None
     for i, w in enumerate(lowers):
         if w == "not" and not_idx is None:

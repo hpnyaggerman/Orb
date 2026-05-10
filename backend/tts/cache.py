@@ -19,9 +19,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .base import TTSAdapter
 
-TTS_CACHE_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(__file__)), "data", "tts_cache"
-)
+TTS_CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "tts_cache")
 
 
 def cache_media_type(profile: dict) -> tuple[str, str]:

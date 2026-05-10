@@ -36,9 +36,7 @@ def _flagged_sentence(text: str, phrase: str):
 
 def _make_report(issue_count: int) -> AuditReport:
     """Return an AuditReport with *issue_count* cliché hits."""
-    flagged = [
-        _flagged_sentence(f"Sentence {i}.", f"cliche-{i}") for i in range(issue_count)
-    ]
+    flagged = [_flagged_sentence(f"Sentence {i}.", f"cliche-{i}") for i in range(issue_count)]
     return AuditReport(
         cliche_result=DetectionResult(
             flagged_sentences=flagged,
@@ -117,8 +115,7 @@ async def test_editor_iteration_exception_propagates():
             return _make_report(2), "audit text"
         # Any further calls mean the loop kept running after the LLM failure
         pytest.fail(
-            f"_run_contextual_audit called {audit_call_count} times; "
-            "iteration should have aborted after LLM failure"
+            f"_run_contextual_audit called {audit_call_count} times; " "iteration should have aborted after LLM failure"
         )
 
     with patch(

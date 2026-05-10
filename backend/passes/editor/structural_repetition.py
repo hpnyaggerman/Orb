@@ -96,11 +96,7 @@ def _find_emphasis_spans(text: str) -> list[tuple[int, int]]:
             line_start = text.rfind("\n", 0, m.start()) + 1
             prefix = text[line_start : m.start()]
             after_star = m.start() + 1
-            if (
-                prefix.strip() == ""
-                and after_star < len(text)
-                and text[after_star] in " \t"
-            ):
+            if prefix.strip() == "" and after_star < len(text) and text[after_star] in " \t":
                 continue
         spans.append((m.start(), m.end()))
     return spans
@@ -113,16 +109,12 @@ def _extract_blocks(para: str) -> list[tuple[str, str]]:
     emphasis_spans = []
     prev_end = 0
     for qs, qe in sorted(quote_spans):
-        emphasis_spans.extend(
-            (s, e) for s, e in _find_emphasis_spans(para[prev_end:qs])
-        )
+        emphasis_spans.extend((s, e) for s, e in _find_emphasis_spans(para[prev_end:qs]))
         prev_end = qe
     emphasis_spans.extend((s, e) for s, e in _find_emphasis_spans(para[prev_end:]))
 
     # Merge and tag
-    typed = [(s, e, "SPEECH") for s, e in quote_spans] + [
-        (s, e, "EMPHASIS") for s, e in emphasis_spans
-    ]
+    typed = [(s, e, "SPEECH") for s, e in quote_spans] + [(s, e, "EMPHASIS") for s, e in emphasis_spans]
     typed.sort()
 
     blocks: list[tuple[str, str]] = []

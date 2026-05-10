@@ -91,9 +91,7 @@ def build_prefix(
         user_label = macros.user if macros else "User"
         parts.append(f"\n\n## User: {user_label}\n{resolved['user_desc']}")
 
-    processed_messages = [
-        format_message_with_attachments(m, macros) for m in (messages or [])
-    ]
+    processed_messages = [format_message_with_attachments(m, macros) for m in (messages or [])]
 
     return [{"role": "system", "content": "".join(parts)}] + processed_messages
 
@@ -125,26 +123,16 @@ def build_director_tool_prompt(
     ]
     if tool_name == "direct_scene":
         moods = ", ".join(active_moods) or "none"
-        frags = "\n".join(
-            f"* [{f['id']}] - use in case: {f['description']}" for f in mood_fragments
-        )
-        parts.append(
-            f"Previously active moods: {moods}\n\nAvailable writing moods:\n{frags}"
-        )
+        frags = "\n".join(f"* [{f['id']}] - use in case: {f['description']}" for f in mood_fragments)
+        parts.append(f"Previously active moods: {moods}\n\nAvailable writing moods:\n{frags}")
         progressive_lines = [
             f"* [{df['id']}] ({df['description']}): {(progressive_state or {}).get(df['id'])}"
             for df in (director_fragments or [])
-            if df.get("field_type") == "progressive"
-            and (progressive_state or {}).get(df["id"])
+            if df.get("field_type") == "progressive" and (progressive_state or {}).get(df["id"])
         ]
         if progressive_lines:
-            parts.append(
-                "Previous progressive fields - dynamically update these:\n"
-                + "\n".join(progressive_lines)
-            )
-        parts.append(
-            f'User\'s next message (for context, take this into account when directing):\n"""{user_message}"""'
-        )
+            parts.append("Previous progressive fields - dynamically update these:\n" + "\n".join(progressive_lines))
+        parts.append(f'User\'s next message (for context, take this into account when directing):\n"""{user_message}"""')
     elif tool_name == "rewrite_user_prompt":
         parts.append(f'User\'s message:\n"""[{user_message}]"""')
     return "\n\n".join(parts)
@@ -209,11 +197,7 @@ def compute_style_injection_block(
         inj_extra = {}
 
     deactivated = (
-        [
-            f
-            for f in mood_fragments
-            if f["id"] in (set(prior_moods) - set(inj_active_moods))
-        ]
+        [f for f in mood_fragments if f["id"] in (set(prior_moods) - set(inj_active_moods))]
         if direct_scene_enabled and inj_active_moods
         else []
     )
@@ -222,9 +206,7 @@ def compute_style_injection_block(
     if not (active or deactivated or inj_extra):
         return ""
 
-    return build_style_injection(
-        active, deactivated, director_fragments, inj_extra, prior_progressive_state
-    )
+    return build_style_injection(active, deactivated, director_fragments, inj_extra, prior_progressive_state)
 
 
 def build_style_injection(
@@ -250,9 +232,7 @@ def build_style_injection(
             parts.append(label + ":\n" + "\n".join(f"- {item}" for item in val))
         elif df["field_type"] == "progressive":
             old_val = (prior_progressive_state or {}).get(df["id"])
-            transition = (
-                f"{old_val} -> {val}" if old_val and old_val != val else str(val)
-            )
+            transition = f"{old_val} -> {val}" if old_val and old_val != val else str(val)
             parts.append(f"{label} ({df['description']}): {transition}")
         else:
             parts.append(f"{label}: {val}")
@@ -282,11 +262,7 @@ def compute_lorebook_injection_block(
     if not entries:
         return ""
 
-    scan_parts = [
-        m.get("content") or ""
-        for m in messages[-LOREBOOK_SCAN_DEPTH:]
-        if m.get("content")
-    ]
+    scan_parts = [m.get("content") or "" for m in messages[-LOREBOOK_SCAN_DEPTH:] if m.get("content")]
 
     if not scan_parts:
         return ""

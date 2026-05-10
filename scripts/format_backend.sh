@@ -15,4 +15,4 @@ echo "Installing dev dependencies..."
 pip install -q -r requirements-dev.txt
 
 echo ""
-python -m black backend/ tests/ "$@"
+python -m black --line-length 128 backend/ tests/ "$@"

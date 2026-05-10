@@ -16,9 +16,7 @@ from pathlib import Path
 
 _MIGRATION_RE = re.compile(r"^\d{4}_")
 
-MIGRATIONS: list[str] = sorted(
-    p.stem for p in Path(__file__).parent.glob("*.py") if _MIGRATION_RE.match(p.name)
-)
+MIGRATIONS: list[str] = sorted(p.stem for p in Path(__file__).parent.glob("*.py") if _MIGRATION_RE.match(p.name))
 
 
 def run_pending(db_path: str | Path) -> None:

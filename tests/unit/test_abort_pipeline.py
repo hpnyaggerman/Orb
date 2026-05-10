@@ -50,15 +50,9 @@ class TestAbortPropagation:
         with patch("backend.orchestrator._director_pass", new=mock_director), patch(
             "backend.orchestrator._writer_pass", new=mock_writer
         ):
-            await _drain(
-                _run_pipeline(
-                    client, settings, _DIRECTOR_STATE, [], [], _PREFIX, "hello"
-                )
-            )
+            await _drain(_run_pipeline(client, settings, _DIRECTOR_STATE, [], [], _PREFIX, "hello"))
 
-        assert (
-            writer_calls[0] == 0
-        ), "writer pass must not fire after director-phase abort"
+        assert writer_calls[0] == 0, "writer pass must not fire after director-phase abort"
 
     async def test_abort_after_writer_skips_editor_pass(self):
         """Editor pass must not be called when abort is signalled during the writer pass."""
@@ -98,6 +92,4 @@ class TestAbortPropagation:
                 )
             )
 
-        assert (
-            editor_calls[0] == 0
-        ), "editor pass must not fire after writer-phase abort"
+        assert editor_calls[0] == 0, "editor pass must not fire after writer-phase abort"

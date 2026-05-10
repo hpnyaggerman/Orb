@@ -55,9 +55,7 @@ class ConversationSummarizer:
             instructions += f"\n{custom_instructions}"
         return prefix + [{"role": "user", "content": instructions}]
 
-    async def stream(
-        self, llm_messages: list[dict], model: str
-    ) -> AsyncGenerator[str, None]:
+    async def stream(self, llm_messages: list[dict], model: str) -> AsyncGenerator[str, None]:
         params = {k: v for k in _LLM_PARAMS if (v := self.settings.get(k)) is not None}
         async for chunk in self.client.complete(llm_messages, model, **params):
             if chunk["type"] == "content":

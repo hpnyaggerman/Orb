@@ -133,9 +133,7 @@ class KokoroTTSAdapter(TTSAdapter):
 
         if language:
             lang_prefix = language.split("-")[0].lower()
-            voices = [
-                v for v in voices if v.get("language", "").startswith(lang_prefix)
-            ]
+            voices = [v for v in voices if v.get("language", "").startswith(lang_prefix)]
 
         return voices
 

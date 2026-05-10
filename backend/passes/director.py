@@ -44,11 +44,7 @@ def apply_tool_calls(
         args = tc.get("arguments", {})
         if tc["name"] == "direct_scene":
             moods = args.get("moods", [])
-            extra_fields = {
-                k: v
-                for k, v in args.items()
-                if k != "moods" and v not in (None, "", [])
-            }
+            extra_fields = {k: v for k, v in args.items() if k != "moods" and v not in (None, "", [])}
         elif tc["name"] == "rewrite_user_prompt":
             refined = args.get("refined_message") or None
 
@@ -89,19 +85,13 @@ async def _director_pass(
     all_calls: list[dict] = []
     last_raw = ""
 
-    tool_names = [
-        n
-        for n, on in enabled_tools.items()
-        if on and n in TOOLS and n not in POST_WRITER_TOOLS
-    ]
+    tool_names = [n for n, on in enabled_tools.items() if on and n in TOOLS and n not in POST_WRITER_TOOLS]
 
     # Enforce priority order: rewrite_user_prompt first so users can abort
     # early if they dislike the rewrite before the full director runs.
     if len(tool_names) > 1:
         priority = ["rewrite_user_prompt", "direct_scene"]
-        tool_names.sort(
-            key=lambda x: priority.index(x) if x in priority else len(priority)
-        )
+        tool_names.sort(key=lambda x: priority.index(x) if x in priority else len(priority))
 
     if not tool_names:
         yield {
@@ -112,30 +102,19 @@ async def _director_pass(
 
     # Build base schemas, replacing the static direct_scene with the dynamic one.
     base_schemas = enabled_schemas(enabled_tools)
-    dynamic_direct_scene = build_direct_scene_tool(
-        director_fragments, progressive_state
-    )
-    tool_schemas = [
-        dynamic_direct_scene if s["function"]["name"] == "direct_scene" else s
-        for s in base_schemas
-    ]
+    dynamic_direct_scene = build_direct_scene_tool(director_fragments, progressive_state)
+    tool_schemas = [dynamic_direct_scene if s["function"]["name"] == "direct_scene" else s for s in base_schemas]
 
     logger.info(
         "Director pass: tools included=%s",
-        (
-            json.dumps([s["function"]["name"] for s in tool_schemas])
-            if tool_schemas
-            else "[]"
-        ),
+        (json.dumps([s["function"]["name"] for s in tool_schemas]) if tool_schemas else "[]"),
     )
 
     t0 = time.monotonic()
     for name in tool_names:
         if client.is_aborted:
             break
-        tool_schema = next(
-            (s for s in tool_schemas if s["function"]["name"] == name), None
-        )
+        tool_schema = next((s for s in tool_schemas if s["function"]["name"] == name), None)
         tool_tail = build_director_tool_prompt(
             name,
             user_message,
@@ -146,9 +125,7 @@ async def _director_pass(
             progressive_state=progressive_state,
             tool_schema=tool_schema,
         )
-        tail = (
-            "___\n\n" + lorebook_block + "\n\n" if lorebook_block else ""
-        ) + tool_tail
+        tail = ("___\n\n" + lorebook_block + "\n\n" if lorebook_block else "") + tool_tail
         content = build_multimodal_content(tail, attachments)
         msgs = prefix + [{"role": "user", "content": content}]
         logger.info(
@@ -165,12 +142,8 @@ async def _director_pass(
             )
         resp: dict = {}
         try:
-            reasoning_params = reasoning_cfg(
-                reasoning_on and name != "rewrite_user_prompt"
-            )
-            hyperparams = extract_hyperparams(
-                settings, defaults={"temperature": 0.25, "max_tokens": 8192}
-            )
+            reasoning_params = reasoning_cfg(reasoning_on and name != "rewrite_user_prompt")
+            hyperparams = extract_hyperparams(settings, defaults={"temperature": 0.25, "max_tokens": 8192})
             async for event in client.complete(
                 messages=msgs,
                 model=model or settings["model_name"],
@@ -187,9 +160,7 @@ async def _director_pass(
             logger.info("Agent tool=%s output:\n%s", name, last_raw)
             if parsed := parse_tool_calls(resp):
                 all_calls.extend(parsed)
-                active_moods, new_refined, new_extra = apply_tool_calls(
-                    parsed, active_moods
-                )
+                active_moods, new_refined, new_extra = apply_tool_calls(parsed, active_moods)
                 if new_refined:
                     refined_msg = new_refined
                 if new_extra:

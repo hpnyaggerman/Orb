@@ -48,7 +48,7 @@ jobs:
 
       - name: Black format check
         if: needs.detect-changes.outputs.backend == 'true'
-        run: python -m black --check backend/ tests/
+        run: python -m black --line-length 128 --check backend/ tests/
 
       - name: Flake8 lint
         if: needs.detect-changes.outputs.backend == 'true'

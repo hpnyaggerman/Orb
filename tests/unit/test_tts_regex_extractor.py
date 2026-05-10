@@ -147,9 +147,7 @@ class TestBackendAwareness:
 
     def test_elevenlabs_with_tags(self):
         text = '*she laughs* "Funny."'
-        chunks = regex_extract(
-            text, backend_type="elevenlabs", supports_emotion_tags=True
-        )
+        chunks = regex_extract(text, backend_type="elevenlabs", supports_emotion_tags=True)
         assert "[laugh]" in chunks[0].text
 
 
@@ -534,10 +532,6 @@ class TestBackendTypeParameter:
 
     def test_backend_type_does_not_affect_output(self):
         text = '*she laughs* "Hello."'
-        edge_chunks = regex_extract(
-            text, backend_type="edge", supports_emotion_tags=False
-        )
-        kokoro_chunks = regex_extract(
-            text, backend_type="kokoro", supports_emotion_tags=False
-        )
+        edge_chunks = regex_extract(text, backend_type="edge", supports_emotion_tags=False)
+        kokoro_chunks = regex_extract(text, backend_type="kokoro", supports_emotion_tags=False)
         assert edge_chunks == kokoro_chunks

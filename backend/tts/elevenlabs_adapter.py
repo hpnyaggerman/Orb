@@ -72,9 +72,7 @@ class ElevenLabsAdapter(TTSAdapter):
             content_type="audio/mpeg",
         )
 
-    async def list_voices(
-        self, language: str = "", api_key: str | None = None, **kwargs
-    ) -> list[dict]:
+    async def list_voices(self, language: str = "", api_key: str | None = None, **kwargs) -> list[dict]:
         if not api_key:
             return []
 

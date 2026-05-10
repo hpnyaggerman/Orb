@@ -37,9 +37,7 @@ def _split_target_sentences(target_text: str) -> set[str]:
     return set(_split_sentences(target_text))
 
 
-def _filter_flagged_items(
-    items, sentences: set[str], total: int, *, cls, label_field: str
-):
+def _filter_flagged_items(items, sentences: set[str], total: int, *, cls, label_field: str):
     """Shared helper: filter a list of FlaggedOpener or FlaggedTemplate to
     only include sentences present in *sentences*.
 
@@ -49,11 +47,7 @@ def _filter_flagged_items(
     for item in items:
         kept = [s for s in item.sentences if s in sentences]
         if kept:
-            extra = {
-                k: v
-                for k, v in vars(item).items()
-                if k not in (label_field, "count", "fraction", "sentences")
-            }
+            extra = {k: v for k, v in vars(item).items() if k not in (label_field, "count", "fraction", "sentences")}
             filtered.append(
                 cls(
                     **{label_field: getattr(item, label_field)},
@@ -78,11 +72,7 @@ def filter_audit_report_to_text(report: AuditReport, target_text: str) -> AuditR
     # also splits after quote chars, so sentences may not match as set members.
     # Use substring containment instead, which is guaranteed correct since the
     # detector can only flag sentences it found within the text.
-    filtered_fs = [
-        fs
-        for fs in report.cliche_result.flagged_sentences
-        if fs.sentence in target_text
-    ]
+    filtered_fs = [fs for fs in report.cliche_result.flagged_sentences if fs.sentence in target_text]
     filtered_cliche = DetectionResult(
         flagged_sentences=filtered_fs,
         unique_cliches=report.cliche_result.unique_cliches,
@@ -123,9 +113,7 @@ def filter_audit_report_to_text(report: AuditReport, target_text: str) -> AuditR
 
     # Not-but results — same mismatch issue as clichés (contrastive_negation also
     # splits only on [.!?]), so use substring containment here too.
-    filtered_not_but = [
-        nb for nb in report.not_but_result if nb.get("sentence", "") in target_text
-    ]
+    filtered_not_but = [nb for nb in report.not_but_result if nb.get("sentence", "") in target_text]
 
     # Structural repetition is a cross-message check, so it's always relevant
     # when comparing the draft to previous messages. We keep it unfiltered.
@@ -245,16 +233,12 @@ def apply_patches(draft: str, patches: list[dict]) -> tuple[str, list[str]]:
             errors.append(f"Error: {search[:80]!r} not found in draft.")
 
         elif count > 1:
-            errors.append(
-                f"Error: Multiple matches ({count}) for {search[:80]!r}. Use more context."
-            )
+            errors.append(f"Error: Multiple matches ({count}) for {search[:80]!r}. Use more context.")
         else:
             draft = draft.replace(search, replace, 1)
             logger.debug("Patch %d OK: %r → %r", i, search[:60], replace[:60])
 
-    logger.debug(
-        "Patch application done: %d errors out of %d patches", len(errors), len(patches)
-    )
+    logger.debug("Patch application done: %d errors out of %d patches", len(errors), len(patches))
     return draft, errors
 
 
@@ -328,14 +312,9 @@ async def editor_pass(
             len(assistant_messages),
             len(phrase_bank),
         )
-        report, report_text = _run_contextual_audit(
-            draft, phrase_bank, assistant_messages
-        )
+        report, report_text = _run_contextual_audit(draft, phrase_bank, assistant_messages)
         structural_issues = (
-            1
-            if report.structural_repetition_result
-            and report.structural_repetition_result.is_repetitive
-            else 0
+            1 if report.structural_repetition_result and report.structural_repetition_result.is_repetitive else 0
         )
         logger.info(
             "Editor: initial audit — %d issues (cliches=%d, openers=%d, templates=%d, structural=%d)",
@@ -345,9 +324,7 @@ async def editor_pass(
             len(report.template_result.flagged_templates),
             structural_issues,
         )
-        debug_parts.append(
-            f"Initial audit ({report.total_issues} issues):\n{report_text}"
-        )
+        debug_parts.append(f"Initial audit ({report.total_issues} issues):\n{report_text}")
     else:
         report = AuditReport.clean()
         report_text = ""
@@ -380,9 +357,7 @@ async def editor_pass(
                 word_count,
                 max_words,
             )
-            debug_parts.append(
-                f"Length guard triggered: {word_count} words (max {max_words})"
-            )
+            debug_parts.append(f"Length guard triggered: {word_count} words (max {max_words})")
 
     if report.total_issues <= 1 and not length_guard_triggered:
         logger.info(
@@ -412,9 +387,7 @@ async def editor_pass(
     msgs = prefix + [
         {
             "role": "user",
-            "content": (
-                writer_user_msg if writer_user_msg is not None else effective_msg
-            ),
+            "content": (writer_user_msg if writer_user_msg is not None else effective_msg),
         },
         {"role": "assistant", "content": draft},
         {"role": "user", "content": final_prompt},
@@ -427,9 +400,7 @@ async def editor_pass(
     # ── ReAct loop
     for iteration in range(MAX_EDITOR_ITERATIONS):
         if client.is_aborted:
-            logger.info(
-                "Editor: abort signal detected at iteration %d, stopping", iteration + 1
-            )
+            logger.info("Editor: abort signal detected at iteration %d, stopping", iteration + 1)
             break
         logger.debug(
             "Editor iteration %d/%d, %d issues remaining",
@@ -438,9 +409,7 @@ async def editor_pass(
             report.total_issues,
         )
         if kv_tracker is not None and iteration == 0:
-            kv_tracker.record(
-                "editor", msgs, editor_tools, model=model or settings["model_name"]
-            )
+            kv_tracker.record("editor", msgs, editor_tools, model=model or settings["model_name"])
         try:
             reasoning_params = reasoning_cfg(reasoning_on)
             if not reasoning_params["reasoning"].get("enabled", True):
@@ -455,16 +424,12 @@ async def editor_pass(
 
             resp: dict = {}
             try:
-                hyperparams = extract_hyperparams(
-                    settings, defaults={"temperature": 0.25, "max_tokens": 8192}
-                )
+                hyperparams = extract_hyperparams(settings, defaults={"temperature": 0.25, "max_tokens": 8192})
                 async for event in client.complete(
                     messages=msgs,
                     model=model or settings["model_name"],
                     tools=editor_tools,
-                    tool_choice=_pick_tool_choice(
-                        length_guard_triggered, report, audit_enabled
-                    ),
+                    tool_choice=_pick_tool_choice(length_guard_triggered, report, audit_enabled),
                     **hyperparams,
                     **reasoning_params,
                 ):
@@ -504,17 +469,11 @@ async def editor_pass(
             all_calls.extend(parsed)
 
             # ── Handle editor_rewrite
-            rewrite_call = next(
-                (tc for tc in parsed if tc["name"] == "editor_rewrite"), None
-            )
+            rewrite_call = next((tc for tc in parsed if tc["name"] == "editor_rewrite"), None)
             if rewrite_call:
-                rewritten = (
-                    rewrite_call.get("arguments", {}).get("rewritten_text", "").strip()
-                )
+                rewritten = rewrite_call.get("arguments", {}).get("rewritten_text", "").strip()
                 if not rewritten:
-                    logger.info(
-                        "Editor iteration %d: empty rewrite, stopping", iteration + 1
-                    )
+                    logger.info("Editor iteration %d: empty rewrite, stopping", iteration + 1)
                     break
                 pre_len = len(current_draft)
                 current_draft = rewritten
@@ -525,17 +484,11 @@ async def editor_pass(
                     pre_len,
                     len(current_draft),
                 )
-                debug_parts.append(
-                    f"Iteration {iteration + 1}: rewrite applied ({pre_len}→{len(current_draft)} chars)"
-                )
+                debug_parts.append(f"Iteration {iteration + 1}: rewrite applied ({pre_len}→{len(current_draft)} chars)")
 
                 if audit_enabled:
-                    report, report_text = _run_contextual_audit(
-                        current_draft, phrase_bank, assistant_messages
-                    )
-                    debug_parts.append(
-                        f"Post-rewrite audit ({report.total_issues} issues):\n{report_text}"
-                    )
+                    report, report_text = _run_contextual_audit(current_draft, phrase_bank, assistant_messages)
+                    debug_parts.append(f"Post-rewrite audit ({report.total_issues} issues):\n{report_text}")
                 else:
                     report = AuditReport.clean()
                     report_text = ""
@@ -583,9 +536,7 @@ async def editor_pass(
                 continue
 
             # ── Handle editor_apply_patch
-            patch_call = next(
-                (tc for tc in parsed if tc["name"] == "editor_apply_patch"), None
-            )
+            patch_call = next((tc for tc in parsed if tc["name"] == "editor_apply_patch"), None)
             if not patch_call:
                 logger.info(
                     "Editor iteration %d: unrecognised tool call, stopping",
@@ -595,9 +546,7 @@ async def editor_pass(
 
             patches = patch_call.get("arguments", {}).get("patches", [])
             if not patches:
-                logger.info(
-                    "Editor iteration %d: empty patches, stopping", iteration + 1
-                )
+                logger.info("Editor iteration %d: empty patches, stopping", iteration + 1)
                 break
 
             pre_len = len(current_draft)
@@ -612,24 +561,18 @@ async def editor_pass(
             for e in errors:
                 logger.warning("Editor iteration %d patch error: %s", iteration + 1, e)
 
-            report, report_text = _run_contextual_audit(
-                current_draft, phrase_bank, assistant_messages
-            )
+            report, report_text = _run_contextual_audit(current_draft, phrase_bank, assistant_messages)
             logger.info(
                 "Editor iteration %d: post-audit — %d issues",
                 iteration + 1,
                 report.total_issues,
             )
-            debug_parts.append(
-                f"Post-iteration {iteration + 1} audit ({report.total_issues} issues):\n{report_text}"
-            )
+            debug_parts.append(f"Post-iteration {iteration + 1} audit ({report.total_issues} issues):\n{report_text}")
 
             if report.total_issues <= 1:
                 if not length_guard_triggered:
                     break
-                logger.info(
-                    "Editor: audit within threshold, length guard still pending — queuing rewrite"
-                )
+                logger.info("Editor: audit within threshold, length guard still pending — queuing rewrite")
                 editor_tools = [EDITOR_REWRITE_TOOL]
 
             if report.total_issues >= prev_issues:
@@ -646,9 +589,7 @@ async def editor_pass(
             # reasoning_on=False: replace the draft + prompt in-place (same as
             # the rewrite path) so the message list stays flat.
             if reasoning_on:
-                _append_iteration_context(
-                    msgs, resp, patches, errors, report_text, reasoning_on=True
-                )
+                _append_iteration_context(msgs, resp, patches, errors, report_text, reasoning_on=True)
             else:
                 msgs[-2] = {"role": "assistant", "content": current_draft}
                 msgs[-1] = {
@@ -664,9 +605,7 @@ async def editor_pass(
                 }
 
         except Exception as e:
-            logger.error(
-                "Editor iteration %d failed: %s", iteration + 1, e, exc_info=True
-            )
+            logger.error("Editor iteration %d failed: %s", iteration + 1, e, exc_info=True)
             debug_parts.append(f"Iteration {iteration + 1} error: {e}")
             raise
     else:
@@ -696,15 +635,10 @@ async def editor_pass(
 
 
 def _structural_rewrite_needed(report: AuditReport) -> bool:
-    return (
-        report.structural_repetition_result is not None
-        and report.structural_repetition_result.is_repetitive
-    )
+    return report.structural_repetition_result is not None and report.structural_repetition_result.is_repetitive
 
 
-def _pick_tool_choice(
-    length_guard_triggered: bool, report: AuditReport, audit_enabled: bool
-):
+def _pick_tool_choice(length_guard_triggered: bool, report: AuditReport, audit_enabled: bool):
     """Determine the tool_choice parameter for the editor LLM call."""
     if length_guard_triggered or _structural_rewrite_needed(report):
         return {"type": "function", "function": {"name": "editor_rewrite"}}
@@ -752,11 +686,7 @@ def _append_iteration_context(
         reasoning = resp.get("content", "") or ""
         reasoning_content = resp.get("reasoning_content", "") or ""
         patch_summary = (
-            "; ".join(
-                f"replaced \"{p.get('search', '')[:40]}…\""
-                for p in patches
-                if p.get("search") != p.get("replace")
-            )
+            "; ".join(f"replaced \"{p.get('search', '')[:40]}…\"" for p in patches if p.get("search") != p.get("replace"))
             or "no effective changes"
         )
         if reasoning or reasoning_content:

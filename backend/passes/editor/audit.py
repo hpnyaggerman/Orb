@@ -53,10 +53,7 @@ class AuditReport:
 
     @property
     def is_clean(self) -> bool:
-        is_structural_clean = (
-            self.structural_repetition_result is None
-            or not self.structural_repetition_result.is_repetitive
-        )
+        is_structural_clean = self.structural_repetition_result is None or not self.structural_repetition_result.is_repetitive
         return (
             self.cliche_result.flagged_count == 0
             and len(self.monotony_result.flagged_openers) == 0
@@ -67,12 +64,7 @@ class AuditReport:
 
     @property
     def total_issues(self) -> int:
-        structural_issues = (
-            1
-            if self.structural_repetition_result
-            and self.structural_repetition_result.is_repetitive
-            else 0
-        )
+        structural_issues = 1 if self.structural_repetition_result and self.structural_repetition_result.is_repetitive else 0
         return (
             self.cliche_result.flagged_count
             + len(self.monotony_result.flagged_openers)
@@ -123,12 +115,8 @@ def run_audit(
 
     return AuditReport(
         cliche_result=detect_cliches(text, phrase_bank, cliche_threshold),
-        monotony_result=detect_opening_monotony(
-            text, opener_n_words, opener_min_consecutive
-        ),
-        template_result=detect_template_repetition(
-            text, max_words=template_max_tags, flag_threshold=template_flag_threshold
-        ),
+        monotony_result=detect_opening_monotony(text, opener_n_words, opener_min_consecutive),
+        template_result=detect_template_repetition(text, max_words=template_max_tags, flag_threshold=template_flag_threshold),
         not_but_result=detect_contrastive_negation(text),
         structural_repetition_result=structural_result,
     )
@@ -183,15 +171,10 @@ def format_report(report: AuditReport) -> str:
         sections.append("\n".join(lines))
 
     # 5. Structural repetition
-    if (
-        report.structural_repetition_result
-        and report.structural_repetition_result.is_repetitive
-    ):
+    if report.structural_repetition_result and report.structural_repetition_result.is_repetitive:
         sr = report.structural_repetition_result
         lines = ["Structural Repetition"]
-        lines.append(
-            f"   - All {len(sr.messages)} messages share a similar block structure"
-        )
+        lines.append(f"   - All {len(sr.messages)} messages share a similar block structure")
         if sr.shared_skeleton:
             skeleton_str = " → ".join(sr.shared_skeleton)
             lines.append(f'   - Shared skeleton: "{skeleton_str}"')

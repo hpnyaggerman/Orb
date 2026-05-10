@@ -107,9 +107,7 @@ class LLMClient:
         finish_reason: str | None = None
 
         async with httpx.AsyncClient(timeout=self.timeout) as client:
-            async with client.stream(
-                "POST", self._url(), json=body, headers=self._headers()
-            ) as resp:
+            async with client.stream("POST", self._url(), json=body, headers=self._headers()) as resp:
                 if resp.status_code >= 400:
                     # Streaming response: body isn't eagerly read, so
                     # raise_for_status() would surface only the status line.
@@ -169,9 +167,7 @@ class LLMClient:
                             delta = choice.get("delta", {})
 
                             # Reasoning delta (field name varies by server)
-                            rc = delta.get("reasoning_content") or delta.get(
-                                "reasoning"
-                            )
+                            rc = delta.get("reasoning_content") or delta.get("reasoning")
                             if rc:
                                 reasoning_parts.append(rc)
                                 yield {"type": "reasoning", "delta": rc}
@@ -278,9 +274,7 @@ def parse_tool_calls(message: dict) -> list[dict]:
     if "tool_calls" in message and message["tool_calls"]:
         for tc in message["tool_calls"]:
             fn = tc.get("function", {})
-            tool_calls.append(
-                _make_tool_call(fn.get("name", ""), fn.get("arguments", "{}"))
-            )
+            tool_calls.append(_make_tool_call(fn.get("name", ""), fn.get("arguments", "{}")))
         return tool_calls
 
     # Fallback: try to parse JSON from content
@@ -293,9 +287,7 @@ def parse_tool_calls(message: dict) -> list[dict]:
         try:
             parsed = json.loads(match.group(1).strip())
             if isinstance(parsed, dict) and "name" in parsed:
-                tool_calls.append(
-                    _make_tool_call(parsed["name"], parsed.get("arguments", {}))
-                )
+                tool_calls.append(_make_tool_call(parsed["name"], parsed.get("arguments", {})))
         except json.JSONDecodeError:
             pass
     if tool_calls:
@@ -316,17 +308,11 @@ def parse_tool_calls(message: dict) -> list[dict]:
                 try:
                     parsed = json.loads(content[start : i + 1])
                     if isinstance(parsed, dict) and "name" in parsed:
-                        tool_calls.append(
-                            _make_tool_call(parsed["name"], parsed.get("arguments", {}))
-                        )
+                        tool_calls.append(_make_tool_call(parsed["name"], parsed.get("arguments", {})))
                     elif isinstance(parsed, list):
                         for item in parsed:
                             if isinstance(item, dict) and "name" in item:
-                                tool_calls.append(
-                                    _make_tool_call(
-                                        item["name"], item.get("arguments", {})
-                                    )
-                                )
+                                tool_calls.append(_make_tool_call(item["name"], item.get("arguments", {})))
                     if tool_calls:
                         return tool_calls
                 except json.JSONDecodeError:

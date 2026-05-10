@@ -28,9 +28,7 @@ def extract_hyperparams(settings: dict, *, defaults: dict | None = None) -> dict
     return params
 
 
-def build_multimodal_content(
-    text: str, attachments: Optional[List[dict]] = None
-) -> str | list:
+def build_multimodal_content(text: str, attachments: Optional[List[dict]] = None) -> str | list:
     """Wrap *text* (and optional image attachments) into a multimodal content list.
 
     Returns a plain string when there are no attachments, or a list of content

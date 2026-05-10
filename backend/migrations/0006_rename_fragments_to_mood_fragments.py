@@ -5,17 +5,13 @@ import sqlite3
 
 def migrate(conn: sqlite3.Connection) -> None:
     # Check if the old fragments table exists.
-    cursor = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='fragments'"
-    )
+    cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='fragments'")
     if cursor.fetchone() is None:
         # No old table — nothing to migrate (already using mood_fragments).
         return
 
     # Check if mood_fragments already exists.
-    cursor = conn.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='mood_fragments'"
-    )
+    cursor = conn.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='mood_fragments'")
     mood_exists = cursor.fetchone() is not None
 
     if not mood_exists:

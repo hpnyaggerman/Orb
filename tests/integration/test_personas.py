@@ -42,9 +42,7 @@ async def test_update_persona_persists_to_db(client, db):
     assert resp.status_code == 200
     assert resp.json()["name"] == "NewName"
 
-    async with db.execute(
-        "SELECT name, description FROM user_personas WHERE id = ?", (persona_id,)
-    ) as cur:
+    async with db.execute("SELECT name, description FROM user_personas WHERE id = ?", (persona_id,)) as cur:
         row = await cur.fetchone()
     assert row["name"] == "NewName"
     assert row["description"] == "Updated."
@@ -57,9 +55,7 @@ async def test_delete_persona_removes_from_db(client, db):
     resp = await client.delete(f"/api/user-personas/{persona_id}")
     assert resp.status_code == 200
 
-    async with db.execute(
-        "SELECT id FROM user_personas WHERE id = ?", (persona_id,)
-    ) as cur:
+    async with db.execute("SELECT id FROM user_personas WHERE id = ?", (persona_id,)) as cur:
         row = await cur.fetchone()
     assert row is None
 

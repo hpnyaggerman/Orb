@@ -23,9 +23,7 @@ from dataclasses import dataclass, field
 from typing import Callable, Optional
 
 # Body keys always sent; never subject to allowlist filtering.
-ALWAYS_ALLOWED: frozenset[str] = frozenset(
-    {"model", "messages", "stream", "tools", "tool_choice"}
-)
+ALWAYS_ALLOWED: frozenset[str] = frozenset({"model", "messages", "stream", "tools", "tool_choice"})
 
 # Mutates body in place. Returns a log line to surface the action, or None.
 Transform = Callable[[dict], Optional[str]]

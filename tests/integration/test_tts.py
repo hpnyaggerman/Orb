@@ -215,9 +215,7 @@ async def test_speak_message_rejects_disabled_voice_profile(client):
     assert "not enabled" in resp.text
 
 
-async def test_speak_message_synthesizes_and_reuses_cache(
-    client, monkeypatch, tmp_path
-):
+async def test_speak_message_synthesizes_and_reuses_cache(client, monkeypatch, tmp_path):
     import backend.main as main
     import backend.tts.cache as tts_cache
 
@@ -252,9 +250,7 @@ async def test_speak_message_synthesizes_and_reuses_cache(
     assert len(adapter.calls) == 1
 
 
-async def test_voice_profile_update_clears_all_cached_audio_extensions(
-    client, monkeypatch, tmp_path
-):
+async def test_voice_profile_update_clears_all_cached_audio_extensions(client, monkeypatch, tmp_path):
     import backend.tts.cache as tts_cache
 
     char_id, cid, _msg_id = await _create_tts_conversation(client)
