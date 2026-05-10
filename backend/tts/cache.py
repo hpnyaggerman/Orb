@@ -135,9 +135,7 @@ def evict_expired(ttl_seconds: int = DEFAULT_TTL_SECONDS) -> int:
                 pass
     _prune_empty_dirs()
     if removed:
-        logger.info(
-            "TTS cache TTL eviction: removed %d files (ttl=%ds)", removed, ttl_seconds
-        )
+        logger.info("TTS cache TTL eviction: removed %d files (ttl=%ds)", removed, ttl_seconds)
     return removed
 
 

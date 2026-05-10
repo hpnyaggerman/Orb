@@ -83,9 +83,7 @@ class TestCacheStats:
 
 class TestEvictExpired:
     def test_removes_old_files(self, _isolate_cache_dir):
-        _write_file(
-            _isolate_cache_dir, "conv1", "old.wav", age_seconds=DEFAULT_TTL_SECONDS + 10
-        )
+        _write_file(_isolate_cache_dir, "conv1", "old.wav", age_seconds=DEFAULT_TTL_SECONDS + 10)
         _write_file(_isolate_cache_dir, "conv1", "new.wav", age_seconds=100)
 
         removed = evict_expired()
@@ -118,13 +116,9 @@ class TestEvictExpired:
 class TestEvictLru:
     def test_removes_oldest_until_under_budget(self, _isolate_cache_dir):
         # 3 files of 100 bytes each, budget = 150 bytes
-        _write_file(
-            _isolate_cache_dir, "conv1", "oldest.wav", b"x" * 100, age_seconds=300
-        )
+        _write_file(_isolate_cache_dir, "conv1", "oldest.wav", b"x" * 100, age_seconds=300)
         _write_file(_isolate_cache_dir, "conv1", "mid.wav", b"x" * 100, age_seconds=200)
-        _write_file(
-            _isolate_cache_dir, "conv1", "newest.wav", b"x" * 100, age_seconds=10
-        )
+        _write_file(_isolate_cache_dir, "conv1", "newest.wav", b"x" * 100, age_seconds=10)
 
         removed = evict_lru(max_bytes=150)
         assert removed == 2  # oldest + mid removed
