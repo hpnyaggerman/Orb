@@ -2,7 +2,7 @@
 Integration test fixtures.
 
 Strategy:
-- Patch backend.database.DB_PATH to a per-test temp file before any DB call.
+- Patch backend.database.connection.DB_PATH to a per-test temp file before any DB call.
 - Call init_db() directly (bypasses FastAPI lifespan, which ASGITransport does not trigger).
 - Yield an httpx.AsyncClient wired to the real ASGI app.
 - Yield a raw aiosqlite connection for direct DB assertions.
@@ -17,7 +17,7 @@ import httpx
 import pytest
 from httpx import ASGITransport
 
-import backend.database as db_module
+import backend.database.connection as db_connection
 from backend.database import init_db
 
 
@@ -28,7 +28,7 @@ async def db_path(tmp_path: Path) -> Path:
 
 @pytest.fixture
 async def client(db_path: Path, monkeypatch):
-    monkeypatch.setattr(db_module, "DB_PATH", str(db_path))
+    monkeypatch.setattr(db_connection, "DB_PATH", str(db_path))
     await init_db()
 
     from backend.main import app

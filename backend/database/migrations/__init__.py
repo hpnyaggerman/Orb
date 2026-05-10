@@ -1,7 +1,8 @@
 """
-backend/migrations/__init__.py — lightweight migration runner.
+backend/database/migrations/__init__.py — lightweight migration runner.
 
-To add a new migration, create backend/migrations/NNNN_description.py with a migrate(conn) function.
+To add a new migration, create backend/database/migrations/NNNN_description.py
+with a migrate(conn) function.
 
 Applied migrations are recorded in the `schema_migrations` table so each runs
 exactly once, even across restarts.
@@ -38,7 +39,7 @@ def run_pending(db_path: str | Path) -> None:
         for name in MIGRATIONS:
             if name in applied:
                 continue
-            mod = importlib.import_module(f"backend.migrations.{name}")
+            mod = importlib.import_module(f"backend.database.migrations.{name}")
             mod.migrate(conn)
             conn.execute("INSERT INTO schema_migrations (id) VALUES (?)", (name,))
             conn.commit()

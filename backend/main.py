@@ -16,7 +16,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
 import os
 
-from .migrations import run_pending
+from .database.migrations import run_pending
 from .database import (
     DB_PATH,
     init_db,

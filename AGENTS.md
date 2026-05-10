@@ -59,7 +59,14 @@ Orb/
 ├── backend/
 │   ├── main.py              # FastAPI app: all API routes, Pydantic models
 │   ├── orchestrator.py      # Pipeline orchestration: handle_turn, _run_pipeline
-│   ├── database.py          # All DB operations (aiosqlite), migrations, seed data
+│   ├── database/            # DB package (aiosqlite). __init__.py re-exports the
+│   │                        # full public API for backwards-compatible imports.
+│   │   ├── connection.py    # DB_PATH, get_db() async context manager, _build_set_clause
+│   │   ├── schema.py        # CREATE TABLES script
+│   │   ├── seeds.py         # SEED_* / DEFAULT_* constants
+│   │   ├── bootstrap.py     # init_db() (schema + inline ALTERs + seed inserts), reset_to_defaults()
+│   │   ├── queries/         # Per-domain CRUD modules (one file per table group)
+│   │   └── migrations/      # DB migrations scripts + run_pending() runner
 │   ├── llm_client.py        # LLM API client (OpenAI-compatible), streaming, reasoning
 │   ├── prompt_builder.py    # System prompt assembly, style injection, lorebook injection
 │   ├── tool_defs.py         # Tool schemas (direct_scene, rewrite, editor tools), constants
@@ -90,7 +97,6 @@ Orb/
 │   │   ├── fish_adapter.py      # Fish Speech API
 │   │   ├── kokoro_adapter.py    # Kokoro TTS (local)
 │   │   └── openai_speech_adapter.py # OpenAI Speech API
-│   ├── migrations/          # 16 DB migrations (0001–0016)
 │   └── data/                # Runtime: app.db (SQLite), tts_cache/
 ├── frontend/
 │   ├── index.html           # Single-page app shell
@@ -341,15 +347,9 @@ Orb sends the **full active message path** (leaf to root) every turn — no auto
 When running under Codex's filesystem/network sandbox, `aiosqlite` integration tests can hang before the first test body runs. The sandbox stalls `sqlite3.connect()` when it is executed from `aiosqlite`'s worker thread. This is a Codex execution-environment limitation, not an Orb database bug.
 
 - Unit tests that do not initialize the async DB can run normally in the sandbox.
-- Integration tests, app startup checks, and any command calling `backend.database.init_db()` should be run with Codex escalated execution (`sandbox_permissions: "require_escalated"`).
+- Integration tests, app startup checks, and any command calling `init_db()` from the `backend.database` package should be run with Codex escalated execution (`sandbox_permissions: "require_escalated"`).
 
 ## Common Development Workflows
-
-### Adding a New Director Fragment
-
-Adding Director Fragments is a **user-facing action** done from the UI (or via REST API). Default fragment values are seeded in `database.py` — updating defaults only requires a seed data change.
-
-Adding a new fragment **value type** (e.g., `progressive` fields that accumulate across turns) requires broader changes: DB schema, `tool_defs.py` tool schema, `prompt_builder.py` injection logic, and potentially `orchestrator.py` progressive field handling.
 
 ### Adding a New Pipeline Pass
 
@@ -395,19 +395,19 @@ Adding a new fragment **value type** (e.g., `progressive` fields that accumulate
 
 3. **Tool call parsing** — The Director pass parses JSON tool call arguments. Malformed JSON from the LLM can crash the pipeline. Error handling wraps these in try/except but edge cases exist.
 
-4. **SQLite + aiosqlite** — All DB operations are async via aiosqlite. No ORM — raw SQL in `database.py`. Migrations run sequentially by number prefix.
+4. **SQLite + aiosqlite** — All DB operations are async via aiosqlite. No ORM — raw SQL inside `backend/database/queries/`, one module per table group. The package's `__init__.py` re-exports every public function so callers can keep importing from `backend.database` directly. Migrations run sequentially by number prefix.
 
 5. **Endpoint profiles** — Middleware layer to handle unsupported params where the provider returns an error instead of ignoring them. Not every provider needs its own profile — only add one when a provider's API quirks require body transformation.
 
 6. **Reasoning models** — Some models emit `reasoning_content` before `content`. The streaming handler separates these. `reasoning_enabled_passes` in settings controls which pipeline passes get reasoning enabled.
 
-7. **Migrations are sequential** — New migrations must use the next number in sequence. They run at app startup via `run_pending()` in `backend/migrations/__init__.py`.
+7. **Migrations are sequential** — New migrations must use the next number in sequence. They run at app startup via `run_pending()` in `backend/database/migrations/__init__.py`. The runner imports each migration module via `importlib.import_module(f"backend.database.migrations.{name}")` — keep that path in sync if the package ever moves again.
 
-8. **Phrase bank format** — `phrase_bank.variants` is a JSON array of strings. The editor audit matches these against response text using case-insensitive regex.
+8. **Patching `DB_PATH` in tests** — The canonical `DB_PATH` lives in `backend/database/connection.py`. Tests must patch `backend.database.connection.DB_PATH` (which is what `get_db()` reads). Patching the package re-export `backend.database.DB_PATH` will *not* reach the connection module. See `tests/integration/conftest.py` for the working pattern.
 
-9. **Lorebook scan depth** — Hard-coded to 6 messages (`LOREBOOK_SCAN_DEPTH` in `prompt_builder.py`). Only the last 6 messages are scanned for lorebook keyword matches.
+9. **Phrase bank format** — `phrase_bank.variants` is a JSON array of strings. The editor audit matches these against response text using case-insensitive regex.
 
-10. **Context size is approximate** — The `/api/conversations/{cid}/context-size` endpoint computes `chars / 3.5` per component (system prompt, persona, scenario, messages, director injection, lorebook, post-history). It's a rough estimate, not an exact token count.
+10. **Lorebook scan depth** — Hard-coded to 6 messages (`LOREBOOK_SCAN_DEPTH` in `prompt_builder.py`). Only the last 6 messages are scanned for lorebook keyword matches.
 
 11. **TTS regex extractor** — Splits text into speech/non-speech chunks using quotation marks. The `regex_extractor.py` handles edge cases (nested quotes, em-dashes) but isn't perfect for all writing styles. Only speech chunks are sent to the TTS backend.
 
