@@ -2096,10 +2096,13 @@ async function playNextChunk() {
   }
 
   // Highlight current chunk
-  S.speakingChunkIdx = chunkIdx;
+  S.speakingChunkIdx = currentIdx;
   S.speakingChunkTotal = chunks.length;
   highlightChunk(msgId, chunkIdx);
 
+  // Reset time/duration for new chunk (prevents stale progress from previous)
+  S.ttsCurrentTime = 0;
+  S.ttsDuration = 0;
   S.ttsLoading = true;
   refreshTtsBar();
 
