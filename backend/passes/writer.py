@@ -83,13 +83,9 @@ async def _writer_pass(
     extra.update(reasoning_cfg(reasoning_on))
 
     if kv_tracker is not None:
-        kv_tracker.record(
-            "writer", msgs, schemas if schemas else None, model=settings["model_name"]
-        )
+        kv_tracker.record("writer", msgs, schemas if schemas else None, model=settings["model_name"])
 
-    async for item in client.complete(
-        messages=msgs, model=settings["model_name"], **extra, **hyperparams
-    ):
+    async for item in client.complete(messages=msgs, model=settings["model_name"], **extra, **hyperparams):
         if item["type"] == "done":
             return
         yield item

@@ -9,12 +9,7 @@ import sqlite3
 
 
 def migrate(conn: sqlite3.Connection) -> None:
-    tables = {
-        row[0]
-        for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).fetchall()
-    }
+    tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
     if "voice_profiles" not in tables:
         conn.execute(
             """
@@ -40,21 +35,13 @@ def migrate(conn: sqlite3.Connection) -> None:
         print("[migrations] 0015: created voice_profiles table")
 
     if "settings" in tables:
-        settings_cols = {
-            row[1] for row in conn.execute("PRAGMA table_info(settings)").fetchall()
-        }
+        settings_cols = {row[1] for row in conn.execute("PRAGMA table_info(settings)").fetchall()}
         if "tts_auto_speak" not in settings_cols:
-            conn.execute(
-                "ALTER TABLE settings ADD COLUMN tts_auto_speak INTEGER NOT NULL DEFAULT 0"
-            )
+            conn.execute("ALTER TABLE settings ADD COLUMN tts_auto_speak INTEGER NOT NULL DEFAULT 0")
         if "tts_volume" not in settings_cols:
-            conn.execute(
-                "ALTER TABLE settings ADD COLUMN tts_volume REAL NOT NULL DEFAULT 0.75"
-            )
+            conn.execute("ALTER TABLE settings ADD COLUMN tts_volume REAL NOT NULL DEFAULT 0.75")
 
-        row = conn.execute(
-            "SELECT id, reasoning_enabled_passes FROM settings WHERE id = 1"
-        ).fetchone()
+        row = conn.execute("SELECT id, reasoning_enabled_passes FROM settings WHERE id = 1").fetchone()
         if row:
             try:
                 passes = json.loads(row[1] or "{}")

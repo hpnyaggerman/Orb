@@ -11,9 +11,7 @@ from datetime import datetime, timezone
 
 def migrate(conn: sqlite3.Connection) -> None:
     # Fetch current settings
-    row = conn.execute(
-        "SELECT user_name, user_description, active_persona_id FROM settings WHERE id = 1"
-    ).fetchone()
+    row = conn.execute("SELECT user_name, user_description, active_persona_id FROM settings WHERE id = 1").fetchone()
     if row is None:
         # No settings row (should not happen)
         return
@@ -21,9 +19,7 @@ def migrate(conn: sqlite3.Connection) -> None:
 
     # If active_persona_id already set, nothing to do
     if active_persona_id is not None:
-        print(
-            f"[migrations] 0003: active_persona_id already set to {active_persona_id}"
-        )
+        print(f"[migrations] 0003: active_persona_id already set to {active_persona_id}")
         return
 
     # Check if any personas already exist (maybe from previous runs)
@@ -42,9 +38,7 @@ def migrate(conn: sqlite3.Connection) -> None:
         (user_name or "User", user_description or "", avatar_color, now, now),
     )
     new_id = cursor.lastrowid
-    print(
-        f"[migrations] 0003: created default persona id={new_id} name={user_name or 'User'}"
-    )
+    print(f"[migrations] 0003: created default persona id={new_id} name={user_name or 'User'}")
 
     # Link it as active persona
     conn.execute(

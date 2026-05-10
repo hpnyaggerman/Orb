@@ -53,10 +53,7 @@ class TestMatchedPhrase:
         result = detect_cliches(text, phrase_bank, threshold=0.4)
 
         assert result.flagged_count == 1
-        assert (
-            result.flagged_sentences[0].cliches[0].phrase
-            == "the air is thick with tension"
-        )
+        assert result.flagged_sentences[0].cliches[0].phrase == "the air is thick with tension"
 
     def test_unique_cliches_uses_matched_phrases(self):
         """unique_cliches lists the phrases that actually appeared, not group representatives."""

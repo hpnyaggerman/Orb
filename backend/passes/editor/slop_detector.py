@@ -136,9 +136,7 @@ def _deduplicate_hits(hits: list[ClicheHit]) -> list[ClicheHit]:
     for hit in hits:
         hit_toks = set(_tokenize(hit.phrase))
         dominated = any(
-            len(hit_toks & set(_tokenize(better.phrase)))
-            / len(hit_toks | set(_tokenize(better.phrase)))
-            >= 0.5
+            len(hit_toks & set(_tokenize(better.phrase))) / len(hit_toks | set(_tokenize(better.phrase))) >= 0.5
             for better in kept
         )
         if not dominated:

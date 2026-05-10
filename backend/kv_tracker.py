@@ -42,9 +42,7 @@ class _KVCacheTracker:
     def __init__(self, conversation_id: str | None = None):
         self._entries: list[dict] = []
         self._conversation_id = conversation_id
-        self._prev_entries: list[dict] = (
-            list(_prev_turn_entries.get(conversation_id, [])) if conversation_id else []
-        )
+        self._prev_entries: list[dict] = list(_prev_turn_entries.get(conversation_id, [])) if conversation_id else []
 
     def record(
         self,
@@ -61,11 +59,7 @@ class _KVCacheTracker:
                 "model": model,
                 "serialized": serialized,
                 "total_chars": len(serialized),
-                "tools_names": (
-                    [t.get("function", {}).get("name", "") for t in tools]
-                    if tools
-                    else []
-                ),
+                "tools_names": ([t.get("function", {}).get("name", "") for t in tools] if tools else []),
             }
         )
 
@@ -80,11 +74,7 @@ class _KVCacheTracker:
             e_model = e.get("model", "")
             # Look for same-model predecessor within this turn first.
             prev = next(
-                (
-                    self._entries[j]
-                    for j in range(i - 1, -1, -1)
-                    if self._entries[j].get("model", "") == e_model
-                ),
+                (self._entries[j] for j in range(i - 1, -1, -1) if self._entries[j].get("model", "") == e_model),
                 None,
             )
             cross_turn = False
@@ -112,10 +102,7 @@ class _KVCacheTracker:
 
             tail = e["total_chars"] - overlap
 
-            lines.append(
-                f"  {e['label']:<28}  total={e['total_chars']:7d}  "
-                f"tail={tail:6d}  {cache_note}"
-            )
+            lines.append(f"  {e['label']:<28}  total={e['total_chars']:7d}  " f"tail={tail:6d}  {cache_note}")
 
         lines.append(f"  Total estimated KV cache char savings: {total_saved}")
         logger.info("\n".join(lines))

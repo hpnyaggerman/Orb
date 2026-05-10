@@ -10,9 +10,7 @@ import sqlite3
 
 
 def migrate(conn: sqlite3.Connection) -> None:
-    row = conn.execute(
-        "SELECT id, enabled_tools, reasoning_enabled_passes FROM settings"
-    ).fetchone()
+    row = conn.execute("SELECT id, enabled_tools, reasoning_enabled_passes FROM settings").fetchone()
     if row is None:
         return
 
@@ -35,10 +33,7 @@ def migrate(conn: sqlite3.Connection) -> None:
         value = passes.pop("refiner")
         if "editor" not in passes:
             passes["editor"] = value
-        print(
-            f"[migrations] 0001: reasoning_enabled_passes refiner={value!r} → "
-            f"editor={passes['editor']!r}"
-        )
+        print(f"[migrations] 0001: reasoning_enabled_passes refiner={value!r} → " f"editor={passes['editor']!r}")
 
     conn.execute(
         "UPDATE settings SET enabled_tools = ?, reasoning_enabled_passes = ? WHERE id = ?",

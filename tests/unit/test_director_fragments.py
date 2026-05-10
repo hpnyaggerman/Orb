@@ -249,9 +249,7 @@ class TestBuildStyleInjection:
 
     def test_fields_omitted_when_not_in_extra_fields(self):
         frags = self._make_frags()
-        result = build_style_injection(
-            [], director_fragments=frags, extra_fields={"plot_summary": "x"}
-        )
+        result = build_style_injection([], director_fragments=frags, extra_fields={"plot_summary": "x"})
         assert "Next event:" not in result
         assert "Avoid repeating:" not in result
 
@@ -271,9 +269,7 @@ class TestBuildStyleInjection:
         assert "- castle" in result
 
     def test_active_mood_rendered(self):
-        active = [
-            {"id": "tense", "prompt_text": "Write with tension.", "negative_prompt": ""}
-        ]
+        active = [{"id": "tense", "prompt_text": "Write with tension.", "negative_prompt": ""}]
         result = build_style_injection(active, director_fragments=[], extra_fields={})
         assert "Mood [tense]: Write with tension." in result
 
@@ -285,18 +281,12 @@ class TestBuildStyleInjection:
                 "negative_prompt": "Return to normal length.",
             }
         ]
-        result = build_style_injection(
-            [], deactivated=deactivated, director_fragments=[], extra_fields={}
-        )
+        result = build_style_injection([], deactivated=deactivated, director_fragments=[], extra_fields={})
         assert "Deactivated [terse]: Return to normal length." in result
 
     def test_deactivated_mood_without_negative_prompt_skipped(self):
-        deactivated = [
-            {"id": "grounded", "prompt_text": "Be realistic.", "negative_prompt": ""}
-        ]
-        result = build_style_injection(
-            [], deactivated=deactivated, director_fragments=[], extra_fields={}
-        )
+        deactivated = [{"id": "grounded", "prompt_text": "Be realistic.", "negative_prompt": ""}]
+        result = build_style_injection([], deactivated=deactivated, director_fragments=[], extra_fields={})
         assert "Deactivated [grounded]" not in result
 
     def test_sort_order_respected(self):
@@ -357,23 +347,17 @@ class TestComputeStyleInjectionBlock:
 
     def test_suppresses_moods_when_direct_scene_disabled(self):
         frags = self._make_mood_frags()
-        result = compute_style_injection_block(
-            ["tense"], [], frags, [], False, {"plot_summary": "x"}
-        )
+        result = compute_style_injection_block(["tense"], [], frags, [], False, {"plot_summary": "x"})
         assert "Mood [tense]" not in result
 
     def test_suppresses_extra_fields_when_direct_scene_disabled(self):
         dir_frags = self._make_director_frags()
-        result = compute_style_injection_block(
-            [], [], [], dir_frags, False, {"plot_summary": "x"}
-        )
+        result = compute_style_injection_block([], [], [], dir_frags, False, {"plot_summary": "x"})
         assert result == ""
 
     def test_includes_moods_when_direct_scene_enabled(self):
         frags = self._make_mood_frags()
-        result = compute_style_injection_block(
-            ["tense"], [], frags, [], True, {"plot_summary": "x"}
-        )
+        result = compute_style_injection_block(["tense"], [], frags, [], True, {"plot_summary": "x"})
         assert "Mood [tense]" in result
 
     def test_extra_fields_rendered_dynamically(self):
@@ -393,9 +377,7 @@ class TestComputeStyleInjectionBlock:
                 "enabled": True,
             }
         ]
-        result = compute_style_injection_block(
-            [], [], [], dir_frags, True, {"keywords": ["castle", "sword"]}
-        )
+        result = compute_style_injection_block([], [], [], dir_frags, True, {"keywords": ["castle", "sword"]})
         assert "Keywords:" in result
         assert "- castle" in result
 
@@ -406,22 +388,16 @@ class TestComputeStyleInjectionBlock:
 class TestSeedDirectorFragments:
     STR_FIELDS = ("id", "label", "description", "field_type", "injection_label")
 
-    @pytest.mark.parametrize(
-        "frag", SEED_DIRECTOR_FRAGMENTS, ids=lambda f: f.get("id", "?")
-    )
+    @pytest.mark.parametrize("frag", SEED_DIRECTOR_FRAGMENTS, ids=lambda f: f.get("id", "?"))
     def test_string_fields_are_str(self, frag):
         for field in self.STR_FIELDS:
             assert isinstance(frag[field], str), f"{frag['id']!r}.{field!r} must be str"
 
-    @pytest.mark.parametrize(
-        "frag", SEED_DIRECTOR_FRAGMENTS, ids=lambda f: f.get("id", "?")
-    )
+    @pytest.mark.parametrize("frag", SEED_DIRECTOR_FRAGMENTS, ids=lambda f: f.get("id", "?"))
     def test_required_is_bool(self, frag):
         assert isinstance(frag["required"], bool)
 
-    @pytest.mark.parametrize(
-        "frag", SEED_DIRECTOR_FRAGMENTS, ids=lambda f: f.get("id", "?")
-    )
+    @pytest.mark.parametrize("frag", SEED_DIRECTOR_FRAGMENTS, ids=lambda f: f.get("id", "?"))
     def test_field_type_is_valid(self, frag):
         assert frag["field_type"] in ("string", "array")
 

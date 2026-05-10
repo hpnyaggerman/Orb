@@ -29,9 +29,7 @@ async def test_update_settings_persists_to_db(client, db):
     assert resp.json()["user_name"] == "TestUser"
 
     # Verify directly in the DB
-    async with db.execute(
-        "SELECT user_name, user_description, max_tokens FROM settings WHERE id = 1"
-    ) as cur:
+    async with db.execute("SELECT user_name, user_description, max_tokens FROM settings WHERE id = 1") as cur:
         row = await cur.fetchone()
     assert row["user_name"] == "TestUser"
     assert row["user_description"] == "A test user"
@@ -83,9 +81,7 @@ async def test_hide_streaming_until_baked_default_and_roundtrip(client, db):
     assert resp.status_code == 200
     assert resp.json()["hide_streaming_until_baked"] == 1
 
-    async with db.execute(
-        "SELECT hide_streaming_until_baked FROM settings WHERE id = 1"
-    ) as cur:
+    async with db.execute("SELECT hide_streaming_until_baked FROM settings WHERE id = 1") as cur:
         row = await cur.fetchone()
     assert row["hide_streaming_until_baked"] == 1
 

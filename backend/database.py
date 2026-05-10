@@ -36,8 +36,7 @@ SEED_MOOD_FRAGMENTS = [
             "The narration should share the character's world view, inject the character's opinion and use their vocabulary in the prose."
         ),
         "negative_prompt": (
-            "Stop foregrounding inner thoughts. Return to external action and dialogue. "
-            "Keep interiority brief and grounded."
+            "Stop foregrounding inner thoughts. Return to external action and dialogue. " "Keep interiority brief and grounded."
         ),
     },
     {
@@ -542,21 +541,13 @@ async def init_db():
         )
 
         # Migrations for existing DBs
-        existing_cols = {
-            row[1] for row in await db.execute_fetchall("PRAGMA table_info(settings)")
-        }
+        existing_cols = {row[1] for row in await db.execute_fetchall("PRAGMA table_info(settings)")}
         if "enable_agent" not in existing_cols:
-            await db.execute(
-                "ALTER TABLE settings ADD COLUMN enable_agent INTEGER NOT NULL DEFAULT 1"
-            )
+            await db.execute("ALTER TABLE settings ADD COLUMN enable_agent INTEGER NOT NULL DEFAULT 1")
         if "length_guard_max_words" not in existing_cols:
-            await db.execute(
-                "ALTER TABLE settings ADD COLUMN length_guard_max_words INTEGER NOT NULL DEFAULT 400"
-            )
+            await db.execute("ALTER TABLE settings ADD COLUMN length_guard_max_words INTEGER NOT NULL DEFAULT 400")
         if "length_guard_max_paragraphs" not in existing_cols:
-            await db.execute(
-                "ALTER TABLE settings ADD COLUMN length_guard_max_paragraphs INTEGER NOT NULL DEFAULT 5"
-            )
+            await db.execute("ALTER TABLE settings ADD COLUMN length_guard_max_paragraphs INTEGER NOT NULL DEFAULT 5")
         if "reasoning_enabled_passes" not in existing_cols:
             await db.execute(
                 'ALTER TABLE settings ADD COLUMN reasoning_enabled_passes TEXT NOT NULL DEFAULT \'{"director":true,"writer":false,"editor":false}\''
@@ -567,32 +558,20 @@ async def init_db():
                 "ALTER TABLE settings ADD COLUMN active_persona_id INTEGER REFERENCES user_personas(id) ON DELETE SET NULL"
             )
         if "character_library_view" not in existing_cols:
-            await db.execute(
-                "ALTER TABLE settings ADD COLUMN character_library_view TEXT NOT NULL DEFAULT 'grid'"
-            )
+            await db.execute("ALTER TABLE settings ADD COLUMN character_library_view TEXT NOT NULL DEFAULT 'grid'")
         if "character_library_sort" not in existing_cols:
-            await db.execute(
-                "ALTER TABLE settings ADD COLUMN character_library_sort TEXT NOT NULL DEFAULT 'time-added'"
-            )
+            await db.execute("ALTER TABLE settings ADD COLUMN character_library_sort TEXT NOT NULL DEFAULT 'time-added'")
         if "active_endpoint_id" not in existing_cols:
             await db.execute(
                 "ALTER TABLE settings ADD COLUMN active_endpoint_id INTEGER REFERENCES endpoints(id) ON DELETE SET NULL"
             )
         if "shared_system_prompt" not in existing_cols:
-            await db.execute(
-                "ALTER TABLE settings ADD COLUMN shared_system_prompt TEXT NOT NULL DEFAULT ''"
-            )
+            await db.execute("ALTER TABLE settings ADD COLUMN shared_system_prompt TEXT NOT NULL DEFAULT ''")
         if "show_editor_diff" not in existing_cols:
-            await db.execute(
-                "ALTER TABLE settings ADD COLUMN show_editor_diff INTEGER NOT NULL DEFAULT 1"
-            )
+            await db.execute("ALTER TABLE settings ADD COLUMN show_editor_diff INTEGER NOT NULL DEFAULT 1")
         if "hide_streaming_until_baked" not in existing_cols:
-            await db.execute(
-                "ALTER TABLE settings ADD COLUMN hide_streaming_until_baked INTEGER NOT NULL DEFAULT 0"
-            )
-        endpoint_cols = {
-            row[1] for row in await db.execute_fetchall("PRAGMA table_info(endpoints)")
-        }
+            await db.execute("ALTER TABLE settings ADD COLUMN hide_streaming_until_baked INTEGER NOT NULL DEFAULT 0")
+        endpoint_cols = {row[1] for row in await db.execute_fetchall("PRAGMA table_info(endpoints)")}
         if "active_model_config_id" not in endpoint_cols:
             await db.execute(
                 "ALTER TABLE endpoints ADD COLUMN active_model_config_id INTEGER REFERENCES model_configs(id) ON DELETE SET NULL"
@@ -603,14 +582,9 @@ async def init_db():
             )
 
         # Migration: add role column to model_configs
-        model_config_cols = {
-            row[1]
-            for row in await db.execute_fetchall("PRAGMA table_info(model_configs)")
-        }
+        model_config_cols = {row[1] for row in await db.execute_fetchall("PRAGMA table_info(model_configs)")}
         if "role" not in model_config_cols:
-            await db.execute(
-                "ALTER TABLE model_configs ADD COLUMN role TEXT NOT NULL DEFAULT 'writer'"
-            )
+            await db.execute("ALTER TABLE model_configs ADD COLUMN role TEXT NOT NULL DEFAULT 'writer'")
             # All existing configs just got role='writer'. Create a fresh role='agent'
             # config for every endpoint (including those that already had
             # agent_active_model_config_id set, since that column also pointed to a
@@ -658,43 +632,27 @@ async def init_db():
 
         # Migration for settings agent columns
         if "agent_same_as_writer" not in existing_cols:
-            await db.execute(
-                "ALTER TABLE settings ADD COLUMN agent_same_as_writer INTEGER NOT NULL DEFAULT 1"
-            )
+            await db.execute("ALTER TABLE settings ADD COLUMN agent_same_as_writer INTEGER NOT NULL DEFAULT 1")
         if "agent_endpoint_id" not in existing_cols:
             await db.execute(
                 "ALTER TABLE settings ADD COLUMN agent_endpoint_id INTEGER REFERENCES endpoints(id) ON DELETE SET NULL"
             )
         if "agent_shared_system_prompt" not in existing_cols:
-            await db.execute(
-                "ALTER TABLE settings ADD COLUMN agent_shared_system_prompt TEXT NOT NULL DEFAULT ''"
-            )
+            await db.execute("ALTER TABLE settings ADD COLUMN agent_shared_system_prompt TEXT NOT NULL DEFAULT ''")
         if "tts_enabled" not in existing_cols:
-            await db.execute(
-                "ALTER TABLE settings ADD COLUMN tts_enabled INTEGER NOT NULL DEFAULT 0"
-            )
+            await db.execute("ALTER TABLE settings ADD COLUMN tts_enabled INTEGER NOT NULL DEFAULT 0")
         if "tts_auto_speak" not in existing_cols:
-            await db.execute(
-                "ALTER TABLE settings ADD COLUMN tts_auto_speak INTEGER NOT NULL DEFAULT 0"
-            )
+            await db.execute("ALTER TABLE settings ADD COLUMN tts_auto_speak INTEGER NOT NULL DEFAULT 0")
         if "tts_volume" not in existing_cols:
-            await db.execute(
-                "ALTER TABLE settings ADD COLUMN tts_volume REAL NOT NULL DEFAULT 0.75"
-            )
+            await db.execute("ALTER TABLE settings ADD COLUMN tts_volume REAL NOT NULL DEFAULT 0.75")
 
         # Remove stale scripter key from reasoning_enabled_passes if present.
         # TTS settings are stored separately.
-        settings_rows = list(
-            await db.execute_fetchall(
-                "SELECT id, reasoning_enabled_passes FROM settings WHERE id = 1"
-            )
-        )
+        settings_rows = list(await db.execute_fetchall("SELECT id, reasoning_enabled_passes FROM settings WHERE id = 1"))
         if settings_rows:
             settings_row = dict(settings_rows[0])
             try:
-                passes = json.loads(
-                    settings_row.get("reasoning_enabled_passes") or "{}"
-                )
+                passes = json.loads(settings_row.get("reasoning_enabled_passes") or "{}")
             except json.JSONDecodeError:
                 passes = {}
             if "scripter" in passes:
@@ -705,62 +663,37 @@ async def init_db():
                 )
 
         # Migration for director_state keywords column
-        director_cols = {
-            row[1]
-            for row in await db.execute_fetchall("PRAGMA table_info(director_state)")
-        }
+        director_cols = {row[1] for row in await db.execute_fetchall("PRAGMA table_info(director_state)")}
         if "keywords" not in director_cols:
-            await db.execute(
-                "ALTER TABLE director_state ADD COLUMN keywords TEXT NOT NULL DEFAULT '[]'"
-            )
+            await db.execute("ALTER TABLE director_state ADD COLUMN keywords TEXT NOT NULL DEFAULT '[]'")
 
         # No migration needed for UUID character IDs: character_cards.id and
         # conversations.character_card_id are already TEXT columns that accept any
         # string. Existing slug-based IDs remain valid; only new characters get UUIDs.
 
         # Migration for mood fragments enabled column
-        fragment_cols = {
-            row[1]
-            for row in await db.execute_fetchall("PRAGMA table_info(mood_fragments)")
-        }
+        fragment_cols = {row[1] for row in await db.execute_fetchall("PRAGMA table_info(mood_fragments)")}
         if "enabled" not in fragment_cols:
-            await db.execute(
-                "ALTER TABLE mood_fragments ADD COLUMN enabled BOOLEAN NOT NULL DEFAULT 1"
-            )
+            await db.execute("ALTER TABLE mood_fragments ADD COLUMN enabled BOOLEAN NOT NULL DEFAULT 1")
 
         # Migration for character_cards world_id column
-        character_cols = {
-            row[1]
-            for row in await db.execute_fetchall("PRAGMA table_info(character_cards)")
-        }
+        character_cols = {row[1] for row in await db.execute_fetchall("PRAGMA table_info(character_cards)")}
         if "world_id" not in character_cols:
             await db.execute(
                 "ALTER TABLE character_cards ADD COLUMN world_id TEXT DEFAULT NULL REFERENCES worlds(id) ON DELETE SET NULL"
             )
 
         # Migrate voice_profiles — add columns for new backends
-        vp_cols = {
-            row[1]
-            for row in await db.execute_fetchall("PRAGMA table_info(voice_profiles)")
-        }
+        vp_cols = {row[1] for row in await db.execute_fetchall("PRAGMA table_info(voice_profiles)")}
         if "api_url" not in vp_cols:
-            await db.execute(
-                "ALTER TABLE voice_profiles ADD COLUMN api_url TEXT DEFAULT ''"
-            )
+            await db.execute("ALTER TABLE voice_profiles ADD COLUMN api_url TEXT DEFAULT ''")
         if "api_key" not in vp_cols:
-            await db.execute(
-                "ALTER TABLE voice_profiles ADD COLUMN api_key TEXT DEFAULT ''"
-            )
+            await db.execute("ALTER TABLE voice_profiles ADD COLUMN api_key TEXT DEFAULT ''")
         if "model" not in vp_cols:
-            await db.execute(
-                "ALTER TABLE voice_profiles ADD COLUMN model TEXT DEFAULT ''"
-            )
+            await db.execute("ALTER TABLE voice_profiles ADD COLUMN model TEXT DEFAULT ''")
 
         # Migration for conversation_logs message_id column
-        log_cols = {
-            row[1]
-            for row in await db.execute_fetchall("PRAGMA table_info(conversation_logs)")
-        }
+        log_cols = {row[1] for row in await db.execute_fetchall("PRAGMA table_info(conversation_logs)")}
         if "message_id" not in log_cols:
             await db.execute(
                 "ALTER TABLE conversation_logs ADD COLUMN message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL"
@@ -790,9 +723,7 @@ async def init_db():
         # Seed endpoints from existing settings if endpoints table is empty
         ep_row = list(await db.execute_fetchall("SELECT COUNT(*) as c FROM endpoints"))
         if ep_row[0]["c"] == 0:
-            s_rows = list(
-                await db.execute_fetchall("SELECT * FROM settings WHERE id = 1")
-            )
+            s_rows = list(await db.execute_fetchall("SELECT * FROM settings WHERE id = 1"))
             if s_rows:
                 s = dict(s_rows[0])
                 cur = await db.execute(
@@ -842,9 +773,7 @@ async def init_db():
                 )
 
         # Seed mood fragments if empty
-        row = list(
-            await db.execute_fetchall("SELECT COUNT(*) as c FROM mood_fragments")
-        )
+        row = list(await db.execute_fetchall("SELECT COUNT(*) as c FROM mood_fragments"))
         if row[0]["c"] == 0:
             for f in SEED_MOOD_FRAGMENTS:
                 await db.execute(
@@ -859,9 +788,7 @@ async def init_db():
                 )
 
         # Seed director_fragments if empty
-        row = list(
-            await db.execute_fetchall("SELECT COUNT(*) as c FROM director_fragments")
-        )
+        row = list(await db.execute_fetchall("SELECT COUNT(*) as c FROM director_fragments"))
         if row[0]["c"] == 0:
             for df in SEED_DIRECTOR_FRAGMENTS:
                 await db.execute(
@@ -894,27 +821,19 @@ async def init_db():
 
 async def get_worlds() -> list[dict]:
     async with get_db() as db:
-        rows = list(
-            await db.execute_fetchall("SELECT * FROM worlds ORDER BY created_at ASC")
-        )
+        rows = list(await db.execute_fetchall("SELECT * FROM worlds ORDER BY created_at ASC"))
         return [dict(r) for r in rows]
 
 
 async def get_world(world_id: str) -> dict | None:
     async with get_db() as db:
-        rows = list(
-            await db.execute_fetchall("SELECT * FROM worlds WHERE id = ?", (world_id,))
-        )
+        rows = list(await db.execute_fetchall("SELECT * FROM worlds WHERE id = ?", (world_id,)))
         return dict(rows[0]) if rows else None
 
 
 async def get_world_by_name(name: str) -> dict | None:
     async with get_db() as db:
-        rows = list(
-            await db.execute_fetchall(
-                "SELECT * FROM worlds WHERE name = ? LIMIT 1", (name,)
-            )
-        )
+        rows = list(await db.execute_fetchall("SELECT * FROM worlds WHERE name = ? LIMIT 1", (name,)))
         return dict(rows[0]) if rows else None
 
 
@@ -983,11 +902,7 @@ async def get_lorebook_entries(world_id: str) -> list[dict]:
 
 async def get_lorebook_entry(entry_id: int) -> dict | None:
     async with get_db() as db:
-        rows = list(
-            await db.execute_fetchall(
-                "SELECT * FROM lorebook_entries WHERE id = ?", (entry_id,)
-            )
-        )
+        rows = list(await db.execute_fetchall("SELECT * FROM lorebook_entries WHERE id = ?", (entry_id,)))
         return _parse_lorebook_entry(rows[0]) if rows else None
 
 
@@ -1079,8 +994,7 @@ async def get_settings() -> dict:
         s = dict(rows[0])
         s["enabled_tools"] = json.loads(s.get("enabled_tools") or "{}")
         s["reasoning_enabled_passes"] = json.loads(
-            s.get("reasoning_enabled_passes")
-            or '{"director":true,"writer":false,"editor":false}'
+            s.get("reasoning_enabled_passes") or '{"director":true,"writer":false,"editor":false}'
         )
         # Remove stale scripter key from reasoning_enabled_passes if present.
         s["reasoning_enabled_passes"].pop("scripter", None)
@@ -1206,9 +1120,7 @@ async def update_settings(data: dict) -> dict:
             "tts_auto_speak",
             "tts_volume",
         ]
-        sets, vals = _build_set_clause(
-            allowed, data, json_fields={"enabled_tools", "reasoning_enabled_passes"}
-        )
+        sets, vals = _build_set_clause(allowed, data, json_fields={"enabled_tools", "reasoning_enabled_passes"})
         if sets:
             await db.execute(
                 f"UPDATE settings SET {', '.join(sets)} WHERE id = 1",
@@ -1244,9 +1156,7 @@ async def get_endpoint(endpoint_id: int) -> dict | None:
 
 async def create_endpoint(url: str, api_key: str = "") -> dict:
     async with get_db() as db:
-        cur = await db.execute(
-            "INSERT INTO endpoints (url, api_key) VALUES (?, ?)", (url, api_key)
-        )
+        cur = await db.execute("INSERT INTO endpoints (url, api_key) VALUES (?, ?)", (url, api_key))
         endpoint_id = cur.lastrowid
         cur_w = await db.execute(
             "INSERT INTO model_configs (endpoint_id, model_name, system_prompt, temperature, min_p, top_k, top_p, repetition_penalty, max_tokens, role) VALUES (?, 'default', '', 0.8, 0.0, 40, 0.95, 1.0, 4096, 'writer')",
@@ -1334,11 +1244,7 @@ async def create_model_config(endpoint_id: int, data: dict) -> dict:
             ),
         )
         await db.commit()
-        rows = list(
-            await db.execute_fetchall(
-                "SELECT * FROM model_configs WHERE id = ?", (cur.lastrowid,)
-            )
-        )
+        rows = list(await db.execute_fetchall("SELECT * FROM model_configs WHERE id = ?", (cur.lastrowid,)))
         return dict(rows[0])
 
 
@@ -1362,11 +1268,7 @@ async def update_model_config(config_id: int, data: dict) -> dict | None:
                 vals,
             )
             await db.commit()
-        rows = list(
-            await db.execute_fetchall(
-                "SELECT * FROM model_configs WHERE id = ?", (config_id,)
-            )
-        )
+        rows = list(await db.execute_fetchall("SELECT * FROM model_configs WHERE id = ?", (config_id,)))
         return dict(rows[0]) if rows else None
 
 
@@ -1382,19 +1284,13 @@ async def delete_model_config(config_id: int) -> bool:
 
 async def get_mood_fragments() -> list[dict]:
     async with get_db() as db:
-        rows = list(
-            await db.execute_fetchall("SELECT * FROM mood_fragments ORDER BY label ASC")
-        )
+        rows = list(await db.execute_fetchall("SELECT * FROM mood_fragments ORDER BY label ASC"))
         return [dict(r) for r in rows]
 
 
 async def get_mood_fragment(fid: str) -> dict | None:
     async with get_db() as db:
-        rows = list(
-            await db.execute_fetchall(
-                "SELECT * FROM mood_fragments WHERE id = ?", (fid,)
-            )
-        )
+        rows = list(await db.execute_fetchall("SELECT * FROM mood_fragments WHERE id = ?", (fid,)))
         return dict(rows[0]) if rows else None
 
 
@@ -1444,21 +1340,13 @@ async def delete_mood_fragment(fid: str) -> bool:
 
 async def get_director_fragments() -> list[dict]:
     async with get_db() as db:
-        rows = list(
-            await db.execute_fetchall(
-                "SELECT * FROM director_fragments ORDER BY sort_order ASC, label ASC"
-            )
-        )
+        rows = list(await db.execute_fetchall("SELECT * FROM director_fragments ORDER BY sort_order ASC, label ASC"))
         return [dict(r) for r in rows]
 
 
 async def get_director_fragment(fid: str) -> dict | None:
     async with get_db() as db:
-        rows = list(
-            await db.execute_fetchall(
-                "SELECT * FROM director_fragments WHERE id = ?", (fid,)
-            )
-        )
+        rows = list(await db.execute_fetchall("SELECT * FROM director_fragments WHERE id = ?", (fid,)))
         return dict(rows[0]) if rows else None
 
 
@@ -1534,11 +1422,7 @@ async def list_conversations() -> list[dict]:
 
 async def get_conversation(cid: str) -> dict | None:
     async with get_db() as db:
-        rows = list(
-            await db.execute_fetchall(
-                "SELECT * FROM conversations WHERE id = ?", (cid,)
-            )
-        )
+        rows = list(await db.execute_fetchall("SELECT * FROM conversations WHERE id = ?", (cid,)))
         return dict(rows[0]) if rows else None
 
 
@@ -1589,9 +1473,7 @@ async def touch_conversation(cid: str) -> bool:
     """Update conversation's updated_at to current time."""
     async with get_db() as db:
         now = datetime.now(timezone.utc).isoformat()
-        cur = await db.execute(
-            "UPDATE conversations SET updated_at = ? WHERE id = ?", (now, cid)
-        )
+        cur = await db.execute("UPDATE conversations SET updated_at = ? WHERE id = ?", (now, cid))
         await db.commit()
         return cur.rowcount > 0
 
@@ -1698,9 +1580,7 @@ async def get_messages_with_branch_info(cid: str) -> list[dict]:
             msg["branch_count"] = len(sibling_ids)
             msg["branch_index"] = idx
             msg["prev_branch_id"] = sibling_ids[idx - 1] if idx > 0 else None
-            msg["next_branch_id"] = (
-                sibling_ids[idx + 1] if idx < len(sibling_ids) - 1 else None
-            )
+            msg["next_branch_id"] = sibling_ids[idx + 1] if idx < len(sibling_ids) - 1 else None
     return messages
 
 
@@ -1736,9 +1616,7 @@ async def add_message(
                 ),
             )
         except sqlite3.IntegrityError as e:
-            raise ValueError(
-                f"Foreign key constraint failed for conversation={cid}, parent={parent_id}: {e}"
-            ) from e
+            raise ValueError(f"Foreign key constraint failed for conversation={cid}, parent={parent_id}: {e}") from e
         message_id = cur.lastrowid
         assert message_id is not None
         if attachments:
@@ -1754,9 +1632,7 @@ async def add_message(
                         now,
                     ),
                 )
-        await db.execute(
-            "UPDATE conversations SET updated_at = ? WHERE id = ?", (now, cid)
-        )
+        await db.execute("UPDATE conversations SET updated_at = ? WHERE id = ?", (now, cid))
         await db.commit()
         return message_id
 
@@ -1776,18 +1652,14 @@ async def get_attachments_for_message(message_id: int) -> List[dict]:
 async def update_message_content(msg_id: int, content: str) -> None:
     """Update the content of an existing message."""
     async with get_db() as db:
-        await db.execute(
-            "UPDATE messages SET content = ? WHERE id = ?", (content, msg_id)
-        )
+        await db.execute("UPDATE messages SET content = ? WHERE id = ?", (content, msg_id))
         await db.commit()
 
 
 async def get_message_by_id(msg_id: int) -> dict | None:
     """Fetch a single message by its primary key."""
     async with get_db() as db:
-        rows = list(
-            await db.execute_fetchall("SELECT * FROM messages WHERE id = ?", (msg_id,))
-        )
+        rows = list(await db.execute_fetchall("SELECT * FROM messages WHERE id = ?", (msg_id,)))
         return dict(rows[0]) if rows else None
 
 
@@ -1802,12 +1674,8 @@ async def set_active_leaf(cid: str, leaf_id: int | None):
                 )
             )
             if not rows:
-                raise ValueError(
-                    f"Message {leaf_id} does not exist in conversation {cid}"
-                )
-        await db.execute(
-            "UPDATE conversations SET active_leaf_id = ? WHERE id = ?", (leaf_id, cid)
-        )
+                raise ValueError(f"Message {leaf_id} does not exist in conversation {cid}")
+        await db.execute("UPDATE conversations SET active_leaf_id = ? WHERE id = ?", (leaf_id, cid))
         await db.commit()
 
 
@@ -1843,11 +1711,7 @@ async def switch_to_branch(cid: str, message_id: int) -> bool:
 
 async def get_director_state(cid: str) -> dict:
     async with get_db() as db:
-        rows = list(
-            await db.execute_fetchall(
-                "SELECT * FROM director_state WHERE conversation_id = ?", (cid,)
-            )
-        )
+        rows = list(await db.execute_fetchall("SELECT * FROM director_state WHERE conversation_id = ?", (cid,)))
         if rows:
             r = dict(rows[0])
             r["active_moods"] = json.loads(r["active_moods"])
@@ -1953,9 +1817,7 @@ async def get_conversation_logs(cid: str) -> list[dict]:
         for r in rows:
             d = dict(r)
             d["tool_calls"] = json.loads(d["tool_calls"]) if d["tool_calls"] else []
-            d["active_moods_after"] = (
-                json.loads(d["active_moods_after"]) if d["active_moods_after"] else []
-            )
+            d["active_moods_after"] = json.loads(d["active_moods_after"]) if d["active_moods_after"] else []
             result.append(d)
         return result
 
@@ -1972,9 +1834,7 @@ async def get_director_log_for_message(message_id: int) -> dict | None:
             return None
         d = dict(rows[0])
         d["tool_calls"] = json.loads(d["tool_calls"]) if d["tool_calls"] else []
-        d["active_moods_after"] = (
-            json.loads(d["active_moods_after"]) if d["active_moods_after"] else []
-        )
+        d["active_moods_after"] = json.loads(d["active_moods_after"]) if d["active_moods_after"] else []
         return d
 
 
@@ -1984,31 +1844,21 @@ async def get_director_log_for_message(message_id: int) -> dict | None:
 async def get_phrase_bank() -> list[list[str]]:
     """Return phrase bank as list of variant groups (list of lists)."""
     async with get_db() as db:
-        rows = list(
-            await db.execute_fetchall(
-                "SELECT variants FROM phrase_bank ORDER BY id ASC"
-            )
-        )
+        rows = list(await db.execute_fetchall("SELECT variants FROM phrase_bank ORDER BY id ASC"))
         return [json.loads(r["variants"]) for r in rows]
 
 
 async def get_phrase_bank_rows() -> list[dict]:
     """Return phrase bank rows with ids for UI management."""
     async with get_db() as db:
-        rows = list(
-            await db.execute_fetchall(
-                "SELECT id, variants FROM phrase_bank ORDER BY id ASC"
-            )
-        )
+        rows = list(await db.execute_fetchall("SELECT id, variants FROM phrase_bank ORDER BY id ASC"))
         return [{"id": r["id"], "variants": json.loads(r["variants"])} for r in rows]
 
 
 async def add_phrase_group(variants: list[str]) -> int:
     """Add a new phrase variant group. Returns the new row id."""
     async with get_db() as db:
-        cur = await db.execute(
-            "INSERT INTO phrase_bank (variants) VALUES (?)", (json.dumps(variants),)
-        )
+        cur = await db.execute("INSERT INTO phrase_bank (variants) VALUES (?)", (json.dumps(variants),))
         await db.commit()
         assert cur.lastrowid is not None
         return cur.lastrowid
@@ -2140,9 +1990,7 @@ async def get_character_card(card_id: str, include_avatar: bool = False) -> dict
             return None
         d = dict(rows[0])
         d["tags"] = json.loads(d["tags"]) if d.get("tags") else []
-        d["alternate_greetings"] = (
-            json.loads(d["alternate_greetings"]) if d.get("alternate_greetings") else []
-        )
+        d["alternate_greetings"] = json.loads(d["alternate_greetings"]) if d.get("alternate_greetings") else []
         d["has_avatar"] = d.get("avatar_mime") is not None
         return d
 
@@ -2182,18 +2030,14 @@ async def create_character_card(data: dict) -> dict:
                 ),
             )
         except aiosqlite.IntegrityError as exc:
-            raise ValueError(
-                f"Character card with id {data['id']} already exists"
-            ) from exc
+            raise ValueError(f"Character card with id {data['id']} already exists") from exc
         await db.commit()
         result = await get_character_card(data["id"])
         assert result is not None
         return result
 
 
-async def insert_alternate_greeting_swipes(
-    cid: str, alternate_greetings: list[str]
-) -> int:
+async def insert_alternate_greeting_swipes(cid: str, alternate_greetings: list[str]) -> int:
     """Insert alternate greetings as sibling root messages (turn_index=0, parent_id=NULL).
 
     These become branch siblings of the primary greeting and are navigable via
@@ -2261,9 +2105,7 @@ async def update_character_card(card_id: str, data: dict) -> dict | None:
         return await get_character_card(card_id)
 
 
-async def sync_conversations_for_card(
-    card_id: str, card: dict, old_name: str | None = None
-) -> None:
+async def sync_conversations_for_card(card_id: str, card: dict, old_name: str | None = None) -> None:
     """Propagate mutable card fields to all conversations linked to this card.
 
     Only syncs fields that are denormalised onto the conversation row and
@@ -2298,17 +2140,11 @@ async def sync_conversations_for_card(
         await db.commit()
 
 
-async def delete_character_card(
-    card_id: str, delete_conversations: bool = False
-) -> bool:
+async def delete_character_card(card_id: str, delete_conversations: bool = False) -> bool:
     async with get_db() as db:
-        await db.execute(
-            "DELETE FROM voice_profiles WHERE character_card_id = ?", (card_id,)
-        )
+        await db.execute("DELETE FROM voice_profiles WHERE character_card_id = ?", (card_id,))
         if delete_conversations:
-            await db.execute(
-                "DELETE FROM conversations WHERE character_card_id = ?", (card_id,)
-            )
+            await db.execute("DELETE FROM conversations WHERE character_card_id = ?", (card_id,))
         # When keeping conversations, character_card_id is intentionally left as-is.
         # The dangling reference acts as a pending-relink marker: re-importing the
         # same card (which produces the same stable ID) restores the association
@@ -2362,11 +2198,7 @@ async def delete_message_with_descendants(cid: str, msg_id: int) -> bool:
 
         # If the active leaf is inside the deleted subtree, find a new active leaf
         # Since all siblings are deleted, the new active leaf will be the parent (or NULL for root)
-        conv_rows = list(
-            await db.execute_fetchall(
-                "SELECT active_leaf_id FROM conversations WHERE id = ?", (cid,)
-            )
-        )
+        conv_rows = list(await db.execute_fetchall("SELECT active_leaf_id FROM conversations WHERE id = ?", (cid,)))
         if conv_rows and conv_rows[0]["active_leaf_id"] in deleted_ids:
             new_leaf = parent_id  # parent_id is None for root messages, which is valid
 
@@ -2382,18 +2214,10 @@ async def delete_message_with_descendants(cid: str, msg_id: int) -> bool:
         )
 
         # Restore director_state to match the new active leaf's turn
-        conv_after = list(
-            await db.execute_fetchall(
-                "SELECT active_leaf_id FROM conversations WHERE id = ?", (cid,)
-            )
-        )
+        conv_after = list(await db.execute_fetchall("SELECT active_leaf_id FROM conversations WHERE id = ?", (cid,)))
         new_leaf_id = conv_after[0]["active_leaf_id"] if conv_after else None
         if new_leaf_id is not None:
-            leaf_row = list(
-                await db.execute_fetchall(
-                    "SELECT turn_index FROM messages WHERE id = ?", (new_leaf_id,)
-                )
-            )
+            leaf_row = list(await db.execute_fetchall("SELECT turn_index FROM messages WHERE id = ?", (new_leaf_id,)))
             if leaf_row:
                 turn_idx = leaf_row[0]["turn_index"]
                 log_row = list(
@@ -2402,11 +2226,7 @@ async def delete_message_with_descendants(cid: str, msg_id: int) -> bool:
                         (cid, turn_idx),
                     )
                 )
-                restored = (
-                    json.loads(log_row[0]["active_moods_after"])
-                    if log_row and log_row[0]["active_moods_after"]
-                    else []
-                )
+                restored = json.loads(log_row[0]["active_moods_after"]) if log_row and log_row[0]["active_moods_after"] else []
                 await db.execute(
                     "UPDATE director_state SET active_moods = ? WHERE conversation_id = ?",
                     (json.dumps(restored), cid),
@@ -2422,9 +2242,7 @@ async def delete_message_with_descendants(cid: str, msg_id: int) -> bool:
         return True
 
 
-async def resolve_char_context(
-    conv: dict, settings: dict, shared_key: str = "shared_system_prompt"
-) -> tuple[str, str, str]:
+async def resolve_char_context(conv: dict, settings: dict, shared_key: str = "shared_system_prompt") -> tuple[str, str, str]:
     """Load character card data and resolve the effective system prompt, persona, and example messages.
 
     Combines shared_system_prompt (global) with system_prompt (model-specific).
@@ -2445,13 +2263,9 @@ async def resolve_char_context(
     if card_id := conv.get("character_card_id"):
         card = await get_character_card(card_id)
         if card:
-            char_persona = "\n\n".join(
-                filter(None, [card.get("description", ""), card.get("personality", "")])
-            )
+            char_persona = "\n\n".join(filter(None, [card.get("description", ""), card.get("personality", "")]))
             mes_example = card.get("mes_example", "")
-            if card.get("system_prompt") and not settings.get(
-                "prevent_prompt_overrides"
-            ):
+            if card.get("system_prompt") and not settings.get("prevent_prompt_overrides"):
                 # Character card system_prompt completely overrides
                 system_prompt = card["system_prompt"]
     return system_prompt, char_persona, mes_example

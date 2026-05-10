@@ -93,15 +93,11 @@ class FishSpeechAdapter(TTSAdapter):
 
         try:
             async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.get(
-                    f"{base_url}/v1/references/list", headers=headers
-                )
+                resp = await client.get(f"{base_url}/v1/references/list", headers=headers)
                 if resp.status_code == 200:
                     data = resp.json()
                     # Fish returns references with id, name, etc.
-                    refs = (
-                        data if isinstance(data, list) else data.get("references", [])
-                    )
+                    refs = data if isinstance(data, list) else data.get("references", [])
                     return [
                         {
                             "id": r.get("id", r.get("reference_id", "")),
@@ -117,9 +113,7 @@ class FishSpeechAdapter(TTSAdapter):
         # Fallback
         return [{"id": "default", "name": "Default", "gender": "unknown"}]
 
-    async def list_models(
-        self, api_url: str = "", api_key: str | None = None, **kwargs
-    ) -> list[dict]:
+    async def list_models(self, api_url: str = "", api_key: str | None = None, **kwargs) -> list[dict]:
         """Fish Speech doesn't have a model list endpoint."""
         return []
 

@@ -12,7 +12,5 @@ import sqlite3
 def migrate(conn: sqlite3.Connection) -> None:
     cols = {row[1] for row in conn.execute("PRAGMA table_info(settings)").fetchall()}
     if "show_editor_diff" not in cols:
-        conn.execute(
-            "ALTER TABLE settings ADD COLUMN show_editor_diff INTEGER NOT NULL DEFAULT 1"
-        )
+        conn.execute("ALTER TABLE settings ADD COLUMN show_editor_diff INTEGER NOT NULL DEFAULT 1")
         print("[migrations] 0011: added show_editor_diff column to settings")

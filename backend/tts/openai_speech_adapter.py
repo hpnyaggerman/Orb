@@ -113,9 +113,7 @@ class OpenAISpeechAdapter(TTSAdapter):
             {"id": "alloy", "name": "alloy (default)", "gender": "neutral"},
         ]
 
-    async def list_models(
-        self, api_url: str = "", api_key: str | None = None, **kwargs
-    ) -> list[dict]:
+    async def list_models(self, api_url: str = "", api_key: str | None = None, **kwargs) -> list[dict]:
         """Fetch models from /v1/models. Filters for TTS on OpenAI; returns all on compatible endpoints."""
         base_url = (api_url or _DEFAULT_API_URL).rstrip("/")
         headers = {}

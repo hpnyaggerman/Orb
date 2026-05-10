@@ -25,9 +25,7 @@ from backend.llm_client import LLMClient
 
 def _clean_report() -> AuditReport:
     return AuditReport(
-        cliche_result=DetectionResult(
-            flagged_sentences=[], unique_cliches=[], total_sentences=1, flagged_count=0
-        ),
+        cliche_result=DetectionResult(flagged_sentences=[], unique_cliches=[], total_sentences=1, flagged_count=0),
         monotony_result=MonotonyResult([], {}, 0, 0.0),
         template_result=TemplateResult([], {}, 0, 0, 0.0),
         not_but_result=[],
@@ -38,15 +36,11 @@ def _clean_report() -> AuditReport:
 def _repetitive_report() -> AuditReport:
     """Report that signals structural repetition."""
     return AuditReport(
-        cliche_result=DetectionResult(
-            flagged_sentences=[], unique_cliches=[], total_sentences=1, flagged_count=0
-        ),
+        cliche_result=DetectionResult(flagged_sentences=[], unique_cliches=[], total_sentences=1, flagged_count=0),
         monotony_result=MonotonyResult([], {}, 0, 0.0),
         template_result=TemplateResult([], {}, 0, 0, 0.0),
         not_but_result=[],
-        structural_repetition_result=StructuralResult(
-            is_repetitive=True, min_similarity=0.9, mean_similarity=0.9, pairs=[]
-        ),
+        structural_repetition_result=StructuralResult(is_repetitive=True, min_similarity=0.9, mean_similarity=0.9, pairs=[]),
     )
 
 
@@ -91,8 +85,7 @@ async def test_audit_context_msgs_overrides_prefix():
 
     assert len(captured_prev_msgs) == 1, "audit should run exactly once (clean result)"
     assert captured_prev_msgs[0] == [], (
-        "audit_context_msgs=[] must be forwarded directly; "
-        f"got {captured_prev_msgs[0]!r} instead (prefix-derived)"
+        "audit_context_msgs=[] must be forwarded directly; " f"got {captured_prev_msgs[0]!r} instead (prefix-derived)"
     )
 
 
@@ -239,6 +232,5 @@ async def test_super_regen_does_not_flag_replaced_message():
     assert len(done_events) == 1
     # Clean audit → no LLM call needed → draft is returned as None (unchanged)
     assert done_events[0]["draft"] is None, (
-        "Editor should not attempt to rewrite when audit_context_msgs excludes "
-        "the replaced message and the audit is clean"
+        "Editor should not attempt to rewrite when audit_context_msgs excludes " "the replaced message and the audit is clean"
     )

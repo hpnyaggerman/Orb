@@ -62,10 +62,7 @@ class TestTruePositives:
 
     def test_repetition_within_longer_text(self):
         """Four consecutive repeated openers surrounded by other sentences."""
-        text = (
-            "The sky is blue. He walked. He ran. He jumped. He skipped. "
-            "The grass is green. She sang."
-        )
+        text = "The sky is blue. He walked. He ran. He jumped. He skipped. " "The grass is green. She sang."
         result = detect_opening_monotony(text, n_words=1)
         he_flag = [f for f in result.flagged_openers if f.opener == "he"]
         assert len(he_flag) == 1
@@ -135,9 +132,7 @@ He W something."""
 
     def test_run_in_middle_of_longer_sequence(self):
         """Flag when the 4-in-a-row run is in the middle, not the start."""
-        text = (
-            "The cat slept. He walked. He ran. He jumped. He skipped. The dog barked."
-        )
+        text = "The cat slept. He walked. He ran. He jumped. He skipped. The dog barked."
         result = detect_opening_monotony(text, n_words=1)
         he_flag = [f for f in result.flagged_openers if f.opener == "he"]
         assert len(he_flag) == 1

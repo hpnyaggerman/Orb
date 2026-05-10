@@ -64,10 +64,7 @@ def _apply_content(content: str | list | None, fn) -> str | list | None:
     if isinstance(content, str):
         return fn(content)
     if isinstance(content, list):
-        return [
-            {**part, "text": fn(part["text"])} if part.get("type") == "text" else part
-            for part in content
-        ]
+        return [{**part, "text": fn(part["text"])} if part.get("type") == "text" else part for part in content]
     return content
 
 
@@ -112,11 +109,7 @@ class Macros(NamedTuple):
         char_name: str,
         active_persona: dict | None = None,
     ) -> "Macros":
-        user = (
-            active_persona.get("name", "User")
-            if active_persona
-            else settings.get("user_name", "User")
-        )
+        user = active_persona.get("name", "User") if active_persona else settings.get("user_name", "User")
         return cls(user=user, char=char_name)
 
     def resolve_message(self, text: str) -> str:
@@ -131,9 +124,7 @@ class Macros(NamedTuple):
         """Apply prompt-level resolution (substitution only) to a single message dict."""
         return {
             **msg,
-            "content": _apply_content(
-                msg.get("content"), lambda t: self.resolve_prompt(t)
-            ),
+            "content": _apply_content(msg.get("content"), lambda t: self.resolve_prompt(t)),
         }
 
     def resolve_prompt_messages(self, messages: list[dict]) -> list[dict]:
@@ -181,7 +172,5 @@ class _PlaceholderClient(LLMClient):
             }
             for msg in messages
         ]
-        async for item in self._inner.complete(
-            msgs, model, tools=tools, tool_choice=tool_choice, **params
-        ):
+        async for item in self._inner.complete(msgs, model, tools=tools, tool_choice=tool_choice, **params):
             yield item

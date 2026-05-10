@@ -36,13 +36,9 @@ def migrate(conn: sqlite3.Connection) -> None:
     """
     )
 
-    settings_cols = [
-        row[1] for row in conn.execute("PRAGMA table_info(settings)").fetchall()
-    ]
+    settings_cols = [row[1] for row in conn.execute("PRAGMA table_info(settings)").fetchall()]
     if "active_endpoint_id" not in settings_cols:
-        conn.execute(
-            "ALTER TABLE settings ADD COLUMN active_endpoint_id INTEGER REFERENCES endpoints(id) ON DELETE SET NULL"
-        )
+        conn.execute("ALTER TABLE settings ADD COLUMN active_endpoint_id INTEGER REFERENCES endpoints(id) ON DELETE SET NULL")
     if "active_model_config_id" not in settings_cols:
         conn.execute(
             "ALTER TABLE settings ADD COLUMN active_model_config_id INTEGER REFERENCES model_configs(id) ON DELETE SET NULL"
@@ -83,6 +79,4 @@ def migrate(conn: sqlite3.Connection) -> None:
                 "UPDATE settings SET active_endpoint_id = ?, active_model_config_id = ? WHERE id = 1",
                 (endpoint_id, model_config_id),
             )
-            print(
-                f"[migrations] 0008: seeded endpoint id={endpoint_id}, model_config id={model_config_id}"
-            )
+            print(f"[migrations] 0008: seeded endpoint id={endpoint_id}, model_config id={model_config_id}")

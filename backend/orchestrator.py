@@ -75,37 +75,23 @@ async def _run_pipeline(
     editor_reasoning_on = bool(reasoning_passes.get("editor", False))
 
     active_moods = director["active_moods"]
-    _valid_progressive_ids = {
-        df["id"] for df in director_fragments if df.get("field_type") == "progressive"
-    }
-    progressive_state: dict = {
-        k: v
-        for k, v in director.get("progressive_fields", {}).items()
-        if k in _valid_progressive_ids
-    }
+    _valid_progressive_ids = {df["id"] for df in director_fragments if df.get("field_type") == "progressive"}
+    progressive_state: dict = {k: v for k, v in director.get("progressive_fields", {}).items() if k in _valid_progressive_ids}
     agent_raw, calls, latency = "", [], 0
     rewritten_msg: str | None = None
     extra_fields: dict = {}
     progressive_fields: dict = {}
     effective_msg = user_message
 
-    audit_enabled = (
-        agent_on
-        and bool(enabled_tools.get("editor_apply_patch", False))
-        and phrase_bank is not None
-    )
+    audit_enabled = agent_on and bool(enabled_tools.get("editor_apply_patch", False)) and phrase_bank is not None
 
     # Length guard
-    length_guard_enabled = (
-        bool(enabled_tools.get("length_guard", False)) if agent_on else False
-    )
+    length_guard_enabled = bool(enabled_tools.get("length_guard", False)) if agent_on else False
     # Mirror editor_rewrite into enabled_tools so enabled_schemas() includes its schema in all
     # three passes — same KV-cache consistency approach as editor_apply_patch.
     if length_guard_enabled:
         enabled_tools = {**enabled_tools, "editor_rewrite": True}
-    length_guard_enforce = (
-        bool(enabled_tools.get("length_guard_enforce", False)) if agent_on else False
-    )
+    length_guard_enforce = bool(enabled_tools.get("length_guard_enforce", False)) if agent_on else False
 
     length_guard = (
         {
@@ -133,18 +119,12 @@ async def _run_pipeline(
     writer_client = _wrap(client)
     director_prefix = agent_prefix or prefix
     editor_prefix = agent_prefix or prefix
-    agent_model = (
-        settings.get("agent_model_name", settings["model_name"])
-        if agent_client
-        else settings["model_name"]
-    )
+    agent_model = settings.get("agent_model_name", settings["model_name"]) if agent_client else settings["model_name"]
 
     kv_tracker = _KVCacheTracker(conversation_id=conversation_id)
 
     # --- Director pass ---
-    has_pre_writer_tools = any(
-        enabled_tools.get(n, False) for n in TOOLS if n not in POST_WRITER_TOOLS
-    )
+    has_pre_writer_tools = any(enabled_tools.get(n, False) for n in TOOLS if n not in POST_WRITER_TOOLS)
     if agent_on and has_pre_writer_tools:
         yield {"event": "director_start"}
         async for event in _director_pass(
@@ -177,14 +157,8 @@ async def _run_pipeline(
                     rewritten_msg,
                     extra_fields,
                 ) = event["result"]
-                progressive_ids = {
-                    df["id"]
-                    for df in director_fragments
-                    if df["field_type"] == "progressive"
-                }
-                progressive_fields = {
-                    k: v for k, v in extra_fields.items() if k in progressive_ids
-                }
+                progressive_ids = {df["id"] for df in director_fragments if df["field_type"] == "progressive"}
+                progressive_fields = {k: v for k, v in extra_fields.items() if k in progressive_ids}
         if rewritten_msg:
             effective_msg = rewritten_msg
             yield {
@@ -351,9 +325,7 @@ async def _load_pipeline_context(conversation_id: str) -> dict | None:
     # Remove disabled mood fragments from active moods
     if director and director.get("active_moods"):
         enabled_ids = {f["id"] for f in mood_fragments}
-        director["active_moods"] = [
-            mood for mood in director["active_moods"] if mood in enabled_ids
-        ]
+        director["active_moods"] = [mood for mood in director["active_moods"] if mood in enabled_ids]
     director_fragments = await db.get_director_fragments()
     director_fragments = [df for df in director_fragments if df.get("enabled", True)]
     phrase_bank = await db.get_phrase_bank()
@@ -367,9 +339,7 @@ async def _load_pipeline_context(conversation_id: str) -> dict | None:
         ),
     )
 
-    system_prompt, char_persona, mes_example = await db.resolve_char_context(
-        conv, settings
-    )
+    system_prompt, char_persona, mes_example = await db.resolve_char_context(conv, settings)
 
     # Load active persona if set
     active_persona = None
@@ -390,9 +360,7 @@ async def _load_pipeline_context(conversation_id: str) -> dict | None:
             api_key=agent_api_key,
             profile=profile_for(agent_url, agent_model),
         )
-        agent_system_prompt, _, _ = await db.resolve_char_context(
-            conv, settings, shared_key="agent_shared_system_prompt"
-        )
+        agent_system_prompt, _, _ = await db.resolve_char_context(conv, settings, shared_key="agent_shared_system_prompt")
 
     return {
         "settings": settings,
@@ -412,9 +380,7 @@ async def _load_pipeline_context(conversation_id: str) -> dict | None:
     }
 
 
-def _build_prefix_from_ctx(
-    ctx: dict, history: list[dict], *, system_prompt: str | None = None
-) -> list[dict]:
+def _build_prefix_from_ctx(ctx: dict, history: list[dict], *, system_prompt: str | None = None) -> list[dict]:
     """Build the LLM prefix from a pipeline-context dict.
 
     When *system_prompt* is provided it overrides ``ctx["system_prompt"]``
@@ -422,45 +388,29 @@ def _build_prefix_from_ctx(
     """
     conv = ctx["conv"]
     active_persona = ctx.get("active_persona")
-    macros = Macros.from_settings(
-        ctx["settings"], conv["character_name"], active_persona
-    )
-    user_description = (
-        active_persona.get("description", "")
-        if active_persona
-        else ctx["settings"].get("user_description", "")
-    )
+    macros = Macros.from_settings(ctx["settings"], conv["character_name"], active_persona)
+    user_description = active_persona.get("description", "") if active_persona else ctx["settings"].get("user_description", "")
 
     return build_prefix(
         system_prompt if system_prompt is not None else ctx["system_prompt"],
         ctx["char_persona"],
         conv["character_scenario"],
         ctx["mes_example"],
-        (
-            ""
-            if ctx["settings"].get("prevent_prompt_overrides")
-            else conv.get("post_history_instructions", "")
-        ),
+        ("" if ctx["settings"].get("prevent_prompt_overrides") else conv.get("post_history_instructions", "")),
         history,
         macros,
         user_description,
     )
 
 
-def _build_prefixes(
-    ctx: dict, history: list[dict]
-) -> tuple[list[dict], list[dict] | None]:
+def _build_prefixes(ctx: dict, history: list[dict]) -> tuple[list[dict], list[dict] | None]:
     """Build (prefix, agent_prefix) from *ctx* and *history*.
 
     *agent_prefix* is ``None`` when no separate agent system prompt is configured.
     """
     prefix = _build_prefix_from_ctx(ctx, history)
     agent_sp = ctx.get("agent_system_prompt")
-    agent_prefix = (
-        _build_prefix_from_ctx(ctx, history, system_prompt=agent_sp)
-        if agent_sp is not None
-        else None
-    )
+    agent_prefix = _build_prefix_from_ctx(ctx, history, system_prompt=agent_sp) if agent_sp is not None else None
     return prefix, agent_prefix
 
 
@@ -473,19 +423,13 @@ def _compute_lorebook(macros: Macros, ctx: dict, messages: list[dict]) -> str:
     )
 
 
-async def _resolve_target_and_parent(
-    conversation_id: str, assistant_msg_id: int
-) -> tuple[dict, dict] | str:
+async def _resolve_target_and_parent(conversation_id: str, assistant_msg_id: int) -> tuple[dict, dict] | str:
     """Validate *assistant_msg_id* and load its parent user message.
 
     Returns ``(target, user_msg)`` on success, or an error string on failure.
     """
     target = await db.get_message_by_id(assistant_msg_id)
-    if (
-        not target
-        or target["conversation_id"] != conversation_id
-        or target["role"] != "assistant"
-    ):
+    if not target or target["conversation_id"] != conversation_id or target["role"] != "assistant":
         return "Invalid target message"
     user_msg_id = target["parent_id"]
     user_msg = await db.get_message_by_id(user_msg_id) if user_msg_id else None
@@ -503,23 +447,13 @@ async def _prepare_regen_context(
     Returns ``(history, attachments)``.
     """
     parent_id: int | None = user_msg.get("parent_id")
-    history = (
-        await db.get_path_to_leaf(conversation_id, parent_id)
-        if parent_id is not None
-        else []
-    )
-    moods_before = await db.get_moods_before_turn(
-        conversation_id, target["turn_index"] - 1
-    )
+    history = await db.get_path_to_leaf(conversation_id, parent_id) if parent_id is not None else []
+    moods_before = await db.get_moods_before_turn(conversation_id, target["turn_index"] - 1)
     ctx["director"]["active_moods"] = moods_before
     grandparent = next((m for m in reversed(history) if m["role"] == "assistant"), None)
-    ctx["director"]["progressive_fields"] = (
-        grandparent.get("progressive_fields") or {} if grandparent else {}
-    )
+    ctx["director"]["progressive_fields"] = grandparent.get("progressive_fields") or {} if grandparent else {}
     user_msg_id = target["parent_id"]
-    attachments = (
-        await db.get_attachments_for_message(user_msg_id) if user_msg_id else []
-    )
+    attachments = await db.get_attachments_for_message(user_msg_id) if user_msg_id else []
     return history, attachments
 
 
@@ -556,9 +490,7 @@ async def _persist_result(
         await db.set_active_leaf(conversation_id, asst_id)
         return asst_id
     else:
-        logger.info(
-            "Skipping assistant message persistence: resp_text is empty (reasoning‑only output)"
-        )
+        logger.info("Skipping assistant message persistence: resp_text is empty (reasoning‑only output)")
         return None
 
 
@@ -671,9 +603,7 @@ async def _consume_pipeline(
                 yield event
             elif etype == "_result":
                 res = event["data"]
-                asst_id = await _persist_result(
-                    conversation_id, res, settings, user_msg_id, turn_index
-                )
+                asst_id = await _persist_result(conversation_id, res, settings, user_msg_id, turn_index)
                 persisted = True
                 if extra_on_result:
                     await extra_on_result(res, asst_id)
@@ -736,12 +666,8 @@ async def handle_turn(
         # Derive progressive_fields from the grandparent message node (branch-aware)
         # rather than conversation_logs which are indexed by turn_index and can
         # return data from a different branch after a branch switch.
-        grandparent = next(
-            (m for m in reversed(messages) if m["role"] == "assistant"), None
-        )
-        ctx["director"]["progressive_fields"] = (
-            grandparent.get("progressive_fields") or {} if grandparent else {}
-        )
+        grandparent = next((m for m in reversed(messages) if m["role"] == "assistant"), None)
+        ctx["director"]["progressive_fields"] = grandparent.get("progressive_fields") or {} if grandparent else {}
 
         # Save user message BEFORE pipeline
         if not skip_user_persist:
@@ -750,9 +676,7 @@ async def handle_turn(
             for att in attachments:
                 db_attachments.append(
                     {
-                        "mime_type": att.get(
-                            "mime", att.get("mime_type", "image/jpeg")
-                        ),
+                        "mime_type": att.get("mime", att.get("mime_type", "image/jpeg")),
                         "data_b64": att.get("b64", att.get("data_b64", "")),
                         "filename": att.get("filename"),
                         "size": att.get("size"),
@@ -772,15 +696,11 @@ async def handle_turn(
         prefix, agent_prefix = _build_prefixes(ctx, history)
         asst_turn = next_turn + (0 if skip_user_persist else 1)
 
-        macros = Macros.from_settings(
-            ctx["settings"], ctx["conv"]["character_name"], ctx.get("active_persona")
-        )
+        macros = Macros.from_settings(ctx["settings"], ctx["conv"]["character_name"], ctx.get("active_persona"))
 
         # Compute lorebook injection — include the current user message so its
         # keywords are scanned, not just prior history.
-        lorebook_block = _compute_lorebook(
-            macros, ctx, history + [{"role": "user", "content": user_message}]
-        )
+        lorebook_block = _compute_lorebook(macros, ctx, history + [{"role": "user", "content": user_message}])
 
         async def _on_result(res, asst_id):
             await db.add_conversation_log(
@@ -850,17 +770,11 @@ async def handle_regenerate(
         target, user_msg = result
 
         user_msg_id = target["parent_id"]
-        history, attachments = await _prepare_regen_context(
-            ctx, conversation_id, target, user_msg
-        )
+        history, attachments = await _prepare_regen_context(ctx, conversation_id, target, user_msg)
         prefix, agent_prefix = _build_prefixes(ctx, history)
 
-        macros = Macros.from_settings(
-            ctx["settings"], ctx["conv"]["character_name"], ctx.get("active_persona")
-        )
-        lorebook_block = _compute_lorebook(
-            macros, ctx, history + [{"role": "user", "content": user_msg["content"]}]
-        )
+        macros = Macros.from_settings(ctx["settings"], ctx["conv"]["character_name"], ctx.get("active_persona"))
+        lorebook_block = _compute_lorebook(macros, ctx, history + [{"role": "user", "content": user_msg["content"]}])
 
         pipeline = _run_pipeline(
             ctx["client"],
@@ -934,9 +848,7 @@ async def handle_super_regenerate(
         target, user_msg = result
 
         user_msg_id = target["parent_id"]
-        history, attachments = await _prepare_regen_context(
-            ctx, conversation_id, target, user_msg
-        )
+        history, attachments = await _prepare_regen_context(ctx, conversation_id, target, user_msg)
 
         # Extend history to include the original user+assistant exchange so the
         # model sees what it wrote before being asked to go a different direction.
@@ -955,9 +867,7 @@ async def handle_super_regenerate(
             },
         }
 
-        macros = Macros.from_settings(
-            ctx["settings"], ctx["conv"]["character_name"], ctx.get("active_persona")
-        )
+        macros = Macros.from_settings(ctx["settings"], ctx["conv"]["character_name"], ctx.get("active_persona"))
         lorebook_block = _compute_lorebook(
             macros,
             ctx,
@@ -966,11 +876,7 @@ async def handle_super_regenerate(
 
         # Collect audit context from history only — exclude target["content"] so
         # the editor doesn't flag the new draft for repeating the message it replaced.
-        editor_audit_msgs = [
-            msg["content"]
-            for msg in reversed(history)
-            if msg.get("role") == "assistant"
-        ][:3]
+        editor_audit_msgs = [msg["content"] for msg in reversed(history) if msg.get("role") == "assistant"][:3]
 
         pipeline = _run_pipeline(
             ctx["client"],
@@ -1042,11 +948,7 @@ async def handle_magic_rewrite(
         target, user_msg = result
 
         parent_id: int | None = user_msg.get("parent_id")
-        history = (
-            await db.get_path_to_leaf(conversation_id, parent_id)
-            if parent_id is not None
-            else []
-        )
+        history = await db.get_path_to_leaf(conversation_id, parent_id) if parent_id is not None else []
 
         extended_history = history + [
             {"role": "user", "content": user_msg["content"]},
@@ -1059,15 +961,11 @@ async def handle_magic_rewrite(
 
         hyperparams = extract_hyperparams(settings)
 
-        writer_reasoning_on = bool(
-            (settings.get("reasoning_enabled_passes") or {}).get("writer", False)
-        )
+        writer_reasoning_on = bool((settings.get("reasoning_enabled_passes") or {}).get("writer", False))
         extra = reasoning_cfg(writer_reasoning_on)
 
         accumulated = ""
-        async for item in ctx["client"].complete(
-            messages=msgs, model=settings["model_name"], **extra, **hyperparams
-        ):
+        async for item in ctx["client"].complete(messages=msgs, model=settings["model_name"], **extra, **hyperparams):
             if item["type"] == "done":
                 break
             if item["type"] == "content":
