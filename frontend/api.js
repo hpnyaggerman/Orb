@@ -47,6 +47,31 @@ export async function speakMessage(convId, msgId) {
   };
 }
 
+export async function getMessageChunks(convId, msgId) {
+  const r = await fetch(`/api/conversations/${convId}/messages/${msgId}/chunks`);
+  if (!r.ok) {
+    const err = new Error(await r.text());
+    err.status = r.status;
+    throw err;
+  }
+  return r.json();
+}
+
+export async function speakChunk(convId, msgId, chunkIndex) {
+  const r = await fetch(`/api/conversations/${convId}/messages/${msgId}/speak-chunk`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chunk_index: chunkIndex }),
+  });
+  if (!r.ok) {
+    const err = new Error(await r.text());
+    err.status = r.status;
+    throw err;
+  }
+  const blob = await r.blob();
+  return { audioUrl: URL.createObjectURL(blob) };
+}
+
 export async function getTtsBackends() {
   const r = await fetch("/api/tts/backends");
   if (!r.ok) return [];

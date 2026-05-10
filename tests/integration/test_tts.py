@@ -274,3 +274,214 @@ async def test_voice_profile_update_clears_all_cached_audio_extensions(client, m
     assert resp.status_code == 200
     assert not mp3_path.exists()
     assert not wav_path.exists()
+
+
+# ── Chunk metadata endpoint ──────────────────────────────────
+
+
+async def _setup_tts_env(client, monkeypatch, tmp_path, *, first_mes=None):
+    """Create a character, conversation, enable TTS, patch adapter + cache dir."""
+    import backend.main as main
+    import backend.tts.cache as tts_cache
+
+    kwargs = {}
+    if first_mes:
+        kwargs["first_mes"] = first_mes
+    char_id, cid, msg_id = await _create_tts_conversation(client, **kwargs)
+
+    adapter = FakeAdapter(content_type="audio/mpeg")
+    monkeypatch.setattr(tts_cache, "TTS_CACHE_DIR", str(tmp_path))
+    monkeypatch.setattr(main, "get_adapter", lambda backend: adapter)
+
+    await client.put("/api/settings", json={"tts_enabled": 1})
+    await client.put(
+        f"/api/characters/{char_id}/voice-profile",
+        json={
+            "backend": "edge",
+            "voice_id": "en-US-JennyNeural",
+            "language": "en-US",
+            "enabled": 1,
+        },
+    )
+    return char_id, cid, msg_id, adapter
+
+
+async def test_get_chunks_returns_chunk_metadata(client, monkeypatch, tmp_path):
+    _char_id, cid, msg_id, _adapter = await _setup_tts_env(
+        client,
+        monkeypatch,
+        tmp_path,
+        first_mes='"Hello there," she said. "How are you?"',
+    )
+
+    resp = await client.get(f"/api/conversations/{cid}/messages/{msg_id}/chunks")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "chunks" in data
+    assert data["extraction_method"] == "regex"
+    chunks = data["chunks"]
+    assert len(chunks) == 2
+
+    # Each chunk has required fields
+    for c in chunks:
+        assert "index" in c
+        assert "text" in c
+        assert "original_text" in c
+        assert "emotion" in c
+        assert "pause_before_ms" in c
+
+    # First chunk: "Hello there,"
+    assert chunks[0]["index"] == 0
+    assert "Hello there" in chunks[0]["original_text"]
+    assert chunks[0]["pause_before_ms"] == 0  # First chunk has no leading pause
+
+    # Second chunk: "How are you?"
+    assert chunks[1]["index"] == 1
+    assert "How are you" in chunks[1]["original_text"]
+    assert chunks[1]["pause_before_ms"] > 0  # Inter-dialogue pause
+
+
+async def test_get_chunks_empty_no_quoted_dialogue(client, monkeypatch, tmp_path):
+    _char_id, cid, msg_id, _adapter = await _setup_tts_env(
+        client,
+        monkeypatch,
+        tmp_path,
+        first_mes="*She smiles and looks away.*",
+    )
+
+    resp = await client.get(f"/api/conversations/{cid}/messages/{msg_id}/chunks")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["chunks"] == []
+
+
+async def test_get_chunks_tts_disabled(client):
+    char_id, cid, msg_id = await _create_tts_conversation(client)
+    # TTS is disabled by default
+    resp = await client.get(f"/api/conversations/{cid}/messages/{msg_id}/chunks")
+    assert resp.status_code == 403
+
+
+async def test_get_chunks_no_voice_profile(client):
+    char_id, cid, msg_id = await _create_tts_conversation(client)
+    await client.put("/api/settings", json={"tts_enabled": 1})
+    resp = await client.get(f"/api/conversations/{cid}/messages/{msg_id}/chunks")
+    assert resp.status_code == 400
+
+
+async def test_get_chunks_nonexistent_message(client, monkeypatch, tmp_path):
+    char_id, cid, _msg_id, _adapter = await _setup_tts_env(client, monkeypatch, tmp_path)
+    resp = await client.get(f"/api/conversations/{cid}/messages/99999/chunks")
+    assert resp.status_code == 404
+
+
+# ── Speak-chunk endpoint ─────────────────────────────────────
+
+
+async def test_speak_chunk_single(client, monkeypatch, tmp_path):
+    _char_id, cid, msg_id, adapter = await _setup_tts_env(
+        client,
+        monkeypatch,
+        tmp_path,
+        first_mes='"Hello there," she said. "How are you?"',
+    )
+
+    resp = await client.post(
+        f"/api/conversations/{cid}/messages/{msg_id}/speak-chunk",
+        json={"chunk_index": 0},
+    )
+    assert resp.status_code == 200
+    assert resp.content == b"fake-audio"
+    assert len(adapter.calls) == 1
+    # Verify it only synthesized 1 chunk
+    chunks_arg = adapter.calls[0]["chunks"]
+    assert len(chunks_arg) == 1
+
+
+async def test_speak_chunk_caches_per_chunk(client, monkeypatch, tmp_path):
+    _char_id, cid, msg_id, adapter = await _setup_tts_env(
+        client,
+        monkeypatch,
+        tmp_path,
+        first_mes='"Hello there," she said. "How are you?"',
+    )
+
+    # Request chunk 0
+    first = await client.post(
+        f"/api/conversations/{cid}/messages/{msg_id}/speak-chunk",
+        json={"chunk_index": 0},
+    )
+    assert first.status_code == 200
+    assert len(adapter.calls) == 1
+
+    # Request chunk 0 again — should use cache
+    second = await client.post(
+        f"/api/conversations/{cid}/messages/{msg_id}/speak-chunk",
+        json={"chunk_index": 0},
+    )
+    assert second.status_code == 200
+    assert len(adapter.calls) == 1  # No new call
+
+    # Request chunk 1 — should synthesize new
+    third = await client.post(
+        f"/api/conversations/{cid}/messages/{msg_id}/speak-chunk",
+        json={"chunk_index": 1},
+    )
+    assert third.status_code == 200
+    assert len(adapter.calls) == 2
+
+
+async def test_speak_chunk_out_of_range(client, monkeypatch, tmp_path):
+    _char_id, cid, msg_id, _adapter = await _setup_tts_env(
+        client,
+        monkeypatch,
+        tmp_path,
+        first_mes='"Hello there," she said.',
+    )
+
+    resp = await client.post(
+        f"/api/conversations/{cid}/messages/{msg_id}/speak-chunk",
+        json={"chunk_index": 99},
+    )
+    assert resp.status_code == 400
+    assert "out of range" in resp.text
+
+
+async def test_speak_chunk_negative_index(client, monkeypatch, tmp_path):
+    _char_id, cid, msg_id, _adapter = await _setup_tts_env(
+        client,
+        monkeypatch,
+        tmp_path,
+        first_mes='"Hello there."',
+    )
+
+    resp = await client.post(
+        f"/api/conversations/{cid}/messages/{msg_id}/speak-chunk",
+        json={"chunk_index": -1},
+    )
+    assert resp.status_code == 400
+
+
+async def test_speak_chunk_tts_disabled(client):
+    char_id, cid, msg_id = await _create_tts_conversation(client)
+    resp = await client.post(
+        f"/api/conversations/{cid}/messages/{msg_id}/speak-chunk",
+        json={"chunk_index": 0},
+    )
+    assert resp.status_code == 403
+
+
+async def test_speak_chunk_no_dialogue_empty_audio(client, monkeypatch, tmp_path):
+    """Messages with no extractable dialogue should return 400 on speak-chunk."""
+    _char_id, cid, msg_id, _adapter = await _setup_tts_env(
+        client,
+        monkeypatch,
+        tmp_path,
+        first_mes="*She looks away silently.*",
+    )
+
+    resp = await client.post(
+        f"/api/conversations/{cid}/messages/{msg_id}/speak-chunk",
+        json={"chunk_index": 0},
+    )
+    assert resp.status_code == 400  # No chunks to speak

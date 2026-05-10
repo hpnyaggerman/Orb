@@ -41,7 +41,13 @@ export function refreshTtsBar() {
     progress.style.width = "0%";
   }
   const text = bar.querySelector(".tts-text");
-  if (text) text.textContent = isLoading ? "Generating speech…" : "Speaking…";
+  if (text) {
+    const chunkInfo =
+      S.speakingChunkTotal != null && S.speakingChunkIdx != null
+        ? ` (${S.speakingChunkIdx + 1}/${S.speakingChunkTotal})`
+        : "";
+    text.textContent = isLoading ? `Generating speech${chunkInfo}…` : `Speaking${chunkInfo}…`;
+  }
 }
 
 export function setTtsVolumeLive(value) {
