@@ -1907,6 +1907,11 @@ export function hideAvatarPopup() {
 // ── TTS / Speak ──────────────────────────────────────────────
 
 let _currentAudio = null; // Used for monolithic fallback playback
+let _currentAudioUrl = null; // Blob URL for monolithic audio — must revoke on cleanup
+
+// Monotonically increasing token for the whole TTS subsystem.
+// Incremented by stopSpeaking(), speakMessageAction(), and playChunkQueue().
+let _ttsGeneration = 0;
 
 const _chunkQueue = {
   playbackId: 0,
@@ -1917,7 +1922,7 @@ const _chunkQueue = {
   timer: null,
   audioUrl: null,
   // Prefetch state for full-message sequential playback
-  _prefetch: null, // { chunkIdx, promise } — resolved { audioUrl }
+  _prefetch: null, // { chunkIdx, promise, revoked } — resolved { audioUrl }
 };
 
 function resetTtsPlaybackState() {
@@ -2012,7 +2017,7 @@ function onQuotedSpanClick(e) {
     e.preventDefault();
     playSingleChunk(msgId, Number(chunkIdxAttr));
   } else {
-    // Not annotated yet — fetch chunks, annotate, find the clicked span, play it
+    // Not annotated yet — fetch chunks, annotate, read back the span's chunk idx
     e.preventDefault();
     (async () => {
       try {
@@ -2023,13 +2028,10 @@ function onQuotedSpanClick(e) {
         }
         S.chunkAnnotations[msgId] = data.chunks;
         annotateChunkSpans(msgId, data.chunks);
-        // Re-query the span — it may now have data-chunk-idx
-        const reQueried = msgEl.querySelector(`.msg-body span.quoted[data-original-click-target]`);
-        // Match the clicked span to a chunk by its text
-        const clickedText = span.textContent.replace(/^[\u201c"]|[\u201d"]$/g, "").trim();
-        const matchedChunk = data.chunks.find((c) => c.original_text.trim() === clickedText);
-        if (matchedChunk != null) {
-          playSingleChunk(msgId, matchedChunk.index);
+        // After annotation, the clicked span should now have data-chunk-idx
+        const assignedIdx = span.getAttribute("data-chunk-idx");
+        if (assignedIdx != null) {
+          playSingleChunk(msgId, Number(assignedIdx));
         } else {
           toast("Could not match dialogue line to TTS chunk", "error");
         }
@@ -2056,8 +2058,11 @@ function _stopChunkQueue() {
     URL.revokeObjectURL(_chunkQueue.audioUrl);
     _chunkQueue.audioUrl = null;
   }
+  // Revoke any prefetched blob URL that hasn't been consumed
   if (_chunkQueue._prefetch) {
-    _chunkQueue._prefetch = null; // let GC collect the blob URL after promise resolves
+    const pf = _chunkQueue._prefetch;
+    pf.revoked = true; // signal to the .then() handler to revoke when resolved
+    _chunkQueue._prefetch = null;
   }
   const prevMsgId = _chunkQueue.msgId;
   _chunkQueue.msgId = null;
@@ -2112,8 +2117,15 @@ async function playNextChunk() {
     let audioUrl;
 
     if (_chunkQueue._prefetch && _chunkQueue._prefetch.chunkIdx === chunkIdx) {
-      audioUrl = (await _chunkQueue._prefetch.promise).audioUrl;
+      // Treat failed prefetch as cache miss — fall back to normal fetch
+      const prefetched = await _chunkQueue._prefetch.promise;
       _chunkQueue._prefetch = null;
+      if (prefetched?.audioUrl) {
+        audioUrl = prefetched.audioUrl;
+      } else {
+        const result = await apiSpeakChunk(S.activeConvId, msgId, chunkIdx);
+        audioUrl = result.audioUrl;
+      }
     } else {
       const result = await apiSpeakChunk(S.activeConvId, msgId, chunkIdx);
       audioUrl = result.audioUrl;
@@ -2132,11 +2144,17 @@ async function playNextChunk() {
     // Prefetch next chunk during playback (only for full-message queue)
     if (isMultiChunk && currentIdx + 1 < chunks.length) {
       const nextChunkIdx = chunks[currentIdx + 1];
-      const prefetchPromise = apiSpeakChunk(S.activeConvId, msgId, nextChunkIdx).catch(() => null);
-      _chunkQueue._prefetch = {
-        chunkIdx: nextChunkIdx,
-        promise: prefetchPromise,
-      };
+      const prefetchEntry = { chunkIdx: nextChunkIdx, promise: null, revoked: false };
+      prefetchEntry.promise = apiSpeakChunk(S.activeConvId, msgId, nextChunkIdx)
+        .catch(() => null)
+        .then((result) => {
+          // If the queue was stopped while we were fetching, revoke the blob URL
+          if (prefetchEntry.revoked && result?.audioUrl) {
+            URL.revokeObjectURL(result.audioUrl);
+          }
+          return result;
+        });
+      _chunkQueue._prefetch = prefetchEntry;
     }
 
     audio.onloadedmetadata = () => {
@@ -2191,11 +2209,16 @@ async function playNextChunk() {
 
 function playChunkQueue(msgId, chunkIndices) {
   const previousMsgId = S.speakingMsgId;
+  _ttsGeneration++;
   _stopChunkQueue();
   // Also stop monolithic audio if running
   if (_currentAudio) {
     _currentAudio.pause();
     _currentAudio = null;
+  }
+  if (_currentAudioUrl) {
+    URL.revokeObjectURL(_currentAudioUrl);
+    _currentAudioUrl = null;
   }
   clearAllHighlights(previousMsgId);
 
@@ -2226,12 +2249,17 @@ export async function speakMessageAction(msgId, opts = {}) {
 
   _ensureChunkClickDelegation();
 
+  const myGen = ++_ttsGeneration;
   const previousMsgId = S.speakingMsgId;
   // Stop any existing playback
   _stopChunkQueue();
   if (_currentAudio) {
     _currentAudio.pause();
     _currentAudio = null;
+  }
+  if (_currentAudioUrl) {
+    URL.revokeObjectURL(_currentAudioUrl);
+    _currentAudioUrl = null;
   }
   clearAllHighlights(previousMsgId);
 
@@ -2246,6 +2274,7 @@ export async function speakMessageAction(msgId, opts = {}) {
   try {
     // Try chunk-based playback first
     const data = await apiGetMessageChunks(S.activeConvId, msgId);
+    if (_ttsGeneration !== myGen) return; // stale — another speak/stop intervened
 
     if (data.chunks && data.chunks.length > 0) {
       // Cache chunk metadata and annotate DOM
@@ -2259,17 +2288,24 @@ export async function speakMessageAction(msgId, opts = {}) {
 
     // Fallback: no extractable chunks — use monolithic /speak
     const { audioUrl } = await apiSpeakMessage(S.activeConvId, msgId);
+    if (_ttsGeneration !== myGen) {
+      URL.revokeObjectURL(audioUrl);
+      return;
+    }
 
     const audio = new Audio(audioUrl);
     audio.volume = Math.max(0, Math.min(1, S.ttsVolume ?? 0.75));
     _currentAudio = audio;
+    _currentAudioUrl = audioUrl;
 
     audio.onloadedmetadata = () => {
+      if (_ttsGeneration !== myGen) return;
       S.ttsDuration = Number.isFinite(audio.duration) ? audio.duration : 0;
       refreshTtsBar();
     };
 
     audio.ontimeupdate = () => {
+      if (_ttsGeneration !== myGen) return;
       S.ttsCurrentTime = audio.currentTime || 0;
       S.ttsDuration = Number.isFinite(audio.duration) ? audio.duration : S.ttsDuration;
       refreshTtsBar();
@@ -2279,6 +2315,10 @@ export async function speakMessageAction(msgId, opts = {}) {
       const endedMsgId = S.speakingMsgId;
       resetTtsPlaybackState();
       _currentAudio = null;
+      if (_currentAudioUrl) {
+        URL.revokeObjectURL(_currentAudioUrl);
+        _currentAudioUrl = null;
+      }
       refreshTtsMessageToolbars(endedMsgId);
       refreshTtsBar();
     };
@@ -2288,6 +2328,10 @@ export async function speakMessageAction(msgId, opts = {}) {
       resetTtsPlaybackState();
       S.ttsError = "Audio playback failed";
       _currentAudio = null;
+      if (_currentAudioUrl) {
+        URL.revokeObjectURL(_currentAudioUrl);
+        _currentAudioUrl = null;
+      }
       refreshTtsMessageToolbars(erroredMsgId);
       refreshTtsBar();
     };
@@ -2297,10 +2341,15 @@ export async function speakMessageAction(msgId, opts = {}) {
     refreshTtsBar();
     await audio.play();
   } catch (err) {
+    if (_ttsGeneration !== myGen) return;
     const erroredMsgId = S.speakingMsgId;
     resetTtsPlaybackState();
     S.ttsError = err.message || "TTS failed";
     _currentAudio = null;
+    if (_currentAudioUrl) {
+      URL.revokeObjectURL(_currentAudioUrl);
+      _currentAudioUrl = null;
+    }
     refreshTtsMessageToolbars(erroredMsgId);
     refreshTtsBar();
     if (!opts.silentErrors) toast(S.ttsError, "error");
@@ -2308,12 +2357,17 @@ export async function speakMessageAction(msgId, opts = {}) {
 }
 
 export function stopSpeaking() {
+  _ttsGeneration++;
   const stoppedMsgId = S.speakingMsgId;
   const prevChunkMsgId = _chunkQueue.msgId;
   _stopChunkQueue();
   if (_currentAudio) {
     _currentAudio.pause();
     _currentAudio = null;
+  }
+  if (_currentAudioUrl) {
+    URL.revokeObjectURL(_currentAudioUrl);
+    _currentAudioUrl = null;
   }
   clearAllHighlights(stoppedMsgId || prevChunkMsgId);
   resetTtsPlaybackState();
