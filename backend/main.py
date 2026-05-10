@@ -1509,12 +1509,18 @@ async def api_get_message_director_log(cid: str, msg_id: int):
             "tool_calls": [],
             "injection_block": "",
             "agent_latency_ms": 0,
+            "reasoning_director": "",
+            "reasoning_writer": "",
+            "reasoning_editor": "",
         }
     return {
         "active_moods": log.get("active_moods_after", []),
         "tool_calls": log.get("tool_calls", []),
         "injection_block": log.get("injection_block", ""),
         "agent_latency_ms": log.get("agent_latency_ms", 0),
+        "reasoning_director": log.get("reasoning_director") or "",
+        "reasoning_writer": log.get("reasoning_writer") or "",
+        "reasoning_editor": log.get("reasoning_editor") or "",
     }
 
 

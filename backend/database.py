@@ -698,6 +698,9 @@ async def init_db():
             await db.execute(
                 "ALTER TABLE conversation_logs ADD COLUMN message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL"
             )
+        for _col in ("reasoning_director", "reasoning_writer", "reasoning_editor"):
+            if _col not in log_cols:
+                await db.execute(f"ALTER TABLE conversation_logs ADD COLUMN {_col} TEXT")
 
         # Seed settings if empty
         row = list(await db.execute_fetchall("SELECT COUNT(*) as c FROM settings"))
@@ -1770,11 +1773,14 @@ async def add_conversation_log(
     latency_ms: int,
     progressive_fields: dict | None = None,
     message_id: int | None = None,
+    reasoning_director: str = "",
+    reasoning_writer: str = "",
+    reasoning_editor: str = "",
 ):
     async with get_db() as db:
         now = datetime.now(timezone.utc).isoformat()
         await db.execute(
-            "INSERT INTO conversation_logs (conversation_id, turn_index, agent_raw_output, tool_calls, active_moods_after, progressive_fields_after, injection_block, agent_latency_ms, created_at, message_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO conversation_logs (conversation_id, turn_index, agent_raw_output, tool_calls, active_moods_after, progressive_fields_after, injection_block, agent_latency_ms, created_at, message_id, reasoning_director, reasoning_writer, reasoning_editor) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 cid,
                 turn_index,
@@ -1786,6 +1792,9 @@ async def add_conversation_log(
                 latency_ms,
                 now,
                 message_id,
+                reasoning_director,
+                reasoning_writer,
+                reasoning_editor,
             ),
         )
         await db.commit()
@@ -1835,6 +1844,9 @@ async def get_director_log_for_message(message_id: int) -> dict | None:
         d = dict(rows[0])
         d["tool_calls"] = json.loads(d["tool_calls"]) if d["tool_calls"] else []
         d["active_moods_after"] = json.loads(d["active_moods_after"]) if d["active_moods_after"] else []
+        d.setdefault("reasoning_director", "")
+        d.setdefault("reasoning_writer", "")
+        d.setdefault("reasoning_editor", "")
         return d
 
 

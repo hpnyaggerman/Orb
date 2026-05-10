@@ -80,6 +80,9 @@ async def _run_pipeline(
     agent_raw, calls, latency = "", [], 0
     rewritten_msg: str | None = None
     extra_fields: dict = {}
+    reasoning_director_text = ""
+    reasoning_writer_text = ""
+    reasoning_editor_text = ""
     progressive_fields: dict = {}
     effective_msg = user_message
 
@@ -144,6 +147,7 @@ async def _run_pipeline(
             progressive_state=progressive_state,
         ):
             if event["type"] == "reasoning":
+                reasoning_director_text += event["delta"]
                 yield {
                     "event": "reasoning",
                     "data": {"pass": "director", "delta": event["delta"]},
@@ -221,6 +225,7 @@ async def _run_pipeline(
         reasoning_on=writer_reasoning_on,
     ):
         if item["type"] == "reasoning":
+            reasoning_writer_text += item["delta"]
             yield {
                 "event": "reasoning",
                 "data": {"pass": "writer", "delta": item["delta"]},
@@ -242,6 +247,8 @@ async def _run_pipeline(
             "inj_block": inj_block,
             "extra_fields": extra_fields,
             "progressive_fields": progressive_fields,
+            "reasoning_director": reasoning_director_text,
+            "reasoning_writer": reasoning_writer_text,
         },
     }
 
@@ -273,6 +280,7 @@ async def _run_pipeline(
                 writer_user_msg=writer_content,
             ):
                 if event["type"] == "reasoning":
+                    reasoning_editor_text += event["delta"]
                     yield {
                         "event": "reasoning",
                         "data": {"pass": "editor", "delta": event["delta"]},
@@ -296,6 +304,8 @@ async def _run_pipeline(
                         }
         except Exception as e:
             logger.error("editor pass failed, keeping original: %s", e, exc_info=True)
+        if reasoning_editor_text:
+            yield {"event": "_editor_reasoning", "data": {"reasoning_editor": reasoning_editor_text}}
     elif not do_edit:
         logger.info("Editor pass skipped (do_edit=%s)", do_edit)
 
@@ -593,6 +603,7 @@ async def _consume_pipeline(
     res: dict = {}
     asst_id = None
     persisted = False
+    log_saved = False
     accumulated_text = ""
 
     try:
@@ -605,14 +616,17 @@ async def _consume_pipeline(
                 res = event["data"]
                 asst_id = await _persist_result(conversation_id, res, settings, user_msg_id, turn_index)
                 persisted = True
-                if extra_on_result:
-                    await extra_on_result(res, asst_id)
+            elif etype == "_editor_reasoning":
+                res["reasoning_editor"] = event["data"]["reasoning_editor"]
             elif etype == "_refined_result":
                 res["resp_text"] = event["data"]["resp_text"]
                 if asst_id:
                     await db.update_message_content(asst_id, res["resp_text"])
             else:
                 yield event
+        if extra_on_result and persisted:
+            await extra_on_result(res, asst_id)
+            log_saved = True
     finally:
         if not persisted:
             await _shielded_fallback(
@@ -623,6 +637,11 @@ async def _consume_pipeline(
                 turn_index,
                 accumulated_text,
             )
+        elif extra_on_result and not log_saved:
+            try:
+                await extra_on_result(res, asst_id)
+            except Exception:
+                logger.exception("Failed to save conversation log after pipeline abort")
 
     yield {"event": "done"}
 
@@ -713,6 +732,9 @@ async def handle_turn(
                 res["latency"],
                 res.get("progressive_fields"),
                 message_id=asst_id,
+                reasoning_director=res.get("reasoning_director", ""),
+                reasoning_writer=res.get("reasoning_writer", ""),
+                reasoning_editor=res.get("reasoning_editor", ""),
             )
 
         pipeline = _run_pipeline(
@@ -804,6 +826,9 @@ async def handle_regenerate(
                 res["latency"],
                 res.get("progressive_fields"),
                 message_id=asst_id,
+                reasoning_director=res.get("reasoning_director", ""),
+                reasoning_writer=res.get("reasoning_writer", ""),
+                reasoning_editor=res.get("reasoning_editor", ""),
             )
 
         async for event in _consume_pipeline(
@@ -907,6 +932,9 @@ async def handle_super_regenerate(
                 res["latency"],
                 res.get("progressive_fields"),
                 message_id=asst_id,
+                reasoning_director=res.get("reasoning_director", ""),
+                reasoning_writer=res.get("reasoning_writer", ""),
+                reasoning_editor=res.get("reasoning_editor", ""),
             )
 
         # Save result as a sibling of the original: same parent_id and turn_index.

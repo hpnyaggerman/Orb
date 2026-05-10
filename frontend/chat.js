@@ -345,6 +345,11 @@ export async function selectConversation(id) {
   const oldWorldId = (S.allCharacters || []).find((c) => c.id === S.activeCharId)?.world_id || null;
   S.activeConvId = id;
   S.lastDirectorData = null;
+  S.reasoningDirector = "";
+  S.reasoningWriter = "";
+  S.reasoningEditor = "";
+  S.reasoningPassActive = 0;
+  S.reasoningPassSelected = 0;
   const conv = S.conversations.find((c) => c.id === id);
   if (conv?.character_card_id && S.activeCharId !== conv.character_card_id) {
     S.activeCharId = conv.character_card_id;
@@ -378,7 +383,12 @@ export async function selectConversation(id) {
   S.editingMsgId = null;
   S.magicInputMsgId = null;
   renderMessages();
-  clearInspectedMessage();
+  const lastAsst = [...S.messages].reverse().find((m) => m.role === "assistant" && m.id);
+  if (lastAsst) {
+    await inspectMessage(lastAsst.id);
+  } else {
+    clearInspectedMessage();
+  }
   scrollToBottom();
 }
 
@@ -895,6 +905,13 @@ export async function inspectMessage(msgId) {
   try {
     S.inspectedMsgId = msgId;
     S.inspectedDirectorData = await api.get(convUrl(S.activeConvId, "messages", msgId, "director-log"));
+    S.reasoningDirector = S.inspectedDirectorData.reasoning_director || "";
+    S.reasoningWriter = S.inspectedDirectorData.reasoning_writer || "";
+    S.reasoningEditor = S.inspectedDirectorData.reasoning_editor || "";
+    const highestPassIdx = S.reasoningEditor ? 2 : S.reasoningWriter ? 1 : 0;
+    S.reasoningPassActive = highestPassIdx;
+    S.reasoningPassSelected = highestPassIdx;
+    S.reasoningUserOverride = false;
     renderInspector();
   } catch (e) {
     // If the log doesn't exist (e.g. very old messages before logs were added), silently ignore
