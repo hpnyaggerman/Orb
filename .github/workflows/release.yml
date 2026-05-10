@@ -1,0 +1,49 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  compatibility:
+    name: Compatibility (Python ${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.9", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build image
+        run: |
+          docker build \
+            -f tests/Dockerfile.${{ matrix.python-version }} \
+            -t orb-app:${{ matrix.python-version }} \
+            .
+
+      - name: Start container
+        run: |
+          docker run -d \
+            --name orb-test \
+            -p 9899:8899 \
+            orb-app:${{ matrix.python-version }}
+
+      - name: Wait for server
+        run: |
+          for i in $(seq 1 30); do
+            if docker logs orb-test 2>&1 | grep -q "Uvicorn running on"; then
+              exit 0
+            fi
+            sleep 1
+          done
+          docker logs orb-test
+          exit 1
+
+      - name: Smoke test HTTP
+        run: curl -sf http://localhost:9899/
+
+      - name: Dump logs on failure
+        if: failure()
+        run: docker logs orb-test
