@@ -1916,6 +1916,8 @@ const _chunkQueue = {
   audio: null,
   timer: null,
   audioUrl: null,
+  // Prefetch state for full-message sequential playback
+  _prefetch: null, // { chunkIdx, promise } — resolved { audioUrl }
 };
 
 function resetTtsPlaybackState() {
@@ -2054,6 +2056,9 @@ function _stopChunkQueue() {
     URL.revokeObjectURL(_chunkQueue.audioUrl);
     _chunkQueue.audioUrl = null;
   }
+  if (_chunkQueue._prefetch) {
+    _chunkQueue._prefetch = null; // let GC collect the blob URL after promise resolves
+  }
   const prevMsgId = _chunkQueue.msgId;
   _chunkQueue.msgId = null;
   _chunkQueue.chunks = [];
@@ -2099,7 +2104,18 @@ async function playNextChunk() {
   refreshTtsBar();
 
   try {
-    const { audioUrl } = await apiSpeakChunk(S.activeConvId, msgId, chunkIdx);
+    // Use prefetched audio if available and still valid, otherwise fetch
+    const isMultiChunk = chunks.length > 1;
+    let audioUrl;
+
+    if (_chunkQueue._prefetch && _chunkQueue._prefetch.chunkIdx === chunkIdx) {
+      audioUrl = (await _chunkQueue._prefetch.promise).audioUrl;
+      _chunkQueue._prefetch = null;
+    } else {
+      const result = await apiSpeakChunk(S.activeConvId, msgId, chunkIdx);
+      audioUrl = result.audioUrl;
+    }
+
     if (_chunkQueue.playbackId !== myPlaybackId) {
       URL.revokeObjectURL(audioUrl);
       return;
@@ -2109,6 +2125,16 @@ async function playNextChunk() {
     audio.volume = Math.max(0, Math.min(1, S.ttsVolume ?? 0.75));
     _chunkQueue.audio = audio;
     _chunkQueue.audioUrl = audioUrl;
+
+    // Prefetch next chunk during playback (only for full-message queue)
+    if (isMultiChunk && currentIdx + 1 < chunks.length) {
+      const nextChunkIdx = chunks[currentIdx + 1];
+      const prefetchPromise = apiSpeakChunk(S.activeConvId, msgId, nextChunkIdx).catch(() => null);
+      _chunkQueue._prefetch = {
+        chunkIdx: nextChunkIdx,
+        promise: prefetchPromise,
+      };
+    }
 
     audio.onloadedmetadata = () => {
       if (_chunkQueue.playbackId !== myPlaybackId) return;
