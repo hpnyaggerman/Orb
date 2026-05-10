@@ -90,7 +90,7 @@ Orb/
 │   ├── tts/
 │   │   ├── base.py          # TTSAdapter abstract base class
 │   │   ├── router.py        # Adapter registry, routes backend name → adapter class
-│   │   ├── cache.py         # Audio file cache keyed by text + voice params
+│   │   ├── cache.py         # Audio file cache keyed by text + voice params. Per-chunk caching helpers.
 │   │   ├── regex_extractor.py # Speech/non-speech chunk splitting
 │   │   ├── edge_adapter.py      # Edge TTS (free, local)
 │   │   ├── elevenlabs_adapter.py # ElevenLabs API
@@ -103,7 +103,7 @@ Orb/
 │   ├── app.js               # Bootstrap: wire up sidebar, tabs, modals
 │   ├── state.js             # Global state object (S.*), reactive getters
 │   ├── api.js               # All fetch() calls to backend
-│   ├── chat.js              # Chat rendering, message display, Inspector, streaming
+│   ├── chat.js              # Chat rendering, message display, Inspector, streaming, TTS chunk queue player
 │   ├── voice.js             # TTS UI controls, speak buttons, voice settings
 │   ├── library.js           # Character card grid/list, CRUD UI
 │   ├── settings.js          # Settings panel, endpoint/model config UI
@@ -249,7 +249,9 @@ erDiagram
 - `GET /api/tts/models` — List models for a backend
 - `POST /api/tts/preview` — Preview TTS output
 - `GET/PUT /api/characters/{id}/voice-profile` — Per-character voice settings
-- `POST /api/conversations/{cid}/messages/{id}/speak` — Generate speech for message
+- `POST /api/conversations/{cid}/messages/{id}/speak` — Generate speech for message (monolithic, all chunks)
+- `GET /api/conversations/{cid}/messages/{id}/chunks` — Return chunk metadata (text, emotion, pause_before_ms, index)
+- `POST /api/conversations/{cid}/messages/{id}/speak-chunk` — Synthesize single chunk by index (per-chunk caching)
 
 ### Fragments & Moods
 - `GET/POST /api/fragments` — List/create mood fragments
@@ -326,6 +328,17 @@ flowchart LR
 ```
 
 Each character card has a voice profile (`voice_profiles` table) selecting backend, voice ID, language, rate, pitch. The regex extractor splits text into dialogue and narration chunks; only dialogue is spoken by default.
+
+### Click-to-Speak & Chunk Queue
+
+Users can click individual quoted dialogue lines to hear just that chunk, or play the full message with sequential chunk playback and karaoke highlighting:
+
+1. `GET /chunks` returns ordered chunk metadata for a message
+2. Frontend annotates `<span class="quoted">` elements with `data-chunk-idx`
+3. Click a span → `POST /speak-chunk` for that index → single chunk playback
+4. Full speak → chunk queue player plays chunks sequentially, highlighting each in turn
+5. Prefetch: during chunk N playback, chunk N+1 audio is fetched in the background to eliminate gaps
+6. Messages without extractable dialogue (narration-only) fall back to monolithic `/speak`
 
 ## Context Management
 
@@ -409,7 +422,7 @@ When running under Codex's filesystem/network sandbox, `aiosqlite` integration t
 
 10. **Lorebook scan depth** — Hard-coded to 6 messages (`LOREBOOK_SCAN_DEPTH` in `prompt_builder.py`). Only the last 6 messages are scanned for lorebook keyword matches.
 
-11. **TTS regex extractor** — Splits text into speech/non-speech chunks using quotation marks. The `regex_extractor.py` handles edge cases (nested quotes, em-dashes) but isn't perfect for all writing styles. Only speech chunks are sent to the TTS backend.
+11. **TTS regex extractor and chunk playback** — Splits text into speech/non-speech chunks using quotation marks. The `regex_extractor.py` handles edge cases (nested quotes, em-dashes) but isn't perfect for all writing styles. Only speech chunks are sent to the TTS backend. Chunk indices from the backend must stay in sync with frontend `<span class="quoted">` elements — the `annotateChunkSpans()` function matches by `original_text` with consumed-span tracking to handle duplicate dialogue. The chunk queue player uses a `playbackId` monotonic token to prevent stale async continuations when stopping/restarting.
 
 12. **Agent endpoint separation** — Both the Director and Editor can use separate endpoints from the Writer (`agent_endpoint_id` in settings). If `agent_same_as_writer` is true, they share. When using a separate endpoint, note that a different prompt caching mechanism applies, and the instruction prompt has a small difference. Make sure to check which endpoint you're targeting when modifying agent-related code.
 
