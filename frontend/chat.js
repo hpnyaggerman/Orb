@@ -960,6 +960,7 @@ export async function deleteMessage(msgId) {
     async () => {
       try {
         setMessages(await api.del(convUrl(S.activeConvId, "messages", msgId)));
+        delete S.chunkAnnotations[msgId];
         S.lastDirectorData = null;
         // Re-fetch director state so moods are correct after deletion
         S.directorState = await api.get(convUrl(S.activeConvId, "director"));
@@ -1018,6 +1019,8 @@ export async function saveEdit(msgId, role) {
   const trimmed = content.trim();
   S.editingMsgId = null;
   S.editingPendingUserMsg = false;
+  // Invalidate stale chunk annotations for this message
+  delete S.chunkAnnotations[msgId];
 
   try {
     await api.post(convUrl(S.activeConvId, "messages", msgId, "edit"), { content, regenerate: false });

@@ -125,7 +125,9 @@ from .tts.cache import (
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-FRONTEND_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend")
+FRONTEND_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend"
+)
 
 
 _TTS_EVICT_INTERVAL = 30 * 60  # 30 minutes
@@ -579,7 +581,9 @@ async def api_list_mood_fragments():
 async def api_create_mood_fragment(data: MoodFragmentCreate):
     existing = await get_mood_fragment(data.id)
     if existing:
-        raise HTTPException(status_code=400, detail="Mood fragment with this ID already exists")
+        raise HTTPException(
+            status_code=400, detail="Mood fragment with this ID already exists"
+        )
     return await create_mood_fragment(data.model_dump())
 
 
@@ -594,7 +598,9 @@ async def api_update_mood_fragment(fid: str, data: MoodFragmentUpdate):
 @app.delete("/api/fragments/{fid}")
 async def api_delete_mood_fragment(fid: str):
     if not await delete_mood_fragment(fid):
-        raise HTTPException(status_code=404, detail="Mood fragment not found or is built-in")
+        raise HTTPException(
+            status_code=404, detail="Mood fragment not found or is built-in"
+        )
     return {"ok": True}
 
 
@@ -610,10 +616,14 @@ async def api_list_director_fragments():
 async def api_create_director_fragment(data: DirectorFragmentCreate):
     existing = await get_director_fragment(data.id)
     if existing:
-        raise HTTPException(status_code=400, detail="Director fragment with this ID already exists")
+        raise HTTPException(
+            status_code=400, detail="Director fragment with this ID already exists"
+        )
     result = await create_director_fragment(data.model_dump())
     if not result:
-        raise HTTPException(status_code=500, detail="Failed to create director fragment")
+        raise HTTPException(
+            status_code=500, detail="Failed to create director fragment"
+        )
     return result
 
 
@@ -670,7 +680,9 @@ async def require_world(world_id: str) -> dict:
     return world
 
 
-async def require_lorebook_entry(entry_id: int, world: dict = Depends(require_world)) -> dict:  # noqa: B008
+async def require_lorebook_entry(
+    entry_id: int, world: dict = Depends(require_world)
+) -> dict:  # noqa: B008
     entry = await get_lorebook_entry(entry_id)
     if not entry or entry.get("world_id") != world["id"]:
         raise HTTPException(status_code=404, detail="Entry not found")
@@ -683,7 +695,9 @@ async def api_list_lorebook_entries(world: dict = Depends(require_world)):  # no
 
 
 @app.post("/api/worlds/{world_id}/entries")
-async def api_create_lorebook_entry(data: LorebookEntryCreate, world: dict = Depends(require_world)):  # noqa: B008
+async def api_create_lorebook_entry(
+    data: LorebookEntryCreate, world: dict = Depends(require_world)
+):  # noqa: B008
     return await create_lorebook_entry(world["id"], data.model_dump())
 
 
@@ -699,7 +713,9 @@ async def api_update_lorebook_entry(
     data: LorebookEntryUpdate,
     entry: dict = Depends(require_lorebook_entry),  # noqa: B008
 ):
-    result = await update_lorebook_entry(entry["id"], data.model_dump(exclude_unset=True))
+    result = await update_lorebook_entry(
+        entry["id"], data.model_dump(exclude_unset=True)
+    )
     if not result:
         raise HTTPException(status_code=404, detail="Entry not found")
     return result
@@ -751,7 +767,9 @@ async def api_import_lorebook(world_id: str, payload: LorebookImportPayload):
         # Tavern V2 character_book: [...]
         items = raw_entries
     else:
-        raise HTTPException(status_code=422, detail="entries must be an object or array")
+        raise HTTPException(
+            status_code=422, detail="entries must be an object or array"
+        )
 
     created = []
     for item in items:
@@ -785,7 +803,9 @@ async def api_create_phrase_group(data: PhraseGroupCreate):
     # Validate all variants are strings
     for v in data.variants:
         if not isinstance(v, str) or not v.strip():
-            raise HTTPException(status_code=400, detail="All variants must be non-empty strings")
+            raise HTTPException(
+                status_code=400, detail="All variants must be non-empty strings"
+            )
     group_id = await add_phrase_group(data.variants)
     return {"id": group_id, "variants": data.variants}
 
@@ -798,7 +818,9 @@ async def api_update_phrase_group(group_id: int, data: PhraseGroupUpdate):
     # Validate all variants are strings
     for v in data.variants:
         if not isinstance(v, str) or not v.strip():
-            raise HTTPException(status_code=400, detail="All variants must be non-empty strings")
+            raise HTTPException(
+                status_code=400, detail="All variants must be non-empty strings"
+            )
     success = await update_phrase_group(group_id, data.variants)
     if not success:
         raise HTTPException(status_code=404, detail="Phrase group not found")
@@ -905,7 +927,9 @@ async def api_create_conversation(data: ConversationCreate):
 
     # If there's a first message, auto-add it as the first assistant turn
     if first_mes.strip():
-        msg_id = await add_message(cid, "assistant", first_mes.strip(), 0, attachments=None)
+        msg_id = await add_message(
+            cid, "assistant", first_mes.strip(), 0, attachments=None
+        )
         await set_active_leaf(cid, msg_id)
 
         # If we have a character card with alternate greetings, create swipe versions
@@ -915,7 +939,9 @@ async def api_create_conversation(data: ConversationCreate):
                 alternate_greetings = card.get("alternate_greetings", [])
                 count = await insert_alternate_greeting_swipes(cid, alternate_greetings)
                 if count:
-                    logger.info(f"Created {count} alternate greeting swipes for conversation {cid}")
+                    logger.info(
+                        f"Created {count} alternate greeting swipes for conversation {cid}"
+                    )
 
     return conv
 
@@ -945,10 +971,14 @@ async def api_update_conversation(cid: str, data: ConversationUpdate):
 
 
 @app.post("/api/conversations/{cid}/summarize")
-async def api_summarize_conversation(cid: str, data: SummarizeRequest, request: Request):
+async def api_summarize_conversation(
+    cid: str, data: SummarizeRequest, request: Request
+):
     """Stream a narrative summary of the conversation history, excluding the last keep_count messages."""
     if data.keep_count not in (2, 4, 6, 8):
-        raise HTTPException(status_code=400, detail="keep_count must be one of 2, 4, 6, 8")
+        raise HTTPException(
+            status_code=400, detail="keep_count must be one of 2, 4, 6, 8"
+        )
 
     conv = await get_conversation(cid)
     if not conv:
@@ -963,10 +993,18 @@ async def api_summarize_conversation(cid: str, data: SummarizeRequest, request: 
     settings = await get_settings()
     char_name = conv.get("character_name", "Character") or "Character"
     active_persona_id = settings.get("active_persona_id")
-    active_persona = await get_user_persona(active_persona_id) if active_persona_id else None
-    system_prompt, char_persona, mes_example = await resolve_char_context(conv, settings)
+    active_persona = (
+        await get_user_persona(active_persona_id) if active_persona_id else None
+    )
+    system_prompt, char_persona, mes_example = await resolve_char_context(
+        conv, settings
+    )
     macros = Macros.from_settings(settings, char_name, active_persona)
-    user_description = active_persona.get("description", "") if active_persona else settings.get("user_description", "")
+    user_description = (
+        active_persona.get("description", "")
+        if active_persona
+        else settings.get("user_description", "")
+    )
 
     client = LLMClient(
         settings["endpoint_url"],
@@ -979,7 +1017,11 @@ async def api_summarize_conversation(cid: str, data: SummarizeRequest, request: 
         char_persona,
         conv.get("character_scenario", "") or "",
         mes_example,
-        ("" if settings.get("prevent_prompt_overrides") else conv.get("post_history_instructions", "")),
+        (
+            ""
+            if settings.get("prevent_prompt_overrides")
+            else conv.get("post_history_instructions", "")
+        ),
         history_slice,
         macros,
         user_description,
@@ -988,7 +1030,9 @@ async def api_summarize_conversation(cid: str, data: SummarizeRequest, request: 
 
     async def _gen():
         try:
-            async for delta in summarizer.stream(llm_messages, settings.get("model_name", "")):
+            async for delta in summarizer.stream(
+                llm_messages, settings.get("model_name", "")
+            ):
                 yield {"event": "token", "data": delta}
             yield {"event": "done", "data": ""}
         except Exception as e:
@@ -1005,7 +1049,9 @@ async def api_summarize_conversation(cid: str, data: SummarizeRequest, request: 
 async def api_compress_conversation(cid: str, data: CompressRequest):
     """Create a new conversation seeded with a summary, then re-append the last keep_count messages."""
     if data.keep_count not in (2, 4, 6, 8):
-        raise HTTPException(status_code=400, detail="keep_count must be one of 2, 4, 6, 8")
+        raise HTTPException(
+            status_code=400, detail="keep_count must be one of 2, 4, 6, 8"
+        )
     if not data.summary.strip():
         raise HTTPException(status_code=400, detail="summary must not be empty")
 
@@ -1089,7 +1135,9 @@ async def api_create_character(data: CharacterCardCreate):
                 world = await create_world({"name": book_name})
                 for item in entries:
                     if isinstance(item, dict):
-                        await create_lorebook_entry(world["id"], _normalise_lorebook_entry(item))
+                        await create_lorebook_entry(
+                            world["id"], _normalise_lorebook_entry(item)
+                        )
             card_data["world_id"] = world["id"]
 
     try:
@@ -1102,7 +1150,9 @@ async def api_create_character(data: CharacterCardCreate):
 async def api_import_character(file: Annotated[UploadFile, File(...)]):
     """Import a SillyTavern-compatible character card PNG."""
     if not file.filename or not file.filename.lower().endswith(".png"):
-        raise HTTPException(status_code=400, detail="Only .png character card files are supported")
+        raise HTTPException(
+            status_code=400, detail="Only .png character card files are supported"
+        )
 
     # Save to temp file for the parser
     with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
@@ -1120,7 +1170,9 @@ async def api_import_character(file: Annotated[UploadFile, File(...)]):
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         logger.exception("Failed to parse tavern card")
-        raise HTTPException(status_code=400, detail=f"Failed to parse character card: {e}") from e
+        raise HTTPException(
+            status_code=400, detail=f"Failed to parse character card: {e}"
+        ) from e
     finally:
         os.unlink(tmp_path)
 
@@ -1193,7 +1245,9 @@ async def api_export_character(card_id: str):
         try:
             avatar_bytes = base64.b64decode(card["avatar_b64"])
         except Exception:
-            logger.warning("Avatar data for card %s is corrupt; exporting without avatar", card_id)
+            logger.warning(
+                "Avatar data for card %s is corrupt; exporting without avatar", card_id
+            )
             avatar_bytes = None
 
     card["id"] = card_id
@@ -1223,7 +1277,12 @@ async def api_export_character(card_id: str):
 
     png_bytes = tavern_cards.to_png(card, avatar_bytes)
 
-    safe_name = "".join(c for c in card.get("name", "character") if c.isalnum() or c in " _-").strip() or "character"
+    safe_name = (
+        "".join(
+            c for c in card.get("name", "character") if c.isalnum() or c in " _-"
+        ).strip()
+        or "character"
+    )
     return Response(
         content=png_bytes,
         media_type="image/png",
@@ -1430,7 +1489,9 @@ async def api_switch_branch(cid: str, msg_id: int):
 
 
 @app.post("/api/conversations/{cid}/messages/{msg_id}/regenerate")
-async def api_regenerate_msg(cid: str, msg_id: int, request: Request, data: Optional[RegenerateMsg] = None):
+async def api_regenerate_msg(
+    cid: str, msg_id: int, request: Request, data: Optional[RegenerateMsg] = None
+):
     """Regenerate a specific assistant message as a new sibling branch."""
     conv = await get_conversation(cid)
     if not conv:
@@ -1449,7 +1510,9 @@ async def api_regenerate_msg(cid: str, msg_id: int, request: Request, data: Opti
 
 
 @app.post("/api/conversations/{cid}/messages/{msg_id}/super_regenerate")
-async def api_super_regenerate_msg(cid: str, msg_id: int, request: Request, data: Optional[RegenerateMsg] = None):
+async def api_super_regenerate_msg(
+    cid: str, msg_id: int, request: Request, data: Optional[RegenerateMsg] = None
+):
     """Super-regenerate: keeps prior response as context, asks model for a different direction."""
     conv = await get_conversation(cid)
     if not conv:
@@ -1468,7 +1531,9 @@ async def api_super_regenerate_msg(cid: str, msg_id: int, request: Request, data
 
 
 @app.post("/api/conversations/{cid}/messages/{msg_id}/magic_rewrite")
-async def api_magic_rewrite_msg(cid: str, msg_id: int, request: Request, data: MagicRewriteMsg):
+async def api_magic_rewrite_msg(
+    cid: str, msg_id: int, request: Request, data: MagicRewriteMsg
+):
     """Magic rewrite: calls the LLM directly with a user-supplied direction, no agent passes."""
     conv = await get_conversation(cid)
     if not conv:
@@ -1541,7 +1606,9 @@ async def api_get_context_size(cid: str):
     settings = await get_settings()
     messages = await get_messages(cid)
     director = await get_director_state(cid) or {}
-    director_frags = [f for f in await get_director_fragments() if f.get("enabled", True)]
+    director_frags = [
+        f for f in await get_director_fragments() if f.get("enabled", True)
+    ]
     mood_frags = [f for f in await get_mood_fragments() if f.get("enabled", True)]
     lorebook_entries = await get_active_lorebook_entries()
 
@@ -1549,10 +1616,16 @@ async def api_get_context_size(cid: str):
     persona_id = settings.get("active_persona_id")
     active_persona = await get_user_persona(persona_id) if persona_id else None
     macros = Macros.from_settings(settings, conv["character_name"], active_persona)
-    user_desc = active_persona.get("description", "") if active_persona else settings.get("user_description", "")
+    user_desc = (
+        active_persona.get("description", "")
+        if active_persona
+        else settings.get("user_description", "")
+    )
 
     # Resolve character context
-    system_prompt, char_persona, mes_example = await resolve_char_context(conv, settings)
+    system_prompt, char_persona, mes_example = await resolve_char_context(
+        conv, settings
+    )
 
     # Measure each component individually
     sys_text = system_prompt or ""
@@ -1560,9 +1633,15 @@ async def api_get_context_size(cid: str):
     scenario_text = macros.resolve_message(conv.get("character_scenario", "") or "")
     mes_text = macros.resolve_message(mes_example or "")
     post_text = macros.resolve_message(
-        "" if settings.get("prevent_prompt_overrides") else (conv.get("post_history_instructions", "") or "")
+        ""
+        if settings.get("prevent_prompt_overrides")
+        else (conv.get("post_history_instructions", "") or "")
     )
-    user_persona_text = f"## User: {macros.user}\n{macros.resolve_message(user_desc)}" if user_desc else ""
+    user_persona_text = (
+        f"## User: {macros.user}\n{macros.resolve_message(user_desc)}"
+        if user_desc
+        else ""
+    )
     msg_chars = sum(len(m.get("content", "") or "") for m in messages)
 
     # Director injection
@@ -1578,8 +1657,12 @@ async def api_get_context_size(cid: str):
 
     # Lorebook injection
     scan_depth = prompt_builder.LOREBOOK_SCAN_DEPTH
-    recent_messages = messages[-scan_depth:] if len(messages) >= scan_depth else messages
-    lorebook_block = prompt_builder.compute_lorebook_injection_block(recent_messages, lorebook_entries, macros)
+    recent_messages = (
+        messages[-scan_depth:] if len(messages) >= scan_depth else messages
+    )
+    lorebook_block = prompt_builder.compute_lorebook_injection_block(
+        recent_messages, lorebook_entries, macros
+    )
 
     def est(chars):
         return max(1, round(chars / 3.5))
@@ -1620,7 +1703,9 @@ async def api_send_message(cid: str, data: SendMessage, request: Request):
     client_ref: list = []
     return _CleanupStreamingResponse(
         _sse_stream(
-            handle_turn(cid, data.content, attachments=attachments, client_ref=client_ref),
+            handle_turn(
+                cid, data.content, attachments=attachments, client_ref=client_ref
+            ),
             request,
             client_ref=client_ref,
             cid=cid,
@@ -1630,19 +1715,25 @@ async def api_send_message(cid: str, data: SendMessage, request: Request):
 
 
 @app.post("/api/conversations/{cid}/continue")
-async def api_continue_from_user(cid: str, request: Request, data: Optional[RegenerateMsg] = None):
+async def api_continue_from_user(
+    cid: str, request: Request, data: Optional[RegenerateMsg] = None
+):
     """Generate an assistant response for the current user turn without creating a new message."""
     conv = await get_conversation(cid)
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")
     messages = await get_messages(cid)
     if not messages or messages[-1]["role"] != "user":
-        raise HTTPException(status_code=400, detail="Last message is not a user message")
+        raise HTTPException(
+            status_code=400, detail="Last message is not a user message"
+        )
     user_content = messages[-1]["content"]
     client_ref: list = []
     return _CleanupStreamingResponse(
         _sse_stream(
-            handle_turn(cid, user_content, skip_user_persist=True, client_ref=client_ref),
+            handle_turn(
+                cid, user_content, skip_user_persist=True, client_ref=client_ref
+            ),
             request,
             client_ref=client_ref,
             cid=cid,
@@ -1678,7 +1769,9 @@ async def api_tts_cache_evict():
 
 
 @app.get("/api/tts/voices")
-async def api_tts_voices(backend: str = "edge", language: str = "", api_url: str = "", api_key: str = ""):
+async def api_tts_voices(
+    backend: str = "edge", language: str = "", api_url: str = "", api_key: str = ""
+):
     """List available voices for a TTS backend."""
     try:
         adapter = get_adapter(backend)
@@ -1826,7 +1919,7 @@ async def api_speak_message(cid: str, msg_id: int):
             adapter=adapter,
         )
     except ValueError:
-        raise HTTPException(500, "TTS synthesis produced no audio")
+        raise HTTPException(400, "No dialogue found for TTS")
 
     return Response(
         content=audio_bytes,
@@ -1855,6 +1948,16 @@ async def api_speak_chunk(cid: str, msg_id: int, data: SpeakChunkRequest):
     """Generate TTS audio for a single chunk of a message."""
     msg, conv, card_id, profile, adapter = await _get_tts_context(cid, msg_id)
 
+    # Validate chunk_index before cache lookup
+    chunks_meta = chunk_metadata(msg["content"], profile, adapter)
+    if not chunks_meta:
+        raise HTTPException(400, "No speakable chunks in this message")
+    if data.chunk_index < 0 or data.chunk_index >= len(chunks_meta):
+        raise HTTPException(
+            400,
+            f"chunk_index {data.chunk_index} out of range (0-{len(chunks_meta) - 1})",
+        )
+
     # Check per-chunk cache
     _cp = cache_chunk_path(cid, msg_id, data.chunk_index, profile, msg["content"])
     if os.path.exists(_cp):
@@ -1881,10 +1984,8 @@ async def api_speak_chunk(cid: str, msg_id: int, data: SpeakChunkRequest):
             content=msg["content"],
             adapter=adapter,
         )
-    except IndexError as e:
-        raise HTTPException(400, str(e))
     except ValueError:
-        raise HTTPException(500, "TTS synthesis produced no audio")
+        raise HTTPException(400, "No dialogue found for TTS")
 
     return Response(
         content=audio_bytes,

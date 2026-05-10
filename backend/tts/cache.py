@@ -19,7 +19,9 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .base import TTSAdapter
 
-TTS_CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "tts_cache")
+TTS_CACHE_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(__file__)), "data", "tts_cache"
+)
 
 
 def cache_media_type(profile: dict) -> tuple[str, str]:
@@ -135,7 +137,9 @@ def evict_expired(ttl_seconds: int = DEFAULT_TTL_SECONDS) -> int:
                 pass
     _prune_empty_dirs()
     if removed:
-        logger.info("TTS cache TTL eviction: removed %d files (ttl=%ds)", removed, ttl_seconds)
+        logger.info(
+            "TTS cache TTL eviction: removed %d files (ttl=%ds)", removed, ttl_seconds
+        )
     return removed
 
 
@@ -230,6 +234,8 @@ def chunk_metadata(content: str, profile: dict, adapter: "TTSAdapter") -> list[d
     Returns list of dicts with index, text, original_text, emotion,
     pause_before_ms, pause_after_ms.
     """
+    import re
+
     from .regex_extractor import regex_extract
 
     chunks = regex_extract(
@@ -238,15 +244,26 @@ def chunk_metadata(content: str, profile: dict, adapter: "TTSAdapter") -> list[d
         supports_emotion_tags=adapter.supports_emotion_tags,
     )
 
+    # Extract source quoted spans from original (uncleaned) content
+    # to get exact text matching the DOM's <span class="quoted"> elements.
+    # The extractor strips parentheticals and modifies text before quoting,
+    # so chunk.text can diverge from what formatProse() renders.
+    _re_quoted = re.compile(r'["\u201c]([^"\u201d]+)["\u201d]')
+    source_spans = [m.group(1).strip() for m in _re_quoted.finditer(content)]
+
     result = []
     for i, c in enumerate(chunks):
-        # For DOM matching: original_text is the dialogue without beat tags
-        # chunk.text may have tags like "[laugh] Hello" prepended
-        # We need the raw dialogue text for matching <span class="quoted"> in the DOM
-        original = c.text
         # Strip leading beat tags (format: "[tag] dialogue text")
+        original = c.text
         if original.startswith("[") and "] " in original:
             original = original[original.index("] ") + 2 :]
+
+        # If available, use the original source span text for DOM matching.
+        # This preserves parentheticals and other content that the extractor
+        # strips but formatProse() renders inside <span class="quoted">.
+        if i < len(source_spans):
+            original = source_spans[i]
+
         result.append(
             {
                 "index": i,
@@ -260,7 +277,9 @@ def chunk_metadata(content: str, profile: dict, adapter: "TTSAdapter") -> list[d
     return result
 
 
-def cache_chunk_path(cid: str, msg_id: int, chunk_index: int, profile: dict, content: str = "") -> str:
+def cache_chunk_path(
+    cid: str, msg_id: int, chunk_index: int, profile: dict, content: str = ""
+) -> str:
     """Cache path for a single chunk, keyed by chunk index + content + voice config."""
     media_type, ext = cache_media_type(profile)
     fingerprint = hashlib.md5(
@@ -270,7 +289,9 @@ def cache_chunk_path(cid: str, msg_id: int, chunk_index: int, profile: dict, con
         f"{profile.get('model', '')}|{media_type}|{content}".encode(),
         usedforsecurity=False,
     ).hexdigest()[:8]
-    return os.path.join(TTS_CACHE_DIR, cid, f"{msg_id}_c{chunk_index}_{fingerprint}.{ext}")
+    return os.path.join(
+        TTS_CACHE_DIR, cid, f"{msg_id}_c{chunk_index}_{fingerprint}.{ext}"
+    )
 
 
 async def synthesize_and_cache_chunk(
@@ -296,7 +317,9 @@ async def synthesize_and_cache_chunk(
     )
 
     if chunk_index < 0 or chunk_index >= len(chunks):
-        raise IndexError(f"chunk_index {chunk_index} out of range (0-{len(chunks) - 1})")
+        raise IndexError(
+            f"chunk_index {chunk_index} out of range (0-{len(chunks) - 1})"
+        )
 
     chunk = chunks[chunk_index]
 
