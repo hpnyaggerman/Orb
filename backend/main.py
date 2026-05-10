@@ -1,4 +1,5 @@
 from __future__ import annotations
+import asyncio
 import hashlib
 import json
 import uuid
@@ -93,7 +94,6 @@ from .database import (
     get_voice_profile,
     upsert_voice_profile,
 )
-import asyncio
 from .orchestrator import (
     handle_turn,
     handle_regenerate,
@@ -111,8 +111,11 @@ from .tts.cache import (
     cache_media_type,
     cache_meta_path,
     cache_path,
+    cache_stats,
     invalidate_cache_for_card,
+    invalidate_cache_for_conversation,
     metadata_headers,
+    run_eviction_cycle,
     synthesize_and_cache,
 )
 
@@ -124,12 +127,32 @@ FRONTEND_DIR = os.path.join(
 )
 
 
+_TTS_EVICT_INTERVAL = 30 * 60  # 30 minutes
+
+
+async def _tts_eviction_loop() -> None:
+    """Background task: periodically evict stale / oversized TTS cache entries."""
+    # Run once at startup, then every N minutes.
+    while True:
+        try:
+            run_eviction_cycle()
+        except Exception:
+            logger.warning("TTS cache eviction cycle failed", exc_info=True)
+        await asyncio.sleep(_TTS_EVICT_INTERVAL)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
     run_pending(DB_PATH)
     logger.info("Database initialized")
+    task = asyncio.create_task(_tts_eviction_loop())
     yield
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
 
 
 app = FastAPI(title="Orb", lifespan=lifespan)
@@ -919,6 +942,7 @@ async def api_create_conversation(data: ConversationCreate):
 async def api_delete_conversation(cid: str):
     if not await delete_conversation(cid):
         raise HTTPException(status_code=404, detail="Conversation not found")
+    invalidate_cache_for_conversation(cid)
     return {"ok": True}
 
 
@@ -1716,6 +1740,18 @@ async def serve_frontend():
 async def api_tts_backends():
     """List available TTS backends."""
     return list_backends()
+
+
+@app.get("/api/tts/cache/stats")
+async def api_tts_cache_stats():
+    """Return TTS cache usage statistics."""
+    return cache_stats()
+
+
+@app.post("/api/tts/cache/evict")
+async def api_tts_cache_evict():
+    """Manually trigger a cache eviction cycle (TTL + LRU)."""
+    return run_eviction_cycle()
 
 
 @app.get("/api/tts/voices")
