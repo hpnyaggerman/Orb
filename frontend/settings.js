@@ -129,6 +129,14 @@ export async function loadSettings() {
   if (S.settings.reasoning_enabled_passes)
     S.reasoningEnabled = { ...S.reasoningEnabled, ...S.settings.reasoning_enabled_passes };
 
+  if (S.settings.inspector_open_states) {
+    const ios = S.settings.inspector_open_states;
+    if (typeof ios.reasoning === "boolean") S.reasoningOpen = ios.reasoning;
+    if (typeof ios.tool_calls === "boolean") S.toolCallsOpen = ios.tool_calls;
+    if (typeof ios.injection_block === "boolean") S.injectionBlockOpen = ios.injection_block;
+    if (typeof ios.context_size === "boolean") S.contextSizeOpen = ios.context_size;
+  }
+
   if (typeof S.settings.tts_enabled === "number") S.ttsEnabled = S.settings.tts_enabled !== 0;
   else if (typeof S.settings.tts_enabled === "boolean") S.ttsEnabled = S.settings.tts_enabled;
   if (typeof S.settings.tts_auto_speak === "number") S.ttsAutoSpeak = S.settings.tts_auto_speak !== 0;

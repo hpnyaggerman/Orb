@@ -867,7 +867,7 @@ function renderContextSize() {
     })
     .join("");
   const openAttr = S.contextSizeOpen ? " open" : "";
-  el.outerHTML = `<details class="inspector-block ctx-section" id="inspector-context-size"${openAttr} ontoggle="S.contextSizeOpen=this.open">
+  el.outerHTML = `<details class="inspector-block ctx-section" id="inspector-context-size"${openAttr} ontoggle="S.contextSizeOpen=this.open;saveInspectorOpenStates()">
     <summary class="ctx-summary">
       <span class="reasoning-summary-arrow">▶</span>
       <span class="ctx-total">~${total.toLocaleString()} tokens <span class="ctx-msgs">(${data.message_count} msgs)</span></span>
@@ -1690,7 +1690,7 @@ function _buildReasoningHtml() {
   const currentText = S["reasoning" + selectedPass.key.charAt(0).toUpperCase() + selectedPass.key.slice(1)] || "";
   const openAttr = S.reasoningOpen ? " open" : "";
 
-  return `<details class="inspector-block reasoning-section" id="reasoning-section"${openAttr} ontoggle="S.reasoningOpen=this.open">
+  return `<details class="inspector-block reasoning-section" id="reasoning-section"${openAttr} ontoggle="S.reasoningOpen=this.open;saveInspectorOpenStates()">
     <summary class="reasoning-summary">
       <span class="reasoning-summary-arrow">▶</span>
       <h4 style="margin:0;display:inline">Reasoning</h4>
@@ -1726,6 +1726,41 @@ export async function toggleReasoningPass(passKey) {
   S.reasoningEnabled[passKey] = !S.reasoningEnabled[passKey];
   _refreshReasoningSection();
   await api.put("/settings", { reasoning_enabled_passes: { ...S.reasoningEnabled } });
+}
+
+function _buildToolCallsHtml(tc) {
+  const openAttr = S.toolCallsOpen ? " open" : "";
+  return `<details class="inspector-block"${openAttr} ontoggle="S.toolCallsOpen=this.open;saveInspectorOpenStates()">
+    <summary class="reasoning-summary">
+      <span class="reasoning-summary-arrow">▶</span>
+      <h4 style="margin:0;display:inline">Tool Calls</h4>
+    </summary>
+    <div class="injection-box" style="margin-top:8px">${esc(tc.map((c) => JSON.stringify(c)).join("\n\n"))}</div>
+  </details>`;
+}
+
+function _buildInjectionBlockHtml(inj) {
+  const openAttr = S.injectionBlockOpen ? " open" : "";
+  return `<details class="inspector-block"${openAttr} ontoggle="S.injectionBlockOpen=this.open;saveInspectorOpenStates()">
+    <summary class="reasoning-summary">
+      <span class="reasoning-summary-arrow">▶</span>
+      <h4 style="margin:0;display:inline">Injection Block</h4>
+    </summary>
+    <div class="injection-box" style="margin-top:8px">${esc(inj)}</div>
+  </details>`;
+}
+
+export function saveInspectorOpenStates() {
+  api
+    .put("/settings", {
+      inspector_open_states: {
+        reasoning: S.reasoningOpen,
+        tool_calls: S.toolCallsOpen,
+        injection_block: S.injectionBlockOpen,
+        context_size: S.contextSizeOpen,
+      },
+    })
+    .catch(() => {});
 }
 
 // ── Inspector
@@ -1786,22 +1821,12 @@ export function renderInspector() {
         <div>${stylesHtml || '<span style="color:var(--text-muted);font-size:12px">None</span>'}</div>
       </div>
       ${_buildReasoningHtml()}
+      ${tc.length ? _buildToolCallsHtml(tc) : ""}
+      ${inj ? _buildInjectionBlockHtml(inj) : ""}
       ${
         lat
           ? `<div class="inspector-block"><h4>Agent Latency</h4>
                  <div style="font-size:12px;color:var(--text-secondary)">${lat}ms</div></div>`
-          : ""
-      }
-      ${
-        tc.length
-          ? `<div class="inspector-block"><h4>Tool Calls</h4>
-                      <div class="injection-box">${esc(tc.map((c) => JSON.stringify(c)).join("\n\n"))}</div></div>`
-          : ""
-      }
-      ${
-        inj
-          ? `<div class="inspector-block"><h4>Injection Block</h4>
-                 <div class="injection-box">${esc(inj)}</div></div>`
           : ""
       }`;
     const _rb = document.getElementById("reasoning-box");
@@ -1839,22 +1864,12 @@ export function renderInspector() {
       <div>${stylesHtml || '<span style="color:var(--text-muted);font-size:12px">None</span>'}</div>
     </div>
     ${_buildReasoningHtml()}
+    ${tc.length ? _buildToolCallsHtml(tc) : ""}
+    ${inj ? _buildInjectionBlockHtml(inj) : ""}
     ${
       lat
         ? `<div class="inspector-block"><h4>Agent Latency</h4>
                <div style="font-size:12px;color:var(--text-secondary)">${lat}ms</div></div>`
-        : ""
-    }
-    ${
-      tc.length
-        ? `<div class="inspector-block"><h4>Tool Calls</h4>
-                    <div class="injection-box">${esc(tc.map((c) => JSON.stringify(c)).join("\n\n"))}</div></div>`
-        : ""
-    }
-    ${
-      inj
-        ? `<div class="inspector-block"><h4>Injection Block</h4>
-               <div class="injection-box">${esc(inj)}</div></div>`
         : ""
     }`;
   // Scroll the freshly rendered reasoning box to bottom

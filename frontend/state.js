@@ -46,6 +46,8 @@ export const S = {
   reasoningPassSelected: 0,
   reasoningUserOverride: false,
   reasoningOpen: true,
+  toolCallsOpen: false,
+  injectionBlockOpen: false,
   contextSizeOpen: true,
   reasoningEnabled: { director: true, writer: false, editor: false, scripter: false },
   pendingRefineDiff: null, // {original, ops} set on writer_rewrite, cleared on next stream

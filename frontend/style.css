@@ -1203,7 +1203,8 @@ body {
   border: none;
 }
 
-.reasoning-section > summary {
+.reasoning-section > summary,
+details.inspector-block > summary {
   list-style: none;
   cursor: pointer;
   display: flex;
@@ -1213,7 +1214,8 @@ body {
   user-select: none;
 }
 
-.reasoning-section > summary::-webkit-details-marker { display: none; }
+.reasoning-section > summary::-webkit-details-marker,
+details.inspector-block > summary::-webkit-details-marker { display: none; }
 
 .reasoning-summary-arrow {
   font-size: 9px;
@@ -1222,7 +1224,8 @@ body {
   display: inline-block;
 }
 
-.reasoning-section[open] .reasoning-summary-arrow {
+.reasoning-section[open] .reasoning-summary-arrow,
+details.inspector-block[open] .reasoning-summary-arrow {
   transform: rotate(90deg);
 }
 

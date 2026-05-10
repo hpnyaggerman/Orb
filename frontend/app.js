@@ -40,6 +40,7 @@ import {
   toggleInspector,
   toggleMagicInput,
   toggleReasoningPass,
+  saveInspectorOpenStates,
 } from "./chat.js";
 import {
   addAltGreeting,
@@ -352,6 +353,7 @@ Object.assign(window, {
   selectReasoningPass,
   toggleReasoningPass,
   clearRefineDiff,
+  saveInspectorOpenStates,
   // ui
   toggleSection,
   toggleMobileSidebar,

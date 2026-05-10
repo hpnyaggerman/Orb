@@ -205,6 +205,7 @@ class SettingsUpdate(BaseModel):
     tts_enabled: Optional[int] = None
     tts_auto_speak: Optional[int] = None
     tts_volume: Optional[float] = None
+    inspector_open_states: Optional[dict] = None
 
 
 class EndpointCreate(BaseModel):

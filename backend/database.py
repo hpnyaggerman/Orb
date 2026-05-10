@@ -645,6 +645,11 @@ async def init_db():
             await db.execute("ALTER TABLE settings ADD COLUMN tts_auto_speak INTEGER NOT NULL DEFAULT 0")
         if "tts_volume" not in existing_cols:
             await db.execute("ALTER TABLE settings ADD COLUMN tts_volume REAL NOT NULL DEFAULT 0.75")
+        if "inspector_open_states" not in existing_cols:
+            await db.execute(
+                "ALTER TABLE settings ADD COLUMN inspector_open_states TEXT NOT NULL DEFAULT "
+                '\'{"reasoning":true,"tool_calls":false,"injection_block":false,"context_size":true}\''
+            )
 
         # Remove stale scripter key from reasoning_enabled_passes if present.
         # TTS settings are stored separately.
@@ -1001,6 +1006,10 @@ async def get_settings() -> dict:
         )
         # Remove stale scripter key from reasoning_enabled_passes if present.
         s["reasoning_enabled_passes"].pop("scripter", None)
+        s["inspector_open_states"] = json.loads(
+            s.get("inspector_open_states")
+            or '{"reasoning":true,"tool_calls":false,"injection_block":false,"context_size":true}'
+        )
         # Overlay endpoint_url, api_key, model_name, and hyperparameters from the
         # active endpoint's active model config so callers always get live values
         # rather than the stale flat columns.
@@ -1122,8 +1131,11 @@ async def update_settings(data: dict) -> dict:
             "tts_enabled",
             "tts_auto_speak",
             "tts_volume",
+            "inspector_open_states",
         ]
-        sets, vals = _build_set_clause(allowed, data, json_fields={"enabled_tools", "reasoning_enabled_passes"})
+        sets, vals = _build_set_clause(
+            allowed, data, json_fields={"enabled_tools", "reasoning_enabled_passes", "inspector_open_states"}
+        )
         if sets:
             await db.execute(
                 f"UPDATE settings SET {', '.join(sets)} WHERE id = 1",
