@@ -280,8 +280,12 @@ export async function selectChar(id, source = "recent") {
   S._selectCharLock = true;
   try {
     const oldWorldId = (S.allCharacters || []).find((c) => c.id === S.activeCharId)?.world_id || null;
+    const newWorldId = (S.allCharacters || []).find((c) => c.id === id)?.world_id || null;
     S.activeCharId = id;
     renderCharacters();
+    if (oldWorldId && oldWorldId !== newWorldId) {
+      await deactivateWorld(oldWorldId);
+    }
     const existing = S.conversations.find((c) => c.character_card_id === id);
     if (existing) {
       // If selecting from library modal, bump conversation's updated_at
@@ -305,10 +309,6 @@ export async function selectChar(id, source = "recent") {
         toast(e.message, true);
       }
     }
-    const newWorldId = (S.allCharacters || []).find((c) => c.id === S.activeCharId)?.world_id || null;
-    if (oldWorldId && oldWorldId !== newWorldId) {
-      deactivateWorld(oldWorldId);
-    }
     // Refresh the recent characters panel to reflect updated timestamps
     refreshCharacters();
   } finally {
@@ -323,15 +323,15 @@ export async function newConvForChar(id) {
   }
   try {
     const oldWorldId = (S.allCharacters || []).find((c) => c.id === S.activeCharId)?.world_id || null;
+    const newWorldId = (S.allCharacters || []).find((c) => c.id === id)?.world_id || null;
     const conv = await api.post("/conversations", { character_card_id: id });
     await loadConversations();
     S.activeCharId = id;
     renderCharacters();
-    await selectConversation(conv.id);
-    const newWorldId = (S.allCharacters || []).find((c) => c.id === S.activeCharId)?.world_id || null;
     if (oldWorldId && oldWorldId !== newWorldId) {
-      deactivateWorld(oldWorldId);
+      await deactivateWorld(oldWorldId);
     }
+    await selectConversation(conv.id);
   } catch (e) {
     toast(e.message, true);
   }
@@ -364,13 +364,13 @@ export async function selectConversation(id) {
   if (conv?.character_card_id) {
     const char = (S.allCharacters || []).find((c) => c.id === conv.character_card_id);
     if (char?.world_id) {
-      activateAndPrioritizeWorld(char.world_id);
+      await activateAndPrioritizeWorld(char.world_id);
     }
   }
 
   const newWorldId = (S.allCharacters || []).find((c) => c.id === S.activeCharId)?.world_id || null;
   if (oldWorldId && oldWorldId !== newWorldId) {
-    deactivateWorld(oldWorldId);
+    await deactivateWorld(oldWorldId);
   }
 
   setMessages(await api.get(convUrl(id, "messages")));
