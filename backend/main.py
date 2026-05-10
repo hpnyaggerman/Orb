@@ -1618,8 +1618,12 @@ async def api_get_context_size(cid: str):
     )
 
     # Lorebook injection
+    scan_depth = prompt_builder.LOREBOOK_SCAN_DEPTH
+    recent_messages = (
+        messages[-scan_depth:] if len(messages) >= scan_depth else messages
+    )
     lorebook_block = prompt_builder.compute_lorebook_injection_block(
-        lorebook_entries, messages[-6:] if len(messages) >= 6 else messages, macros
+        recent_messages, lorebook_entries, macros
     )
 
     def est(chars):
