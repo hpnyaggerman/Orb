@@ -9,6 +9,7 @@ import {
   deleteConversationFromModal,
   deleteMessage,
   generateCompressionSummary,
+  handleChatKeyNav,
   handleMagicKey,
   handleTitleEditKey,
   hideAvatarPopup,
@@ -250,6 +251,8 @@ $("chat-input").addEventListener("keydown", function (e) {
     sendMessage();
   }
 });
+
+document.addEventListener("keydown", handleChatKeyNav);
 
 // ── Expose to inline handlers
 Object.assign(window, {

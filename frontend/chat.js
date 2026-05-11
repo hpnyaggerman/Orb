@@ -997,6 +997,45 @@ export async function switchBranch(msgId) {
   }
 }
 
+// ── Keyboard navigation for the chat window:
+// ←/→ swipe branches on the last branched message, ↑/↓ scroll the chat.
+export function handleChatKeyNav(e) {
+  if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+  const key = e.key;
+  if (key !== "ArrowLeft" && key !== "ArrowRight" && key !== "ArrowUp" && key !== "ArrowDown") return;
+
+  const t = e.target;
+  if (t) {
+    const tag = t.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || t.isContentEditable) return;
+  }
+  if ($("modal-root")?.innerHTML || $("modal-crop-root")?.innerHTML) return;
+  if (!S.activeConvId) return;
+  if (S.editingMsgId != null || S.editingPendingUserMsg) return;
+
+  if (key === "ArrowLeft" || key === "ArrowRight") {
+    if (S.isStreaming) return;
+    const msgs = S.messages || [];
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      const m = msgs[i];
+      if ((m.branch_count || 1) > 1) {
+        const target = key === "ArrowLeft" ? m.prev_branch_id : m.next_branch_id;
+        if (target) {
+          e.preventDefault();
+          switchBranch(target);
+        }
+        return;
+      }
+    }
+    return;
+  }
+
+  const ct = $("chat-messages");
+  if (!ct) return;
+  e.preventDefault();
+  ct.scrollTop += key === "ArrowUp" ? -60 : 60;
+}
+
 // ── Edit Message
 export async function saveEdit(msgId, role) {
   const ta = $("edit-textarea-" + msgId);
