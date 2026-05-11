@@ -12,6 +12,7 @@ import {
   handleChatKeyNav,
   handleMagicKey,
   handleTitleEditKey,
+  initChatSwipeNav,
   hideAvatarPopup,
   loadConversations,
   newConvForChar,
@@ -451,6 +452,7 @@ function initAutoscroll() {
 initTheme();
 initThemeList();
 initAutoscroll();
+initChatSwipeNav();
 initTabLock();
 // Re-render messages when tab lock state changes to update toolbar buttons
 setLockStateChangeCallback((hasMultipleTabs) => {

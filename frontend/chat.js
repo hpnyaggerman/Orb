@@ -997,36 +997,48 @@ export async function switchBranch(msgId) {
   }
 }
 
+// Shared gate for arrow-key / touch-swipe branch navigation. Returns true if
+// we should ignore the gesture entirely (typing, streaming, modal open, …).
+function isChatNavBlocked(target) {
+  if (target) {
+    const tag = target.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable) return true;
+  }
+  if ($("modal-root")?.innerHTML || $("modal-crop-root")?.innerHTML) return true;
+  if (!S.activeConvId) return true;
+  if (S.editingMsgId != null || S.editingPendingUserMsg) return true;
+  return false;
+}
+
+// Swipe to the prev (dir = -1) or next (dir = +1) branch of the last branched
+// message. Returns true if a switch was issued.
+function navigateLastBranch(dir) {
+  if (S.isStreaming) return false;
+  const msgs = S.messages || [];
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if ((m.branch_count || 1) > 1) {
+      const target = dir < 0 ? m.prev_branch_id : m.next_branch_id;
+      if (target) {
+        switchBranch(target);
+        return true;
+      }
+      return false;
+    }
+  }
+  return false;
+}
+
 // ── Keyboard navigation for the chat window:
 // ←/→ swipe branches on the last branched message, ↑/↓ scroll the chat.
 export function handleChatKeyNav(e) {
   if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
   const key = e.key;
   if (key !== "ArrowLeft" && key !== "ArrowRight" && key !== "ArrowUp" && key !== "ArrowDown") return;
-
-  const t = e.target;
-  if (t) {
-    const tag = t.tagName;
-    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || t.isContentEditable) return;
-  }
-  if ($("modal-root")?.innerHTML || $("modal-crop-root")?.innerHTML) return;
-  if (!S.activeConvId) return;
-  if (S.editingMsgId != null || S.editingPendingUserMsg) return;
+  if (isChatNavBlocked(e.target)) return;
 
   if (key === "ArrowLeft" || key === "ArrowRight") {
-    if (S.isStreaming) return;
-    const msgs = S.messages || [];
-    for (let i = msgs.length - 1; i >= 0; i--) {
-      const m = msgs[i];
-      if ((m.branch_count || 1) > 1) {
-        const target = key === "ArrowLeft" ? m.prev_branch_id : m.next_branch_id;
-        if (target) {
-          e.preventDefault();
-          switchBranch(target);
-        }
-        return;
-      }
-    }
+    if (navigateLastBranch(key === "ArrowLeft" ? -1 : 1)) e.preventDefault();
     return;
   }
 
@@ -1034,6 +1046,69 @@ export function handleChatKeyNav(e) {
   if (!ct) return;
   e.preventDefault();
   ct.scrollTop += key === "ArrowUp" ? -60 : 60;
+}
+
+// ── Touch swipe navigation: horizontal swipe on the chat area switches
+// branches, mirroring the ←/→ keyboard behavior. Vertical-dominant motion is
+// ignored so scrolling still works.
+export function initChatSwipeNav() {
+  const ct = $("chat-messages");
+  if (!ct) return;
+
+  const SWIPE_MIN_DX = 50; // px of horizontal travel required
+  const SWIPE_MAX_DT = 600; // ms — anything slower is treated as a scroll
+  const SWIPE_RATIO = 1.5; // |dx| must exceed |dy| by this factor
+
+  let startX = 0;
+  let startY = 0;
+  let startT = 0;
+  let active = false;
+
+  ct.addEventListener(
+    "touchstart",
+    (e) => {
+      if (e.touches.length !== 1) {
+        active = false;
+        return;
+      }
+      // Let taps on the existing swipe buttons / toolbar pass through normally
+      const tgt = e.target;
+      if (tgt?.closest?.(".swipe-nav, .msg-toolbar, .msg-edit-area, button, a, input, textarea")) {
+        active = false;
+        return;
+      }
+      if (isChatNavBlocked(tgt)) {
+        active = false;
+        return;
+      }
+      const t = e.touches[0];
+      startX = t.clientX;
+      startY = t.clientY;
+      startT = Date.now();
+      active = true;
+    },
+    { passive: true },
+  );
+
+  ct.addEventListener(
+    "touchend",
+    (e) => {
+      if (!active) return;
+      active = false;
+      const t = e.changedTouches[0];
+      if (!t) return;
+      const dx = t.clientX - startX;
+      const dy = t.clientY - startY;
+      const dt = Date.now() - startT;
+      if (dt > SWIPE_MAX_DT) return;
+      if (Math.abs(dx) < SWIPE_MIN_DX) return;
+      if (Math.abs(dx) < Math.abs(dy) * SWIPE_RATIO) return;
+      if (isChatNavBlocked(e.target)) return;
+      // Swipe left (finger moves left → dx < 0) advances to next, like ▶.
+      navigateLastBranch(dx < 0 ? 1 : -1);
+    },
+    { passive: true },
+  );
 }
 
 // ── Edit Message
