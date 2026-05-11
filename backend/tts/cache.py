@@ -19,9 +19,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .base import TTSAdapter
 
-TTS_CACHE_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(__file__)), "data", "tts_cache"
-)
+TTS_CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "tts_cache")
 
 
 def cache_media_type(profile: dict) -> tuple[str, str]:
@@ -137,9 +135,7 @@ def evict_expired(ttl_seconds: int = DEFAULT_TTL_SECONDS) -> int:
                 pass
     _prune_empty_dirs()
     if removed:
-        logger.info(
-            "TTS cache TTL eviction: removed %d files (ttl=%ds)", removed, ttl_seconds
-        )
+        logger.info("TTS cache TTL eviction: removed %d files (ttl=%ds)", removed, ttl_seconds)
     return removed
 
 
@@ -277,9 +273,7 @@ def chunk_metadata(content: str, profile: dict, adapter: "TTSAdapter") -> list[d
     return result
 
 
-def cache_chunk_path(
-    cid: str, msg_id: int, chunk_index: int, profile: dict, content: str = ""
-) -> str:
+def cache_chunk_path(cid: str, msg_id: int, chunk_index: int, profile: dict, content: str = "") -> str:
     """Cache path for a single chunk, keyed by chunk index + content + voice config."""
     media_type, ext = cache_media_type(profile)
     fingerprint = hashlib.md5(
@@ -289,9 +283,7 @@ def cache_chunk_path(
         f"{profile.get('model', '')}|{media_type}|{content}".encode(),
         usedforsecurity=False,
     ).hexdigest()[:8]
-    return os.path.join(
-        TTS_CACHE_DIR, cid, f"{msg_id}_c{chunk_index}_{fingerprint}.{ext}"
-    )
+    return os.path.join(TTS_CACHE_DIR, cid, f"{msg_id}_c{chunk_index}_{fingerprint}.{ext}")
 
 
 async def synthesize_and_cache_chunk(
@@ -317,9 +309,7 @@ async def synthesize_and_cache_chunk(
     )
 
     if chunk_index < 0 or chunk_index >= len(chunks):
-        raise IndexError(
-            f"chunk_index {chunk_index} out of range (0-{len(chunks) - 1})"
-        )
+        raise IndexError(f"chunk_index {chunk_index} out of range (0-{len(chunks) - 1})")
 
     chunk = chunks[chunk_index]
 
