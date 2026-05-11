@@ -13,7 +13,15 @@ let _focusWorldId = null;
 const _entries = {}; // worldId -> entry[]
 let _selectedEntryId = null;
 let _dirty = false;
-let _draft = { name: "", content: "", keywords: [], priority: 100, case_insensitive: true, enabled: true };
+let _draft = {
+  name: "",
+  content: "",
+  keywords: [],
+  priority: 100,
+  case_insensitive: true,
+  constant: false,
+  enabled: true,
+};
 
 // ── Worlds API
 export async function loadWorlds() {
@@ -219,7 +227,15 @@ export async function openLorebook(worldId) {
   _lorebookOpen = true;
   _selectedEntryId = null;
   _dirty = false;
-  _draft = { name: "", content: "", keywords: [], priority: 100, case_insensitive: true, enabled: true };
+  _draft = {
+    name: "",
+    content: "",
+    keywords: [],
+    priority: 100,
+    case_insensitive: true,
+    constant: false,
+    enabled: true,
+  };
   renderWorldsSidebar();
   try {
     await _loadEntries(worldId);
@@ -330,16 +346,22 @@ function _buildEditorHtml() {
                  oninput="lbDraftChange('priority', parseInt(this.value) || 0)">
         </div>
       </div>
-      <div class="lb-editor-keywords">
+      <div class="lb-editor-keywords${_draft.constant ? " lb-keywords-disabled" : ""}">
         <div class="lb-field-label">Trigger Keywords</div>
-        <div class="lb-chip-wrap" id="lb-chip-wrap" onclick="document.getElementById('lb-chip-text')?.focus()"></div>
+        <div class="lb-chip-wrap" id="lb-chip-wrap" onclick="${_draft.constant ? "" : "document.getElementById('lb-chip-text')?.focus()"}"></div>
         <div class="lb-keyword-footer">
           <label class="lb-case-check">
             <input type="checkbox" id="lb-case-insensitive" ${_draft.case_insensitive ? "checked" : ""}
+                   ${_draft.constant ? "disabled" : ""}
                    onchange="lbDraftChange('case_insensitive', this.checked)">
             <span>Case-insensitive</span>
           </label>
-          <span class="lb-keyword-hint">Enter or , to add · Backspace to remove</span>
+          <label class="lb-case-check" title="Always inject this entry, regardless of keywords">
+            <input type="checkbox" id="lb-constant" ${_draft.constant ? "checked" : ""}
+                   onchange="lbToggleConstant(this.checked)">
+            <span>Constant</span>
+          </label>
+          <span class="lb-keyword-hint">${_draft.constant ? "Always injected" : "Enter or , to add · Backspace to remove"}</span>
         </div>
       </div>
       <div class="lb-editor-content">
@@ -361,14 +383,17 @@ function _renderKeywordChips() {
   const wrap = $("lb-chip-wrap");
   if (!wrap) return;
   const chips = _draft.keywords;
-  wrap.innerHTML =
-    chips
-      .map(
-        (c, i) =>
-          `<span class="lb-chip">${esc(c)}<button class="lb-chip-remove" onclick="lbRemoveChip(${i})">×</button></span>`,
-      )
-      .join("") +
-    `<input id="lb-chip-text" class="lb-chip-text" placeholder="${chips.length ? "" : "Add keyword…"}" onkeydown="lbChipKeydown(event)" oninput="lbChipInput(this)">`;
+  const disabled = _draft.constant;
+  const chipHtml = chips
+    .map((c, i) => {
+      const removeBtn = disabled ? "" : `<button class="lb-chip-remove" onclick="lbRemoveChip(${i})">×</button>`;
+      return `<span class="lb-chip">${esc(c)}${removeBtn}</span>`;
+    })
+    .join("");
+  const inputHtml = disabled
+    ? `<span class="lb-chip-placeholder">${chips.length ? "" : "Keywords disabled — Constant entry"}</span>`
+    : `<input id="lb-chip-text" class="lb-chip-text" placeholder="${chips.length ? "" : "Add keyword…"}" onkeydown="lbChipKeydown(event)" oninput="lbChipInput(this)">`;
+  wrap.innerHTML = chipHtml + inputHtml;
 }
 
 // ── Dirty state — surgical DOM updates to avoid losing input focus
@@ -409,6 +434,12 @@ function _markDirty() {
 export function lbDraftChange(field, value) {
   _draft[field] = value;
   _markDirty();
+}
+
+export function lbToggleConstant(checked) {
+  _draft.constant = checked;
+  _markDirty();
+  renderLorebookDrawer();
 }
 
 // ── Keyword chip handlers
@@ -481,6 +512,7 @@ function _doSelectEntry(entryId) {
       keywords: [...(entry.keywords || [])],
       priority: entry.priority ?? 100,
       case_insensitive: entry.case_insensitive === true || entry.case_insensitive === 1,
+      constant: entry.constant === true || entry.constant === 1,
       enabled: entry.enabled === true || entry.enabled === 1,
     };
   }
@@ -513,6 +545,7 @@ export async function lbSaveEntry() {
       content: _draft.content,
       keywords: _draft.keywords,
       case_insensitive: _draft.case_insensitive,
+      constant: _draft.constant,
       priority: _draft.priority,
       enabled: _draft.enabled,
     });
@@ -536,6 +569,7 @@ export function lbDiscardChanges() {
       keywords: [...(entry.keywords || [])],
       priority: entry.priority ?? 100,
       case_insensitive: entry.case_insensitive === true || entry.case_insensitive === 1,
+      constant: entry.constant === true || entry.constant === 1,
       enabled: entry.enabled === true || entry.enabled === 1,
     };
   }
@@ -578,6 +612,7 @@ export async function lbAddEntry() {
       content: "",
       keywords: [],
       case_insensitive: true,
+      constant: false,
       priority: 100,
       enabled: true,
     });

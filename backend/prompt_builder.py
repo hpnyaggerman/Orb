@@ -254,8 +254,10 @@ def compute_lorebook_injection_block(
     entries: list[dict],
     macros: Macros | None = None,
 ) -> str:
-    """Compute the lorebook injection block from active entries whose keywords
-    appear in the 6 most recent messages (any role).
+    """Compute the lorebook injection block from active entries.
+
+    Constant entries are always included. Other entries are included when
+    one of their keywords appears in the 6 most recent messages (any role).
 
     Entries are sorted by priority DESC. Returns empty string if no matches.
     """
@@ -263,16 +265,16 @@ def compute_lorebook_injection_block(
         return ""
 
     scan_parts = [m.get("content") or "" for m in messages[-LOREBOOK_SCAN_DEPTH:] if m.get("content")]
-
-    if not scan_parts:
-        return ""
-
     scan_text = " ".join(scan_parts)
     matched = []
 
     for entry in entries:
+        if entry.get("constant"):
+            matched.append(entry)
+            continue
+
         keywords = entry.get("keywords", [])
-        if not keywords:
+        if not keywords or not scan_text:
             continue
 
         case_insensitive = entry.get("case_insensitive", True)

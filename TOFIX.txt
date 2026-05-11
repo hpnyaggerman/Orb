@@ -4,7 +4,7 @@
 [Done]  + Button to show a searchable modal that displays all characters under Create and Import.
 [Done]  + Current characte list to show most recent ones.
 [Done]  + Tag-based search.
-  + Update button for Character Card => Select a new card and replace the existing one with it, keep everything in DB the same (esp UUID) except for new card data.
+  + Update button for Character Card => Select a new card and replace the existing one with it, keep everything in DB the same (esp UUID) except for new card data. Update lorebook as well if it has changed.
 
 - Feature: Tabs for left sidepanel, switch buttons at the bottom.
 - Feature: New Director Fragment type - Feedback, which is a note from AI to user, example: a list of next actions for user to take

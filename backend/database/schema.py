@@ -188,6 +188,7 @@ CREATE TABLE IF NOT EXISTS lorebook_entries (
     content TEXT NOT NULL DEFAULT '',
     keywords TEXT NOT NULL DEFAULT '[]',
     case_insensitive BOOLEAN NOT NULL DEFAULT 1,
+    constant BOOLEAN NOT NULL DEFAULT 0,
     priority INTEGER NOT NULL DEFAULT 100,
     enabled BOOLEAN NOT NULL DEFAULT 1,
     sort_order INTEGER NOT NULL DEFAULT 0,

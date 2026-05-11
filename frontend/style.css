@@ -3091,7 +3091,7 @@ mark.cb-hl {
 .lb-keyword-footer {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 12px;
   margin-top: 6px;
 }
 
@@ -3106,10 +3106,32 @@ mark.cb-hl {
 }
 
 .lb-case-check input { cursor: pointer; accent-color: var(--accent); }
+.lb-case-check input:disabled { cursor: not-allowed; }
+.lb-case-check input:disabled + span { opacity: 0.5; }
 
 .lb-keyword-hint {
   font-size: 10px;
   color: var(--text-muted);
+  margin-left: auto;
+}
+
+.lb-chip-placeholder {
+  flex: 1;
+  min-width: 80px;
+  font-size: 11px;
+  color: var(--text-muted);
+  font-style: italic;
+  padding: 0;
+}
+
+.lb-keywords-disabled .lb-chip-wrap {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: var(--bg-elevated);
+}
+
+.lb-keywords-disabled .lb-field-label {
+  opacity: 0.5;
 }
 
 /* ── Content section */
