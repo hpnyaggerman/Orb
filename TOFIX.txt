@@ -12,4 +12,3 @@
 -- Not yet --
 - Feature: Tags and search for Convos.
 - Feature: Macros.
-- Feature: Browse char modal to fetch from popular sites like chub on demand.
