@@ -1429,9 +1429,12 @@ function renderInternetResultCard(item) {
     ? `<img src="${esc(item.avatar_url)}" loading="lazy" onerror="this.parentElement.textContent='👤'">`
     : "👤";
   const fullPath = (item.full_path || "").replace(/'/g, "\\'");
+  const topics = (item.topics || []).slice(0, 12);
+  const tooltipParts = [item.name, item.tagline, topics.length ? "Tags: " + topics.join(", ") : ""].filter(Boolean);
+  const tooltip = tooltipParts.map(esc).join("\n");
   return `
     <div class="char-browser-card internet-result-card">
-      <div class="char-browser-avatar">${av}</div>
+      <div class="char-browser-avatar" title="${tooltip}">${av}</div>
       <div class="char-browser-card-name">${esc(item.name || "")}</div>
       <div class="internet-result-meta">${esc(item.tagline || "")}</div>
       <button class="internet-import-btn" onclick="importInternetChar('${fullPath}')">Import</button>

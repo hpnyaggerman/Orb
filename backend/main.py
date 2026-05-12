@@ -1186,7 +1186,8 @@ async def _browse_characterhub(q: str, page: int) -> dict:
         "page": max(1, int(page)),
         "sort": "download_count",
         "first": _CHUB_PAGE_SIZE,
-        "nsfw": "false",
+        "nsfw": "true",
+        "nsfl": "true",
         "asc": "false",
         "venus": "true",
     }
@@ -1207,12 +1208,16 @@ async def _browse_characterhub(q: str, page: int) -> dict:
         avatar_url = n.get("avatar_url") or n.get("max_res_url")
         if not avatar_url and full_path:
             avatar_url = f"https://avatars.charhub.io/avatars/{full_path}/avatar.webp"
+        topics = n.get("topics") or n.get("tags") or []
+        if not isinstance(topics, list):
+            topics = []
         results.append(
             {
                 "name": n.get("name", ""),
                 "tagline": n.get("tagline", "") or n.get("description", "")[:140],
                 "avatar_url": avatar_url,
                 "full_path": full_path,
+                "topics": topics,
             }
         )
     has_more = len(nodes) >= _CHUB_PAGE_SIZE
