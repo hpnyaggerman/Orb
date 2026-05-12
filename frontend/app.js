@@ -9,8 +9,10 @@ import {
   deleteConversationFromModal,
   deleteMessage,
   generateCompressionSummary,
+  handleChatKeyNav,
   handleMagicKey,
   handleTitleEditKey,
+  initChatSwipeNav,
   hideAvatarPopup,
   loadConversations,
   newConvForChar,
@@ -92,6 +94,7 @@ import {
   lbRemoveChip,
   lbSaveEntry,
   lbSelectEntry,
+  lbToggleConstant,
   lbToggleEntry,
   loadWorlds,
   openLorebook,
@@ -251,6 +254,8 @@ $("chat-input").addEventListener("keydown", function (e) {
   }
 });
 
+document.addEventListener("keydown", handleChatKeyNav);
+
 // ── Expose to inline handlers
 Object.assign(window, {
   // modal
@@ -389,6 +394,7 @@ Object.assign(window, {
   lbSaveEntry,
   lbDiscardChanges,
   lbDraftChange,
+  lbToggleConstant,
   lbChipKeydown,
   lbChipInput,
   lbRemoveChip,
@@ -446,6 +452,7 @@ function initAutoscroll() {
 initTheme();
 initThemeList();
 initAutoscroll();
+initChatSwipeNav();
 initTabLock();
 // Re-render messages when tab lock state changes to update toolbar buttons
 setLockStateChangeCallback((hasMultipleTabs) => {

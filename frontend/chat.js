@@ -3,6 +3,10 @@ import {
   getMessageChunks as apiGetMessageChunks,
   speakChunk as apiSpeakChunk,
   speakMessage as apiSpeakMessage,
+  getContextSize,
+  stopConversation,
+  streamPost,
+  summarizeConversation,
 } from "./api.js";
 import { loadCharacters, refreshCharacters, renderCharacters } from "./library.js";
 import { activateAndPrioritizeWorld, deactivateWorld } from "./lorebooks.js";
@@ -530,7 +534,7 @@ export function cancelCompression() {
     _compressAbort.abort();
     _compressAbort = null;
   }
-  if (S.activeConvId) fetch(`/api/conversations/${S.activeConvId}/stop`, { method: "POST" }).catch(() => {});
+  if (S.activeConvId) stopConversation(S.activeConvId);
   closeModal();
 }
 
@@ -575,12 +579,11 @@ export async function generateCompressionSummary() {
   let summaryText = "";
 
   try {
-    const resp = await fetch(`/api/conversations/${S.activeConvId}/summarize`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ keep_count: _compressKeepCount, custom_instructions: customInstructions }),
-      signal: _compressAbort.signal,
-    });
+    const resp = await summarizeConversation(
+      S.activeConvId,
+      { keepCount: _compressKeepCount, customInstructions },
+      _compressAbort.signal,
+    );
 
     if (!resp.ok) {
       const detail = await resp.text();
@@ -833,12 +836,6 @@ function updateContextCounter() {
   fetchContextSize();
 }
 
-async function getContextSize(convId) {
-  const r = await fetch(`/api/conversations/${convId}/context-size`);
-  if (!r.ok) return null;
-  return r.json();
-}
-
 async function fetchContextSize() {
   if (!S.activeConvId) return;
   try {
@@ -1006,6 +1003,120 @@ export async function switchBranch(msgId) {
   }
 }
 
+// Shared gate for arrow-key / touch-swipe branch navigation. Returns true if
+// we should ignore the gesture entirely (typing, streaming, modal open, …).
+function isChatNavBlocked(target) {
+  if (target) {
+    const tag = target.tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable) return true;
+  }
+  if ($("modal-root")?.innerHTML || $("modal-crop-root")?.innerHTML) return true;
+  if (!S.activeConvId) return true;
+  if (S.editingMsgId != null || S.editingPendingUserMsg) return true;
+  return false;
+}
+
+// Swipe to the prev (dir = -1) or next (dir = +1) branch of the last branched
+// message. Returns true if a switch was issued.
+function navigateLastBranch(dir) {
+  if (S.isStreaming) return false;
+  const msgs = S.messages || [];
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if ((m.branch_count || 1) > 1) {
+      const target = dir < 0 ? m.prev_branch_id : m.next_branch_id;
+      if (target) {
+        switchBranch(target);
+        return true;
+      }
+      return false;
+    }
+  }
+  return false;
+}
+
+// ── Keyboard navigation for the chat window:
+// ←/→ swipe branches on the last branched message, ↑/↓ scroll the chat.
+export function handleChatKeyNav(e) {
+  if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+  const key = e.key;
+  if (key !== "ArrowLeft" && key !== "ArrowRight" && key !== "ArrowUp" && key !== "ArrowDown") return;
+  if (isChatNavBlocked(e.target)) return;
+
+  if (key === "ArrowLeft" || key === "ArrowRight") {
+    if (navigateLastBranch(key === "ArrowLeft" ? -1 : 1)) e.preventDefault();
+    return;
+  }
+
+  const ct = $("chat-messages");
+  if (!ct) return;
+  e.preventDefault();
+  ct.scrollTop += key === "ArrowUp" ? -60 : 60;
+}
+
+// ── Touch swipe navigation: horizontal swipe on the chat area switches
+// branches, mirroring the ←/→ keyboard behavior. Vertical-dominant motion is
+// ignored so scrolling still works.
+export function initChatSwipeNav() {
+  const ct = $("chat-messages");
+  if (!ct) return;
+
+  const SWIPE_MIN_DX = 50; // px of horizontal travel required
+  const SWIPE_MAX_DT = 600; // ms — anything slower is treated as a scroll
+  const SWIPE_RATIO = 1.5; // |dx| must exceed |dy| by this factor
+
+  let startX = 0;
+  let startY = 0;
+  let startT = 0;
+  let active = false;
+
+  ct.addEventListener(
+    "touchstart",
+    (e) => {
+      if (e.touches.length !== 1) {
+        active = false;
+        return;
+      }
+      // Let taps on the existing swipe buttons / toolbar pass through normally
+      const tgt = e.target;
+      if (tgt?.closest?.(".swipe-nav, .msg-toolbar, .msg-edit-area, button, a, input, textarea")) {
+        active = false;
+        return;
+      }
+      if (isChatNavBlocked(tgt)) {
+        active = false;
+        return;
+      }
+      const t = e.touches[0];
+      startX = t.clientX;
+      startY = t.clientY;
+      startT = Date.now();
+      active = true;
+    },
+    { passive: true },
+  );
+
+  ct.addEventListener(
+    "touchend",
+    (e) => {
+      if (!active) return;
+      active = false;
+      const t = e.changedTouches[0];
+      if (!t) return;
+      const dx = t.clientX - startX;
+      const dy = t.clientY - startY;
+      const dt = Date.now() - startT;
+      if (dt > SWIPE_MAX_DT) return;
+      if (Math.abs(dx) < SWIPE_MIN_DX) return;
+      if (Math.abs(dx) < Math.abs(dy) * SWIPE_RATIO) return;
+      if (isChatNavBlocked(e.target)) return;
+      // Swipe left (finger moves left → dx < 0) advances to next, like ▶.
+      navigateLastBranch(dx < 0 ? 1 : -1);
+    },
+    { passive: true },
+  );
+}
+
 // ── Edit Message
 export async function saveEdit(msgId, role) {
   const ta = $("edit-textarea-" + msgId);
@@ -1100,7 +1211,7 @@ function setStreaming(active) {
 export function stopGeneration() {
   if (S.abortController) S.abortController.abort();
   if (S.activeConvId) {
-    fetch("/api" + convUrl(S.activeConvId, "stop"), { method: "POST" }).catch(() => {});
+    stopConversation(S.activeConvId);
   }
 }
 
@@ -1469,7 +1580,7 @@ function agentPayload() {
   return { enable_agent: S.agentEnabled };
 }
 
-async function runStreamRequest(url, body, cutoffMsgId = null) {
+async function runStreamRequest(path, body, cutoffMsgId = null) {
   setStreaming(true);
   setGenerationPhase("pending");
   $("send-btn").disabled = true;
@@ -1487,12 +1598,7 @@ async function runStreamRequest(url, body, cutoffMsgId = null) {
   scrollToBottom();
   S.abortController = new AbortController();
   try {
-    const resp = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-      signal: S.abortController.signal,
-    });
+    const resp = await streamPost(path, body, S.abortController.signal);
     await processSSEStream(resp, ct, msgDiv, S.abortController.signal);
   } catch (e) {
     if (e.name === "AbortError") S.wasAborted = true;
@@ -1508,7 +1614,7 @@ export async function continueFromUser() {
     toast("Last message is not a user message", true);
     return;
   }
-  await runStreamRequest("/api" + convUrl(S.activeConvId, "continue"), agentPayload());
+  await runStreamRequest(convUrl(S.activeConvId, "continue"), agentPayload());
 }
 
 // ── Send Message
@@ -1563,12 +1669,11 @@ export async function sendMessage() {
 
   S.abortController = new AbortController();
   try {
-    const resp = await fetch("/api" + convUrl(S.activeConvId, "send"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content, attachments, ...agentPayload() }),
-      signal: S.abortController.signal,
-    });
+    const resp = await streamPost(
+      convUrl(S.activeConvId, "send"),
+      { content, attachments, ...agentPayload() },
+      S.abortController.signal,
+    );
     await processSSEStream(resp, ct, msgDiv, S.abortController.signal);
   } catch (e) {
     if (e.name === "AbortError") {
@@ -1583,17 +1688,13 @@ export async function sendMessage() {
 // ── Regenerate
 export async function regenerate(msgId) {
   if (!S.activeConvId || !canStartGeneration()) return;
-  await runStreamRequest("/api" + convUrl(S.activeConvId, "messages", msgId, "regenerate"), agentPayload(), msgId);
+  await runStreamRequest(convUrl(S.activeConvId, "messages", msgId, "regenerate"), agentPayload(), msgId);
 }
 
 // ── Super Regenerate
 export async function superRegenerate(msgId) {
   if (!S.activeConvId || !canStartGeneration()) return;
-  await runStreamRequest(
-    "/api" + convUrl(S.activeConvId, "messages", msgId, "super_regenerate"),
-    agentPayload(),
-    msgId,
-  );
+  await runStreamRequest(convUrl(S.activeConvId, "messages", msgId, "super_regenerate"), agentPayload(), msgId);
 }
 
 // ── Magic Rewrite
@@ -1641,7 +1742,7 @@ export async function submitMagicRewrite(msgId) {
   if (!direction) return;
   if (!S.activeConvId || !canStartGeneration()) return;
   S.magicInputMsgId = null;
-  await runStreamRequest("/api" + convUrl(S.activeConvId, "messages", msgId, "magic_rewrite"), { direction }, msgId);
+  await runStreamRequest(convUrl(S.activeConvId, "messages", msgId, "magic_rewrite"), { direction }, msgId);
 }
 
 // ── Inspector — Reasoning stepper rail
@@ -1658,8 +1759,12 @@ const REASONING_PASSES = [
 function _advanceReasoningPass(targetIdx) {
   if (targetIdx <= S.reasoningPassActive) return;
   S.reasoningPassActive = targetIdx;
-  S.reasoningPassSelected = targetIdx; // auto-switch view to the new pass
-  S.reasoningUserOverride = false; // reset so in-pass tokens don't fight the user
+  const targetKey = REASONING_PASSES[targetIdx]?.key;
+  const targetEnabled = targetKey && S.reasoningEnabled[targetKey] !== false;
+  if (targetEnabled) {
+    S.reasoningPassSelected = targetIdx; // auto-switch view to the new pass
+    S.reasoningUserOverride = false; // reset so in-pass tokens don't fight the user
+  }
   const existing = document.getElementById("reasoning-section");
   if (existing) _refreshReasoningSection();
 }

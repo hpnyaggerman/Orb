@@ -1,4 +1,4 @@
-import { api } from "./api.js";
+import { api, getVoiceProfile } from "./api.js";
 import { S } from "./state.js";
 import { toast } from "./utils.js";
 
@@ -90,7 +90,7 @@ async function _loadVoiceProfile() {
     return;
   }
   try {
-    S.ttsVoiceProfile = await api.get("/characters/" + S.activeCharId + "/voice-profile");
+    S.ttsVoiceProfile = await getVoiceProfile(S.activeCharId);
   } catch {
     S.ttsVoiceProfile = null;
   }

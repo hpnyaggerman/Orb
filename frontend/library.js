@@ -1,4 +1,12 @@
-import { api } from "./api.js";
+import {
+  api,
+  getTtsBackends,
+  getTtsModels,
+  getTtsVoices,
+  getVoiceProfile,
+  saveVoiceProfile,
+  ttsPreview,
+} from "./api.js";
 import { loadConversations, resetChatUI } from "./chat.js";
 import { loadWorlds } from "./lorebooks.js";
 import { closeModal, showConfirmModal, showCropModal, showModal, switchTab } from "./modal.js";
@@ -1427,7 +1435,7 @@ async function _populateBackendDropdown(prefix) {
   sel.innerHTML = '<option value="">Loading…</option>';
   sel.disabled = true;
   try {
-    _backendsCache = await api.get("/tts/backends");
+    _backendsCache = await getTtsBackends();
   } catch (e) {
     _backendsCache = [{ id: "edge", name: "Microsoft Edge TTS" }];
   }
@@ -1442,10 +1450,7 @@ async function _loadModelList(prefix) {
   const modelEl = $(prefix + "-voice-model");
   if (!modelEl || !_BACKEND_FIELDS[backend]?.model) return;
   try {
-    let qs = `/tts/models?backend=${backend}`;
-    if (apiUrl) qs += `&api_url=${encodeURIComponent(apiUrl)}`;
-    if (apiKey) qs += `&api_key=${encodeURIComponent(apiKey)}`;
-    const models = await api.get(qs);
+    const models = await getTtsModels(backend, { apiUrl, apiKey });
     if (models.length > 0) {
       modelEl.outerHTML = `<select id="${prefix}-voice-model">${models
         .map((m) => `<option value="${esc(m.id)}">${esc(m.name || m.id)}</option>`)
@@ -1476,10 +1481,7 @@ async function _loadVoiceList(prefix) {
     sel.disabled = true;
   }
   try {
-    let qs = `/tts/voices?backend=${backend}&language=${lang}`;
-    if (apiUrl) qs += `&api_url=${encodeURIComponent(apiUrl)}`;
-    if (apiKey) qs += `&api_key=${encodeURIComponent(apiKey)}`;
-    const voices = await api.get(qs);
+    const voices = await getTtsVoices(backend, lang, { apiUrl, apiKey });
     if (voices.length > 0) {
       sel.outerHTML = `<select id="${prefix}-voice-id">${voices
         .map(
@@ -1513,22 +1515,16 @@ window.previewVoice = async (prefix) => {
   const pitch = parseFloat($(prefix + "-voice-pitch")?.value || "1.0");
   statusEl.textContent = "Generating preview…";
   try {
-    const resp = await fetch("/api/tts/preview", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        text: "Hey, this is a voice preview. How do I sound?",
-        voice_id: voiceId,
-        backend,
-        api_url: apiUrl,
-        api_key: apiKey,
-        model,
-        speed,
-        pitch,
-      }),
+    const blob = await ttsPreview({
+      text: "Hey, this is a voice preview. How do I sound?",
+      voice_id: voiceId,
+      backend,
+      api_url: apiUrl,
+      api_key: apiKey,
+      model,
+      speed,
+      pitch,
     });
-    if (!resp.ok) throw new Error("HTTP " + resp.status);
-    const blob = await resp.blob();
     const url = URL.createObjectURL(blob);
     const audio = new Audio(url);
     audio.onended = () => {
@@ -1560,7 +1556,7 @@ export async function loadVoiceProfileIntoTab(charId, prefix) {
     await _loadVoiceList(prefix);
     // Load saved profile
     try {
-      const profile = await api.get("/characters/" + charId + "/voice-profile");
+      const profile = await getVoiceProfile(charId);
       if (!profile || !profile.backend) {
         _updateFieldVisibility(prefix);
         toggleVoiceFields(prefix, false);
@@ -1619,5 +1615,5 @@ export function saveVoiceProfileFromTab(charId, prefix) {
     api_key: $(prefix + "-voice-api-key")?.value || "",
     model: $(prefix + "-voice-model")?.value || "",
   };
-  return api.put("/characters/" + charId + "/voice-profile", data);
+  return saveVoiceProfile(charId, data);
 }
