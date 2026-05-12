@@ -26,13 +26,21 @@ let _pendingCharacterBook = null;
 const _avatarBust = new Map();
 
 // Character browser modal state
-let _browserViewMode = "grid"; // 'grid' or 'list'
+let _browserViewMode = "grid"; // 'grid', 'list', or 'internet'
 let _browserSearchQuery = "";
 let _browserCharacters = [];
 let _browserSortBy = "time-added"; // 'name', 'time-added', 'most-recent-chat', 'most-chats'
 let _browserConversations = [];
 let _browserSelectedTags = new Set();
 let _browserTopTags = []; // top 15 most popular tags
+
+// Internet character browse state
+let _internetSource = "characterhub";
+let _internetQuery = "";
+let _internetPage = 1;
+let _internetResults = [];
+let _internetLoading = false;
+let _internetHasMore = false;
 
 // ── Mood Fragments
 export async function loadMoodFragments() {
@@ -1154,6 +1162,7 @@ export async function showCharacterBrowserModal() {
         <div class="view-toggle" id="char-browser-view-toggle">
           <button class="view-toggle-btn${_browserViewMode === "grid" ? " active" : ""}" data-view="grid" onclick="setCharBrowserView('grid')">⊞ Grid</button>
           <button class="view-toggle-btn${_browserViewMode === "list" ? " active" : ""}" data-view="list" onclick="setCharBrowserView('list')">☰ List</button>
+          <button class="view-toggle-btn${_browserViewMode === "internet" ? " active" : ""}" data-view="internet" onclick="setCharBrowserView('internet')">🌐 Internet</button>
         </div>
       </div>
     </div>
@@ -1184,8 +1193,21 @@ export function setCharBrowserView(mode) {
   document.querySelectorAll("#char-browser-view-toggle .view-toggle-btn").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.view === mode);
   });
+
+  const isInternet = mode === "internet";
+  const searchRow = document.querySelector(".char-browser-search-row");
+  const tagsRow = document.querySelector(".char-browser-tags-row");
+  if (searchRow) searchRow.style.display = isInternet ? "none" : "";
+  if (tagsRow) tagsRow.style.display = isInternet ? "none" : "";
+
   const container = $("char-browser-content");
   if (container) container.style.minHeight = "";
+
+  if (isInternet) {
+    renderInternetPanel();
+    return;
+  }
+
   // Measure natural height with no filters so minHeight reflects the full character set
   const prevSearch = _browserSearchQuery;
   const prevTags = _browserSelectedTags;
@@ -1367,8 +1389,125 @@ function renderCharBrowserListItem(c) {
     </div>`;
 }
 
+// ── Internet character browse
+
+function renderInternetPanel() {
+  const container = $("char-browser-content");
+  if (!container) return;
+  container.innerHTML = `
+    <div class="char-browser-internet">
+      <div class="internet-controls">
+        <select id="internet-source" onchange="setInternetSource(this.value)">
+          <option value="characterhub" ${_internetSource === "characterhub" ? "selected" : ""}>CharacterHub</option>
+        </select>
+        <input id="internet-search-input" type="text"
+               placeholder="Search characters…"
+               value="${esc(_internetQuery)}"
+               onkeydown="if(event.key==='Enter')searchInternet()">
+        <button class="btn" onclick="searchInternet()">Search</button>
+      </div>
+      <div id="internet-results">${renderInternetResultsBody()}</div>
+    </div>`;
+}
+
+function renderInternetResultsBody() {
+  if (_internetLoading && _internetResults.length === 0) {
+    return `<div class="internet-loading">Loading…</div>`;
+  }
+  if (!_internetLoading && _internetResults.length === 0) {
+    return `<div class="char-browser-empty">${_internetQuery ? "No results" : "Type a query and press Enter to search."}</div>`;
+  }
+  const cards = _internetResults.map((it) => renderInternetResultCard(it)).join("");
+  const more = _internetHasMore
+    ? `<button class="btn internet-load-more" onclick="loadMoreInternet()" ${_internetLoading ? "disabled" : ""}>${_internetLoading ? "Loading…" : "Load More"}</button>`
+    : "";
+  return `<div class="char-browser-grid">${cards}</div>${more}`;
+}
+
+function renderInternetResultCard(item) {
+  const av = item.avatar_url
+    ? `<img src="${esc(item.avatar_url)}" loading="lazy" onerror="this.parentElement.textContent='👤'">`
+    : "👤";
+  const fullPath = (item.full_path || "").replace(/'/g, "\\'");
+  return `
+    <div class="char-browser-card internet-result-card">
+      <div class="char-browser-avatar">${av}</div>
+      <div class="char-browser-card-name">${esc(item.name || "")}</div>
+      <div class="internet-result-meta">${esc(item.tagline || "")}</div>
+      <button class="internet-import-btn" onclick="importInternetChar('${fullPath}')">Import</button>
+    </div>`;
+}
+
+function refreshInternetResults() {
+  const el = $("internet-results");
+  if (el) el.innerHTML = renderInternetResultsBody();
+}
+
+export async function searchInternet(nextPage = false) {
+  if (_internetLoading) return;
+  const input = $("internet-search-input");
+  if (input) _internetQuery = input.value.trim();
+
+  if (!nextPage) {
+    _internetPage = 1;
+    _internetResults = [];
+    _internetHasMore = false;
+  }
+
+  _internetLoading = true;
+  refreshInternetResults();
+
+  try {
+    const data = await api.get(
+      `/characters/browse?source=${encodeURIComponent(_internetSource)}&q=${encodeURIComponent(_internetQuery)}&page=${_internetPage}`,
+    );
+    const results = Array.isArray(data?.results) ? data.results : [];
+    if (!nextPage) _internetResults = results;
+    else _internetResults = [..._internetResults, ...results];
+    _internetHasMore = !!data?.has_more;
+  } catch (e) {
+    toast("Search failed: " + e.message, true);
+  } finally {
+    _internetLoading = false;
+    refreshInternetResults();
+  }
+}
+
+export function loadMoreInternet() {
+  if (_internetLoading || !_internetHasMore) return;
+  _internetPage += 1;
+  searchInternet(true);
+}
+
+export function setInternetSource(val) {
+  _internetSource = val;
+  _internetQuery = "";
+  _internetResults = [];
+  _internetPage = 1;
+  _internetHasMore = false;
+  renderInternetPanel();
+}
+
+export async function importInternetChar(fullPath) {
+  try {
+    toast("Fetching card…");
+    const r = await api.post("/characters/import-url", { source: _internetSource, full_path: fullPath });
+    showCharEditModal(r);
+  } catch (e) {
+    toast("Import failed: " + e.message, true);
+  }
+}
+
 function renderCharacterBrowser() {
   setTimeout(() => {
+    if (_browserViewMode === "internet") {
+      const searchRow = document.querySelector(".char-browser-search-row");
+      const tagsRow = document.querySelector(".char-browser-tags-row");
+      if (searchRow) searchRow.style.display = "none";
+      if (tagsRow) tagsRow.style.display = "none";
+      renderInternetPanel();
+      return;
+    }
     renderCharBrowserItems();
     const container = $("char-browser-content");
     if (container) container.style.minHeight = container.offsetHeight + "px";

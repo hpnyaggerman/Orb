@@ -2430,13 +2430,8 @@ label {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
   gap: 12px;
-  max-height: 50vh;
-  overflow-y: auto;
   padding-right: 4px;
 }
-
-.char-browser-grid::-webkit-scrollbar { width: 4px; }
-.char-browser-grid::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 
 .char-browser-card {
   display: flex;
@@ -2488,13 +2483,8 @@ label {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  max-height: 50vh;
-  overflow-y: auto;
   padding-right: 4px;
 }
-
-.char-browser-list::-webkit-scrollbar { width: 4px; }
-.char-browser-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
 
 .char-browser-list-item {
   display: flex;
@@ -3289,4 +3279,94 @@ mark.cb-hl {
   border-top-color: var(--accent, #00e5ff);
   border-radius: 50%;
   animation: tts-spin .8s linear infinite;
+}
+
+/* ── Character Browser: Internet panel ─────────────────────────────── */
+.char-browser-internet {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.internet-controls {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+}
+
+.internet-controls select {
+  flex: 0 0 auto;
+  width: 110px;
+  padding: 8px 6px;
+  font-size: 12px;
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-primary);
+}
+
+.internet-controls input {
+  flex: 1 1 auto;
+  padding: 8px 12px;
+  font-size: 13px;
+  background: var(--bg-deep);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-primary);
+  outline: none;
+  transition: border-color .15s;
+}
+
+.internet-controls input:focus {
+  border-color: var(--accent-dim);
+}
+
+.internet-result-card {
+  cursor: default;
+}
+
+.internet-result-card:hover {
+  background: transparent;
+}
+
+.internet-result-meta {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: center;
+  margin: 4px 0;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  width: 100%;
+  min-height: 48px;
+}
+
+.internet-import-btn {
+  width: 100%;
+  margin-top: 6px;
+  padding: 5px 0;
+  font-size: 12px;
+  border-radius: 4px;
+  background: var(--accent-dim);
+  color: #fff;
+  border: none;
+  cursor: pointer;
+  transition: opacity .15s;
+}
+
+.internet-import-btn:hover {
+  opacity: 0.85;
+}
+
+.internet-loading {
+  text-align: center;
+  padding: 32px;
+  color: var(--text-muted);
+}
+
+.internet-load-more {
+  display: block;
+  margin: 12px auto 0;
+  padding: 6px 24px;
 }
