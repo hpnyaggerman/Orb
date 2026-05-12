@@ -9,7 +9,7 @@ import {
 } from "./api.js";
 import { loadConversations, resetChatUI } from "./chat.js";
 import { loadWorlds } from "./lorebooks.js";
-import { closeModal, showConfirmModal, showCropModal, showModal, switchTab } from "./modal.js";
+import { closeModal, setModalCloseCallback, showConfirmModal, showCropModal, showModal, switchTab } from "./modal.js";
 import { S } from "./state.js";
 import { $, avatarUrl, esc, toast } from "./utils.js";
 import { validate } from "./validate.js";
@@ -1149,7 +1149,7 @@ export async function showCharacterBrowserModal() {
   computeTopTags();
   _browserSelectedTags.clear();
   _browserSortBy = S.characterBrowserSort || "time-added";
-  _browserViewMode = S.characterBrowserView || "grid";
+  _browserViewMode = _browserViewMode === "internet" ? "internet" : S.characterBrowserView || "grid";
   _browserSearchQuery = "";
   renderCharacterBrowser();
   showModal(`
@@ -1495,6 +1495,10 @@ export async function importInternetChar(fullPath) {
   try {
     toast("Fetching card…");
     const r = await api.post("/characters/import-url", { source: _internetSource, full_path: fullPath });
+    setModalCloseCallback(async () => {
+      _browserViewMode = "internet";
+      await showCharacterBrowserModal();
+    });
     showCharEditModal(r);
   } catch (e) {
     toast("Import failed: " + e.message, true);
