@@ -211,11 +211,17 @@ function handleDocumentClick(event) {
 
   if (!isMobileSidebarViewport()) return;
 
-  if (sidebarOpen && matcher.matches("#sidebar .btn, #sidebar .char-item, #sidebar .fragment-item")) {
+  if (sidebarOpen && matcher.matches(".char-item")) {
     setTimeout(closeMobileSidebar, 0);
   }
 
-  if (sidebarOpen && !matcher.hasId(IDS.sidebar) && !matcher.hasId(IDS.mobileSidebarToggle)) {
+  if (
+    sidebarOpen &&
+    !matcher.hasId(IDS.sidebar) &&
+    !matcher.hasId(IDS.mobileSidebarToggle) &&
+    !matcher.hasId(IDS.modalRoot) &&
+    !matcher.hasId(IDS.cropModalRoot)
+  ) {
     closeMobileSidebar();
   }
 

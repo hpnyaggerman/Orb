@@ -78,12 +78,61 @@ export async function getTtsBackends() {
   return r.json();
 }
 
-export async function getTtsVoices(backend, language) {
+export async function getTtsVoices(backend, language, { apiUrl, apiKey } = {}) {
   const params = new URLSearchParams({ backend });
   if (language) params.set("language", language);
+  if (apiUrl) params.set("api_url", apiUrl);
+  if (apiKey) params.set("api_key", apiKey);
   const r = await fetch(`/api/tts/voices?${params}`);
   if (!r.ok) return [];
   return r.json();
+}
+
+export async function getTtsModels(backend, { apiUrl, apiKey } = {}) {
+  const params = new URLSearchParams({ backend });
+  if (apiUrl) params.set("api_url", apiUrl);
+  if (apiKey) params.set("api_key", apiKey);
+  const r = await fetch(`/api/tts/models?${params}`);
+  if (!r.ok) return [];
+  return r.json();
+}
+
+export async function ttsPreview(params) {
+  const r = await fetch("/api/tts/preview", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+  if (!r.ok) throw new Error(await r.text());
+  return r.blob();
+}
+
+export function stopConversation(convId) {
+  fetch(`/api/conversations/${convId}/stop`, { method: "POST" }).catch(() => {});
+}
+
+export async function getContextSize(convId) {
+  const r = await fetch(`/api/conversations/${convId}/context-size`);
+  if (!r.ok) return null;
+  return r.json();
+}
+
+export function summarizeConversation(convId, { keepCount, customInstructions }, signal) {
+  return fetch(`/api/conversations/${convId}/summarize`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ keep_count: keepCount, custom_instructions: customInstructions }),
+    signal,
+  });
+}
+
+export function streamPost(path, body, signal) {
+  return fetch("/api" + path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal,
+  });
 }
 
 export async function getVoiceProfile(cardId) {

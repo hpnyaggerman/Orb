@@ -302,6 +302,7 @@ class LorebookEntryCreate(BaseModel):
     content: str = ""
     keywords: list[str] = []
     case_insensitive: bool = True
+    constant: bool = False
     priority: int = 100
     enabled: bool = True
 
@@ -311,6 +312,7 @@ class LorebookEntryUpdate(BaseModel):
     content: Optional[str] = None
     keywords: Optional[list[str]] = None
     case_insensitive: Optional[bool] = None
+    constant: Optional[bool] = None
     priority: Optional[int] = None
     enabled: Optional[bool] = None
 
@@ -726,6 +728,7 @@ def _normalise_lorebook_entry(item: dict) -> dict:
         enabled = bool(item.get("enabled", True))
     priority = int(item.get("insertion_order") or item.get("order") or 100)
     case_sensitive = item.get("caseSensitive") or item.get("case_sensitive")
+    constant = bool(item.get("constant", False))
     return {
         "name": str(name),
         "content": str(item.get("content") or ""),
@@ -733,6 +736,7 @@ def _normalise_lorebook_entry(item: dict) -> dict:
         "enabled": enabled,
         "priority": priority,
         "case_insensitive": not bool(case_sensitive),
+        "constant": constant,
     }
 
 
@@ -1213,6 +1217,7 @@ async def api_export_character(card_id: str):
                     "enabled": bool(e["enabled"]),
                     "insertion_order": e["sort_order"],
                     "case_sensitive": not bool(e["case_insensitive"]),
+                    "constant": bool(e.get("constant", False)),
                     "name": e["name"],
                     "priority": e["priority"],
                     "id": e["id"],

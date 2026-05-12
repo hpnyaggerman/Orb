@@ -95,13 +95,14 @@ async def create_lorebook_entry(world_id: str, data: dict) -> dict:
     async with get_db() as db:
         now = datetime.now(timezone.utc).isoformat()
         cur = await db.execute(
-            "INSERT INTO lorebook_entries (world_id, name, content, keywords, case_insensitive, priority, enabled, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO lorebook_entries (world_id, name, content, keywords, case_insensitive, constant, priority, enabled, sort_order, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 world_id,
                 data["name"],
                 data.get("content", ""),
                 json.dumps(data.get("keywords", [])),
                 1 if data.get("case_insensitive", True) else 0,
+                1 if data.get("constant", False) else 0,
                 data.get("priority", 100),
                 1 if data.get("enabled", True) else 0,
                 data.get("sort_order", 0),
@@ -123,6 +124,7 @@ async def update_lorebook_entry(entry_id: int, data: dict) -> dict | None:
             "content",
             "keywords",
             "case_insensitive",
+            "constant",
             "priority",
             "enabled",
             "sort_order",
