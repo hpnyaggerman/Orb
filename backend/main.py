@@ -7,8 +7,6 @@ import logging
 import base64
 import tempfile
 
-import httpx
-
 from contextlib import asynccontextmanager
 
 from typing import Annotated, Any, AsyncGenerator, Optional, List, cast
@@ -106,6 +104,7 @@ from .llm_client import LLMClient
 from .endpoint_profiles import profile_for
 from .macros import Macros
 from . import tavern_cards
+from . import card_downloader
 from . import prompt_builder
 from .summarizer import ConversationSummarizer
 from .tts import get_adapter, list_backends
@@ -1156,124 +1155,14 @@ class ImportUrlRequest(BaseModel):
 @app.get("/api/characters/browse")
 async def api_browse_characters(source: str = "characterhub", q: str = "", page: int = 1):
     """Proxy external character-card search providers (avoids browser CORS)."""
-    if source == "characterhub":
-        return await _browse_characterhub(q, page)
-    raise HTTPException(status_code=400, detail=f"Unknown source: {source}")
+    return await card_downloader.browse(source, q, page)
 
 
 @app.post("/api/characters/import-url")
 async def api_import_character_url(req: ImportUrlRequest):
     """Download a character card from an external source and run it through the
     same parse pipeline as /api/characters/import."""
-    if req.source == "characterhub":
-        card_dict, avatar_b64, avatar_mime, card_id = await _download_characterhub_card(req.full_path)
-    else:
-        raise HTTPException(status_code=400, detail=f"Unknown source: {req.source}")
-
-    card_dict["id"] = card_id
-    if avatar_b64:
-        card_dict["avatar_b64"] = avatar_b64
-        card_dict["avatar_mime"] = avatar_mime
-    return card_dict
-
-
-_CHUB_PAGE_SIZE = 24
-
-
-async def _browse_characterhub(q: str, page: int) -> dict:
-    params = {
-        "search": q,
-        "page": max(1, int(page)),
-        "sort": "download_count",
-        "first": _CHUB_PAGE_SIZE,
-        "nsfw": "true",
-        "nsfl": "true",
-        "asc": "false",
-        "venus": "true",
-    }
-    url = "https://api.chub.ai/search"
-    try:
-        async with httpx.AsyncClient(timeout=15) as client:
-            resp = await client.get(url, params=params)
-            resp.raise_for_status()
-            data = resp.json()
-    except httpx.HTTPError as e:
-        logger.exception("CharacterHub search failed")
-        raise HTTPException(status_code=502, detail=f"CharacterHub search failed: {e}") from e
-
-    nodes = data.get("nodes") or data.get("data", {}).get("nodes") or []
-    results = []
-    for n in nodes:
-        full_path = n.get("fullPath") or n.get("full_path") or ""
-        avatar_url = n.get("avatar_url") or n.get("max_res_url")
-        if not avatar_url and full_path:
-            avatar_url = f"https://avatars.charhub.io/avatars/{full_path}/avatar.webp"
-        topics = n.get("topics") or n.get("tags") or []
-        if not isinstance(topics, list):
-            topics = []
-        results.append(
-            {
-                "name": n.get("name", ""),
-                "tagline": n.get("tagline", "") or n.get("description", "")[:140],
-                "avatar_url": avatar_url,
-                "full_path": full_path,
-                "topics": topics,
-            }
-        )
-    has_more = len(nodes) >= _CHUB_PAGE_SIZE
-    return {"results": results, "has_more": has_more}
-
-
-_CHUB_AVATARS_BASE = "https://avatars.charhub.io/avatars"
-
-
-async def _download_characterhub_card(full_path: str):
-    """Download the PNG character card from CharacterHub's CDN and parse it
-    through the same tavern_cards pipeline as file import.
-
-    Returns (card_dict, avatar_b64, avatar_mime, card_id).
-    """
-    if not full_path:
-        raise HTTPException(status_code=400, detail="Missing full_path")
-    if "/" not in full_path:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid CharacterHub full_path (expected creator/name): {full_path}",
-        )
-    url = f"{_CHUB_AVATARS_BASE}/{full_path}/chara_card_v2.png"
-    try:
-        async with httpx.AsyncClient(timeout=30, follow_redirects=True) as client:
-            resp = await client.get(url)
-            resp.raise_for_status()
-            content = resp.content
-    except httpx.HTTPError as e:
-        logger.exception("Failed to download CharacterHub card PNG")
-        raise HTTPException(status_code=502, detail=f"Failed to download card: {e}") from e
-
-    if not content[:8].startswith(b"\x89PNG"):
-        raise HTTPException(status_code=400, detail="Downloaded file does not appear to be a PNG card")
-
-    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
-        tmp.write(content)
-        tmp_path = tmp.name
-
-    try:
-        orb_id = tavern_cards.read_orb_id(tmp_path)
-        card = tavern_cards.parse(tmp_path)
-        card_dict = tavern_cards.card_to_dict(card)
-    except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e)) from e
-    except Exception as e:
-        logger.exception("Failed to parse tavern card from CharacterHub")
-        raise HTTPException(status_code=400, detail=f"Failed to parse character card: {e}") from e
-    finally:
-        os.unlink(tmp_path)
-
-    card_id = orb_id if orb_id else str(uuid.UUID(bytes=hashlib.sha256(content).digest()[:16], version=5))
-    avatar_b64 = base64.b64encode(content).decode("ascii")
-    avatar_mime = "image/png"
-
-    return card_dict, avatar_b64, avatar_mime, card_id
+    return await card_downloader.download_card(req.source, req.full_path)
 
 
 @app.get("/api/characters/{card_id}")
