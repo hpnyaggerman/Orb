@@ -68,6 +68,9 @@ export const S = {
   ttsCurrentTime: 0,
   ttsDuration: 0,
   ttsEnabled: false, // loaded from settings
+  speakingChunkIdx: null, // currently playing chunk index (null when not playing or monolithic)
+  speakingChunkTotal: null, // total chunks in queue (null when not playing or monolithic)
+  chunkAnnotations: {}, // cache: { [msgId]: chunks[] } — populated on first TTS interaction per message
   inspectedMsgId: null, // when set, Inspector shows director data for this message instead of current state
   inspectedDirectorData: null, // fetched director log data for the inspected message
 };

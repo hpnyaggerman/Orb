@@ -108,15 +108,18 @@ from . import prompt_builder
 from .summarizer import ConversationSummarizer
 from .tts import get_adapter, list_backends
 from .tts.cache import (
+    cache_chunk_path,
     cache_media_type,
     cache_meta_path,
     cache_path,
     cache_stats,
+    chunk_metadata,
     invalidate_cache_for_card,
     invalidate_cache_for_conversation,
     metadata_headers,
     run_eviction_cycle,
     synthesize_and_cache,
+    synthesize_and_cache_chunk,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -849,6 +852,10 @@ async def api_delete_user_persona(persona_id: int):
 
 class ResetConfirm(BaseModel):
     confirm: bool
+
+
+class SpeakChunkRequest(BaseModel):
+    chunk_index: int
 
 
 @app.post("/api/reset")
@@ -1757,17 +1764,18 @@ async def api_update_voice_profile(card_id: str, body: dict):
     return profile
 
 
-@app.post("/api/conversations/{cid}/messages/{msg_id}/speak")
-async def api_speak_message(cid: str, msg_id: int):
-    """Generate TTS audio for a message. Returns MP3 audio."""
-    # Validate message exists and belongs to conversation
+async def _get_tts_context(cid: str, msg_id: int) -> tuple:
+    """Shared validation for TTS endpoints.
+
+    Returns (msg, conv, card_id, profile, adapter).
+    Raises HTTPException on validation failure.
+    """
     msg = await get_message_by_id(msg_id)
     if not msg or msg["conversation_id"] != cid:
         raise HTTPException(404, "Message not found")
     if msg["role"] != "assistant":
         raise HTTPException(400, "TTS is only available for assistant messages")
 
-    # Get conversation and character
     conv = await get_conversation(cid)
     if not conv:
         raise HTTPException(404, "Conversation not found")
@@ -1776,15 +1784,26 @@ async def api_speak_message(cid: str, msg_id: int):
     if not card_id:
         raise HTTPException(400, "No character associated with this conversation")
 
-    # Check global TTS toggle
     settings = await get_settings()
     if not settings.get("tts_enabled"):
         raise HTTPException(403, "TTS is disabled in settings")
 
-    # Get voice profile
     profile = await get_voice_profile(card_id)
     if not profile or not profile.get("enabled"):
         raise HTTPException(400, "TTS not enabled for this character")
+
+    try:
+        adapter = get_adapter(profile["backend"])
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+    return msg, conv, card_id, profile, adapter
+
+
+@app.post("/api/conversations/{cid}/messages/{msg_id}/speak")
+async def api_speak_message(cid: str, msg_id: int):
+    """Generate TTS audio for a message. Returns MP3 audio."""
+    msg, conv, card_id, profile, adapter = await _get_tts_context(cid, msg_id)
 
     # Check cache
     _cache_path = cache_path(cid, msg_id, profile, msg["content"])
@@ -1802,12 +1821,6 @@ async def api_speak_message(cid: str, msg_id: int):
             headers=metadata_headers(metadata),
         )
 
-    # Get TTS adapter
-    try:
-        adapter = get_adapter(profile["backend"])
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-
     # Synthesize and cache
     try:
         audio_bytes, content_type, metadata, _cp = await synthesize_and_cache(
@@ -1818,7 +1831,73 @@ async def api_speak_message(cid: str, msg_id: int):
             adapter=adapter,
         )
     except ValueError:
-        raise HTTPException(500, "TTS synthesis produced no audio")
+        raise HTTPException(400, "No dialogue found for TTS")
+
+    return Response(
+        content=audio_bytes,
+        media_type=content_type,
+        headers={
+            "Content-Length": str(len(audio_bytes)),
+            **metadata_headers(metadata),
+        },
+    )
+
+
+@app.get("/api/conversations/{cid}/messages/{msg_id}/chunks")
+async def api_get_message_chunks(cid: str, msg_id: int):
+    """Get chunk metadata for a message's TTS extraction."""
+    msg, conv, card_id, profile, adapter = await _get_tts_context(cid, msg_id)
+
+    chunks = chunk_metadata(msg["content"], profile, adapter)
+    return {
+        "chunks": chunks,
+        "extraction_method": "regex",
+    }
+
+
+@app.post("/api/conversations/{cid}/messages/{msg_id}/speak-chunk")
+async def api_speak_chunk(cid: str, msg_id: int, data: SpeakChunkRequest):
+    """Generate TTS audio for a single chunk of a message."""
+    msg, conv, card_id, profile, adapter = await _get_tts_context(cid, msg_id)
+
+    # Validate chunk_index before cache lookup
+    chunks_meta = chunk_metadata(msg["content"], profile, adapter)
+    if not chunks_meta:
+        raise HTTPException(400, "No speakable chunks in this message")
+    if data.chunk_index < 0 or data.chunk_index >= len(chunks_meta):
+        raise HTTPException(
+            400,
+            f"chunk_index {data.chunk_index} out of range (0-{len(chunks_meta) - 1})",
+        )
+
+    # Check per-chunk cache
+    _cp = cache_chunk_path(cid, msg_id, data.chunk_index, profile, msg["content"])
+    if os.path.exists(_cp):
+        media_type, ext = cache_media_type(profile)
+        metadata: dict = {}
+        meta_path = cache_meta_path(_cp)
+        if os.path.exists(meta_path):
+            with open(meta_path, "r", encoding="utf-8") as f:
+                metadata = json.load(f)
+        return FileResponse(
+            _cp,
+            media_type=media_type,
+            filename=f"msg_{msg_id}_chunk{data.chunk_index}.{ext}",
+            headers=metadata_headers(metadata),
+        )
+
+    # Synthesize single chunk
+    try:
+        audio_bytes, content_type, metadata, _cp = await synthesize_and_cache_chunk(
+            cid=cid,
+            msg_id=msg_id,
+            chunk_index=data.chunk_index,
+            profile=profile,
+            content=msg["content"],
+            adapter=adapter,
+        )
+    except ValueError:
+        raise HTTPException(400, "No dialogue found for TTS")
 
     return Response(
         content=audio_bytes,

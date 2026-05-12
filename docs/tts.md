@@ -30,6 +30,8 @@ Clicking the speaker icon on a character message, or enabling auto-speak for new
 2. **TTS Synthesis** — the speakable text is sent to the configured backend (Edge TTS, OpenAI-compatible, Fish Speech, ElevenLabs, Kokoro-82M).
 3. **Playback** — the generated audio plays in-browser; results are cached on disk so repeated plays are instant.
 
+Clicking a **quoted dialogue line** in an assistant message speaks just that line (click-to-speak). Chunks are fetched on first click and cached in the DOM. The currently spoken line gets a subtle highlight during playback (karaoke mode).
+
 ## Available Backends
 
 | Backend | Install | API Key | Voices | Models | Notes |
