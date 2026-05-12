@@ -22,6 +22,7 @@ The user never sees the agentic layer. The writer model doesn't know it's being 
 6. **Magic Rewrite**: Rewrite the target message in a user-defined direction
 7. **Compress History**: Summarize chat context and move it to a new conversation
 8. **Mobile-compatibility**: UI for mobile devices
+9. **Integrated TTS**: Easy Text-to-speech that supports multiple providers
 
 ## Architecture
 
