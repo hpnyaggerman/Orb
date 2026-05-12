@@ -645,6 +645,12 @@ body {
 .message .msg-body em { font-style: italic; color: var(--text-secondary); }
 .message .msg-body strong { font-weight: 600; }
 .message .msg-body .quoted { color: var(--accent); }
+.message .msg-body .quoted.speaking {
+  background: color-mix(in srgb, var(--accent) 12%, var(--bg-surface));
+  border-radius: 2px;
+  transition: background 0.15s ease;
+}
+body.tts-enabled .message.assistant .msg-body .quoted { cursor: pointer; }
 .message .msg-body pre {
   background: var(--bg-surface);
   border: 1px solid var(--border);

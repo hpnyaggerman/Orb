@@ -36,12 +36,29 @@ export function refreshTtsBar() {
   const progress = bar.querySelector(".tts-progress");
   if (isPlaying && S.ttsDuration > 0) {
     const pct = Math.min(100, ((S.ttsCurrentTime || 0) / S.ttsDuration) * 100);
-    progress.style.width = pct + "%";
+    // Skip transition when jumping backwards (chunk boundary reset)
+    if (pct < (progress._lastPct || 0) - 5) {
+      progress.style.transition = "none";
+      progress.style.width = pct + "%";
+      // Force reflow so the no-transition takes effect before we restore it
+      progress.offsetHeight; // eslint-disable-line no-unused-expressions
+      progress.style.transition = "";
+    } else {
+      progress.style.width = pct + "%";
+    }
+    progress._lastPct = pct;
   } else {
+    progress._lastPct = 0;
     progress.style.width = "0%";
   }
   const text = bar.querySelector(".tts-text");
-  if (text) text.textContent = isLoading ? "Generating speech…" : "Speaking…";
+  if (text) {
+    const chunkInfo =
+      S.speakingChunkTotal != null && S.speakingChunkIdx != null
+        ? ` (${S.speakingChunkIdx + 1}/${S.speakingChunkTotal})`
+        : "";
+    text.textContent = isLoading ? `Generating speech${chunkInfo}…` : `Speaking${chunkInfo}…`;
+  }
 }
 
 export function setTtsVolumeLive(value) {

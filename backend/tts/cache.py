@@ -224,6 +224,127 @@ def _prune_empty_dirs() -> None:
                 pass
 
 
+def chunk_metadata(content: str, profile: dict, adapter: "TTSAdapter") -> list[dict]:
+    """Extract chunk metadata for a message.
+
+    Returns list of dicts with index, text, original_text, emotion,
+    pause_before_ms, pause_after_ms.
+    """
+    import re
+
+    from .regex_extractor import regex_extract
+
+    chunks = regex_extract(
+        text=content,
+        backend_type=profile.get("backend", "edge"),
+        supports_emotion_tags=adapter.supports_emotion_tags,
+    )
+
+    # Extract source quoted spans from original (uncleaned) content
+    # to get exact text matching the DOM's <span class="quoted"> elements.
+    # The extractor strips parentheticals and modifies text before quoting,
+    # so chunk.text can diverge from what formatProse() renders.
+    _re_quoted = re.compile(r'["\u201c]([^"\u201d]+)["\u201d]')
+    source_spans = [m.group(1).strip() for m in _re_quoted.finditer(content)]
+
+    result = []
+    for i, c in enumerate(chunks):
+        # Strip leading beat tags (format: "[tag] dialogue text")
+        original = c.text
+        if original.startswith("[") and "] " in original:
+            original = original[original.index("] ") + 2 :]
+
+        # If available, use the original source span text for DOM matching.
+        # This preserves parentheticals and other content that the extractor
+        # strips but formatProse() renders inside <span class="quoted">.
+        if i < len(source_spans):
+            original = source_spans[i]
+
+        result.append(
+            {
+                "index": i,
+                "text": c.text,
+                "original_text": original,
+                "emotion": c.emotion,
+                "pause_before_ms": c.pause_before_ms,
+                "pause_after_ms": c.pause_after_ms,
+            }
+        )
+    return result
+
+
+def cache_chunk_path(cid: str, msg_id: int, chunk_index: int, profile: dict, content: str = "") -> str:
+    """Cache path for a single chunk, keyed by chunk index + content + voice config."""
+    media_type, ext = cache_media_type(profile)
+    fingerprint = hashlib.md5(
+        f"chunk:{chunk_index}|{profile.get('backend', '')}|{profile.get('voice_id', '')}|"
+        f"{profile.get('language', '')}|{profile.get('rate', '')}|{profile.get('pitch', '')}|"
+        f"{profile.get('api_url', '')}|"
+        f"{profile.get('model', '')}|{media_type}|{content}".encode(),
+        usedforsecurity=False,
+    ).hexdigest()[:8]
+    return os.path.join(TTS_CACHE_DIR, cid, f"{msg_id}_c{chunk_index}_{fingerprint}.{ext}")
+
+
+async def synthesize_and_cache_chunk(
+    cid: str,
+    msg_id: int,
+    chunk_index: int,
+    profile: dict,
+    content: str,
+    adapter: "TTSAdapter",
+) -> tuple[bytes, str, dict[str, str], str]:
+    """Synthesize a single TTS chunk, cache it, and return result data.
+
+    Returns (audio_bytes, content_type, metadata, cache_file_path).
+    Raises ValueError when synthesis produces no audio.
+    Raises IndexError when chunk_index is out of range.
+    """
+    from .regex_extractor import regex_extract
+
+    chunks = regex_extract(
+        text=content,
+        backend_type=profile.get("backend", "edge"),
+        supports_emotion_tags=adapter.supports_emotion_tags,
+    )
+
+    if chunk_index < 0 or chunk_index >= len(chunks):
+        raise IndexError(f"chunk_index {chunk_index} out of range (0-{len(chunks) - 1})")
+
+    chunk = chunks[chunk_index]
+
+    md: dict = {
+        "extraction_method": "regex",
+        "chunk_index": chunk_index,
+        "chunk_text": chunk.text,
+    }
+
+    # Synthesize just this one chunk
+    result = await adapter.synthesize(
+        chunks=[chunk],
+        voice_id=profile.get("voice_id", "en-US-JennyNeural"),
+        language=profile.get("language", "en-US"),
+        rate=profile.get("rate", 1.0),
+        pitch=profile.get("pitch", 1.0),
+        api_url=profile.get("api_url", ""),
+        api_key=profile.get("api_key", "") or None,
+        model=profile.get("model", ""),
+    )
+
+    if not result.audio_bytes:
+        raise ValueError("TTS synthesis produced no audio")
+
+    # Cache
+    _cp = cache_chunk_path(cid, msg_id, chunk_index, profile, content)
+    os.makedirs(os.path.dirname(_cp), exist_ok=True)
+    with open(_cp, "wb") as f:
+        f.write(result.audio_bytes)
+    with open(cache_meta_path(_cp), "w", encoding="utf-8") as f:
+        json.dump(md, f, ensure_ascii=False)
+
+    return result.audio_bytes, result.content_type, md, _cp
+
+
 async def synthesize_and_cache(
     cid: str,
     msg_id: int,

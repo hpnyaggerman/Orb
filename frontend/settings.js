@@ -139,6 +139,7 @@ export async function loadSettings() {
 
   if (typeof S.settings.tts_enabled === "number") S.ttsEnabled = S.settings.tts_enabled !== 0;
   else if (typeof S.settings.tts_enabled === "boolean") S.ttsEnabled = S.settings.tts_enabled;
+  document.body.classList.toggle("tts-enabled", S.ttsEnabled);
   if (typeof S.settings.tts_auto_speak === "number") S.ttsAutoSpeak = S.settings.tts_auto_speak !== 0;
   else if (typeof S.settings.tts_auto_speak === "boolean") S.ttsAutoSpeak = S.settings.tts_auto_speak;
   if (typeof S.settings.tts_volume === "number") S.ttsVolume = S.settings.tts_volume;
@@ -1108,6 +1109,7 @@ export async function togglePreventPromptOverrides(on) {
 
 export async function toggleTtsEnabled(checked) {
   S.ttsEnabled = !!checked;
+  document.body.classList.toggle("tts-enabled", S.ttsEnabled);
   renderSettings();
   renderMessages();
   try {
