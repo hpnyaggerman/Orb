@@ -235,9 +235,40 @@ TOOLS: dict[str, dict] = {
     },
 }
 
+# Built-in tool names declared as a literal and asserted equal to TOOLS keys at
+# module load so the two cannot drift silently if a contributor edits one
+# without the other.
+BUILTIN_TOOL_NAMES: frozenset[str] = frozenset(
+    {
+        "direct_scene",
+        "rewrite_user_prompt",
+        "editor_apply_patch",
+        "editor_rewrite",
+    }
+)
+assert BUILTIN_TOOL_NAMES == frozenset(TOOLS.keys()), "BUILTIN_TOOL_NAMES drift vs TOOLS literal keys"
+
+# Tools registered with standalone=True are filtered out of the schemas array
+# returned by enabled_schemas(). They remain reachable via direct tool_choice
+# calls.
+STANDALONE_TOOLS: set[str] = set()
+
 PRE_WRITER_TOOLS = {"rewrite_user_prompt"}
 POST_WRITER_TOOLS = {"editor_apply_patch", "editor_rewrite"}
 
 
-def enabled_schemas(enabled_tools: dict) -> list[dict]:
-    return [TOOLS[n]["schema"] for n in TOOLS if enabled_tools.get(n, False)]
+def register_tool(name: str, schema: dict, choice: dict, *, standalone: bool = False) -> None:
+    """Register or replace a tool. Symmetric on the standalone bit."""
+    TOOLS[name] = {"schema": schema, "choice": choice}
+    if standalone:
+        STANDALONE_TOOLS.add(name)
+    else:
+        STANDALONE_TOOLS.discard(name)
+
+
+def enabled_schemas(enabled_tools: dict | None) -> list[dict]:
+    """Eligible (non-standalone) schemas, alphabetical by name. None returns all."""
+    eligible = sorted(n for n in TOOLS if n not in STANDALONE_TOOLS)
+    if enabled_tools is None:
+        return [TOOLS[n]["schema"] for n in eligible]
+    return [TOOLS[n]["schema"] for n in eligible if enabled_tools.get(n, False)]

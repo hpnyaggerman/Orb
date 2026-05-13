@@ -39,10 +39,16 @@ def _common_prefix_len(a: str, b: str) -> int:
 
 
 class _KVCacheTracker:
-    def __init__(self, conversation_id: str | None = None):
+    def __init__(self, conversation_id: str | None = None, prefix_chars: int = 0):
         self._entries: list[dict] = []
         self._conversation_id = conversation_id
         self._prev_entries: list[dict] = list(_prev_turn_entries.get(conversation_id, [])) if conversation_id else []
+        # Tail figures in log_summary are computed against this value, set
+        # uniformly across every recorded entry once the final prefix is built.
+        self._prefix_chars = prefix_chars
+
+    def set_prefix_chars(self, n: int) -> None:
+        self._prefix_chars = n
 
     def record(
         self,
@@ -100,7 +106,7 @@ class _KVCacheTracker:
                 else:
                     cache_note = "BUST  no_overlap"
 
-            tail = e["total_chars"] - overlap
+            tail = e["total_chars"] - self._prefix_chars
 
             lines.append(f"  {e['label']:<28}  total={e['total_chars']:7d}  " f"tail={tail:6d}  {cache_note}")
 
