@@ -104,6 +104,7 @@
       <div class="gen-bar"></div>
       <span class="gen-dot"></span>
       <span class="gen-text">Processing…</span>
+      <span class="gen-text-secondary" id="gen-text-secondary"></span>
     </div>
     <div id="chat-input-area">
       <div id="burger-dropdown">
@@ -123,18 +124,33 @@
   </div>
   <div id="tools-panel"><div class="tools-inner">
     <div class="inspector-title">Global</div>
-    <div class="agent-master-row">
-      <span class="agent-master-label">Agent Enabled</span>
-      <label class="tog"><input type="checkbox" id="agent-enable-chk" checked onchange="setAgentEnabled(this.checked)"><span class="tog-slider"></span></label>
+    <div class="tab-row">
+      <button type="button" class="tab-button tab-button-active" id="tools-tab-main" onclick="setToolsTab('main')">Main</button>
+      <button type="button" class="tab-button" id="tools-tab-secondary" onclick="setToolsTab('secondary')">Secondary</button>
     </div>
-    <div style="font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.5px;color:var(--text-secondary);margin-bottom:8px;">Available Tools</div>
-    <div id="tools-list"></div>
-    <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border-color);">
-      <button class="btn btn-sm btn-block" onclick="showPhraseBankModal()" style="margin-bottom: 8px;">📚 Phrase Bank</button>
-      <div style="font-size: 10px; color: var(--text-muted); text-align: center;">Manage banned/overused phrases</div>
+    <div id="tools-pane-main">
+      <div class="agent-master-row">
+        <span class="agent-master-label">Agent Enabled</span>
+        <label class="tog"><input type="checkbox" id="agent-enable-chk" checked onchange="setAgentEnabled(this.checked)"><span class="tog-slider"></span></label>
+      </div>
+      <div style="font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.5px;color:var(--text-secondary);margin-bottom:8px;">Available Tools</div>
+      <div id="tools-list"></div>
+      <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border-color);">
+        <button class="btn btn-sm btn-block" onclick="showPhraseBankModal()" style="margin-bottom: 8px;">📚 Phrase Bank</button>
+        <div style="font-size: 10px; color: var(--text-muted); text-align: center;">Manage banned/overused phrases</div>
+      </div>
     </div>
+    <div id="tools-pane-secondary" class="hidden"><div id="tools-list-secondary"></div></div>
   </div></div>
-  <div id="inspector"><div class="inspector-inner"><div class="inspector-title">Inspector</div><div id="inspector-content"><div style="color:var(--text-muted);font-size:12px;">Send a message to see director output</div></div></div></div>
+  <div id="inspector"><div class="inspector-inner">
+    <div class="inspector-title">Inspector</div>
+    <div class="tab-row">
+      <button type="button" class="tab-button tab-button-active" id="inspector-tab-main" onclick="setInspectorTab('main')">Main</button>
+      <button type="button" class="tab-button" id="inspector-tab-secondary" onclick="setInspectorTab('secondary')">Secondary</button>
+    </div>
+    <div id="inspector-content"><div style="color:var(--text-muted);font-size:12px;">Send a message to see director output</div></div>
+    <div id="inspector-secondary-content" class="hidden"></div>
+  </div></div>
 </div>
 <div id="modal-root"></div>
 <div id="modal-crop-root"></div>

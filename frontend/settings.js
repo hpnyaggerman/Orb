@@ -1159,6 +1159,22 @@ export function renderToolsPanel() {
   </div>`;
 
   $("tools-list").innerHTML = toolCards + lengthGuardCard;
+
+  const secEl = $("tools-list-secondary");
+  if (secEl) {
+    let secHtml = "";
+    for (const fn of S.workflowToolsPanelRenderers) {
+      try {
+        const piece = fn();
+        if (typeof piece === "string" && piece) secHtml += piece;
+      } catch (e) {
+        console.error("workflow tools-panel renderer threw:", e);
+      }
+    }
+    secEl.innerHTML =
+      secHtml ||
+      `<div style="color:var(--text-muted);font-size:12px;padding:8px 0;">No secondary workflows registered.</div>`;
+  }
 }
 
 // ── Phrase Bank

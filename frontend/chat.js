@@ -106,13 +106,33 @@ function buildMsgToolbar(m) {
       ? `<button onclick="clearRefineDiff()" title="Clear diff highlights" class="btn-clear-diff">${ICON_CLEAR}</button>`
       : "";
 
-  return `${editBtn}${regenBtn}${superRegenBtn}${magicBtn}${magicInput}${delBtn}${diffBtn}`;
+  return `${editBtn}${regenBtn}${superRegenBtn}${magicBtn}${magicInput}${_renderExtraButtons(m)}${delBtn}${diffBtn}`;
+}
+
+function _renderExtraButtons(msg) {
+  if (!S.workflowMessageButtonRenderers.length) return "";
+  let html = "";
+  for (const fn of S.workflowMessageButtonRenderers) {
+    try {
+      const piece = fn(msg);
+      if (typeof piece === "string" && piece) html += piece;
+    } catch (e) {
+      console.error("workflow message button renderer threw:", e);
+    }
+  }
+  return html;
 }
 
 // ── Attachments rendering
+function _isWorkflowAttachment(att) {
+  return typeof att.source === "string" && att.source.startsWith("workflow:");
+}
+
 function renderAttachments(attachments) {
   if (!attachments || attachments.length === 0) return "";
-  const items = attachments
+  const userAtts = attachments.filter((a) => !_isWorkflowAttachment(a));
+  if (!userAtts.length) return "";
+  const items = userAtts
     .map((att) => {
       const b64 = att.b64 || att.data_b64 || "";
       const mime = att.mime || att.mime_type || "image/jpeg";
@@ -131,6 +151,141 @@ function renderAttachments(attachments) {
     .join("");
   return `<div class="attachments">${items}</div>`;
 }
+
+// Per-instance swipe-widget index across re-renders. Default is "show the latest
+// variant" so a freshly regenerated sibling lands in view immediately.
+const _workflowSwipeIndexes = new Map();
+
+function _autoRenderAttachment(att) {
+  const b64 = att.b64 || att.data_b64 || "";
+  const mime = att.mime || att.mime_type || "application/octet-stream";
+  const filename = att.filename || att.workflow_id || "artifact";
+  if (mime.startsWith("image/")) {
+    return `<img class="workflow-artifact-image" src="data:${mime};base64,${b64}" alt="${esc(filename)}">`;
+  }
+  return `<a class="workflow-artifact-link" href="data:${mime};base64,${b64}" download="${esc(filename)}">${esc(filename)}</a>`;
+}
+
+function _workflowRegenButtonHtml(msg, att) {
+  const wid = att.workflow_id;
+  if (!wid) return "";
+  const entry = S.workflowManifest.find((w) => w.id === wid);
+  if (!entry || !entry.supports_regenerate || !entry.auto_regen_button) return "";
+  return `<button class="workflow-regen-button" title="Regenerate" onclick="event.stopPropagation();workflowRegenerate(${msg.id},${att.id},this)">${ICON_REGEN}</button>`;
+}
+
+function _renderWorkflowSwipeContainer(msg, rootId, atts) {
+  const instanceId = `ws-${msg.id}-${rootId}`;
+  const total = atts.length;
+  const stored = _workflowSwipeIndexes.get(instanceId);
+  const idx = Math.min(stored ?? total - 1, total - 1);
+  const active = atts[idx];
+  const renderer = S.workflowAttachmentRenderers[active.source];
+  const regenBtn = _workflowRegenButtonHtml(msg, active);
+  let bodyHtml;
+  if (typeof renderer === "function") {
+    try {
+      bodyHtml = renderer(active, regenBtn) || "";
+    } catch (e) {
+      console.error("workflow attachment renderer for", active.source, "threw:", e);
+      bodyHtml = _autoRenderAttachment(active);
+      if (regenBtn) bodyHtml += regenBtn;
+    }
+  } else {
+    bodyHtml = _autoRenderAttachment(active);
+    if (regenBtn) bodyHtml += regenBtn;
+  }
+  const indicator = total > 1 ? `<span class="workflow-artifact-counter">${idx + 1} / ${total}</span>` : "";
+  const navDisabled = total <= 1 ? " disabled" : "";
+  return `<div class="workflow-artifact-swipe" id="${instanceId}" data-msg-id="${msg.id}" data-root-id="${rootId}">
+    <button class="workflow-swipe-btn"${navDisabled} onclick="event.stopPropagation();workflowArtifactStep('${instanceId}',-1)">&#9664;</button>
+    <div class="workflow-artifact-body">${bodyHtml}</div>
+    <button class="workflow-swipe-btn"${navDisabled} onclick="event.stopPropagation();workflowArtifactStep('${instanceId}',1)">&#9654;</button>
+    ${indicator}
+  </div>`;
+}
+
+function _workflowAttachmentGroups(msg) {
+  if (!msg.attachments || !msg.attachments.length) return [];
+  const workflowAtts = msg.attachments.filter(_isWorkflowAttachment);
+  if (!workflowAtts.length) return [];
+  const byId = new Map();
+  for (const a of workflowAtts) byId.set(a.id, a);
+  const groups = new Map();
+  for (const a of workflowAtts) {
+    const parent = a.parent_attachment_id;
+    const rootId = parent && byId.has(parent) ? parent : a.id;
+    if (!groups.has(rootId)) groups.set(rootId, []);
+    groups.get(rootId).push(a);
+  }
+  const list = [];
+  for (const [rootId, atts] of groups) {
+    atts.sort((a, b) => a.id - b.id);
+    list.push({ rootId, atts });
+  }
+  list.sort((a, b) => a.rootId - b.rootId);
+  return list;
+}
+
+function _renderWorkflowArtifacts(msg) {
+  const groups = _workflowAttachmentGroups(msg);
+  if (!groups.length) return "";
+  const containers = groups.map((g) => _renderWorkflowSwipeContainer(msg, g.rootId, g.atts));
+  return `<div class="workflow-artifacts">${containers.join("")}</div>`;
+}
+
+window.workflowArtifactStep = function (instanceId, delta) {
+  const el = document.getElementById(instanceId);
+  if (!el) return;
+  const msgId = Number(el.dataset.msgId);
+  const rootId = Number(el.dataset.rootId);
+  const msg = S.messages.find((m) => m.id === msgId);
+  if (!msg) return;
+  const group = _workflowAttachmentGroups(msg).find((g) => g.rootId === rootId);
+  if (!group || group.atts.length <= 1) return;
+  const cur = _workflowSwipeIndexes.get(instanceId) ?? group.atts.length - 1;
+  let next = cur + delta;
+  if (next < 0) next = group.atts.length - 1;
+  if (next >= group.atts.length) next = 0;
+  _workflowSwipeIndexes.set(instanceId, next);
+  el.outerHTML = _renderWorkflowSwipeContainer(msg, rootId, group.atts);
+};
+
+window.workflowRegenerate = async function (msgId, attId, btn) {
+  if (!S.activeConvId) return;
+  const container = btn.closest(".workflow-artifact-swipe");
+  btn.disabled = true;
+  try {
+    const result = await api.post(convUrl(S.activeConvId, "messages", msgId, "attachments", attId, "regenerate"), {});
+    const newIds = Array.isArray(result?.attachments) ? result.attachments : [];
+    setMessages(await api.get(convUrl(S.activeConvId, "messages")));
+    const msg = S.messages.find((m) => m.id === msgId);
+    if (msg && newIds.length) {
+      const byId = new Map();
+      for (const a of msg.attachments || []) byId.set(a.id, a);
+      const original = byId.get(attId);
+      if (original) {
+        const rootId =
+          original.parent_attachment_id && byId.has(original.parent_attachment_id)
+            ? original.parent_attachment_id
+            : attId;
+        const group = _workflowAttachmentGroups(msg).find((g) => g.rootId === rootId);
+        if (group) _workflowSwipeIndexes.set(`ws-${msgId}-${rootId}`, group.atts.length - 1);
+      }
+    }
+    renderMessages();
+  } catch (e) {
+    console.error("Regenerate failed:", e);
+    if (container && !container.querySelector(".workflow-regen-error")) {
+      const cap = document.createElement("div");
+      cap.className = "workflow-regen-error";
+      cap.textContent = "Regenerate failed";
+      container.appendChild(cap);
+    }
+  } finally {
+    btn.disabled = false;
+  }
+};
 
 // ── Generation Phase
 const PHASE_ORDER = { pending: 0, directing: 0, generating: 1, refining: 2 };
@@ -600,9 +755,10 @@ export function renderMessages() {
                 : formatProse(resolvePlaceholders(m.content))
             }</div>`;
         const attachmentsHtml = renderAttachments(m.attachments);
+        const workflowArtifactsHtml = _renderWorkflowArtifacts(m);
         return `<div class="message ${m.role}" data-msg-id="${m.id}">
         <div class="msg-role">${m.role === "user" ? "You" : esc(getCharName())} ${branchHtml}</div>
-        ${body}${attachmentsHtml}${toolbar}
+        ${body}${attachmentsHtml}${workflowArtifactsHtml}${toolbar}
       </div>`;
       })
       .join("");
@@ -1269,29 +1425,55 @@ function handleSSEEvent(event, data, container, msgDiv, onToken, onRewrite) {
     case "reasoning": {
       try {
         const d = JSON.parse(data);
-        const passKey = d.pass; // "director" | "writer" | "editor"
+        const passKey = d.pass;
         const delta = d.delta;
-        const stateKey = "reasoning" + passKey.charAt(0).toUpperCase() + passKey.slice(1);
-        S[stateKey] = (S[stateKey] || "") + delta;
-
-        const passIdx = REASONING_PASSES.findIndex((p) => p.key === passKey);
-        // Advance the streaming-progress dot if this token is from a later pass
-        _advanceReasoningPass(passIdx);
-
-        const viewingThisPass = S.reasoningPassSelected === passIdx;
-        let box = document.getElementById("reasoning-box");
-        if (!box) {
-          // Box not in DOM yet — bootstrap via renderInspector, then write full accumulated text
-          renderInspector();
-          box = document.getElementById("reasoning-box");
-          if (box) {
-            box.textContent = S[stateKey];
+        const builtinIdx = REASONING_PASSES.findIndex((p) => p.key === passKey);
+        if (builtinIdx >= 0) {
+          // Built-in pass: append delta to the named state and update the Main reasoning box.
+          const stateKey = "reasoning" + passKey.charAt(0).toUpperCase() + passKey.slice(1);
+          S[stateKey] = (S[stateKey] || "") + delta;
+          const rebuilt = _advanceReasoningPass(builtinIdx);
+          const viewingThisPass = S.reasoningPassSelected === builtinIdx;
+          const box = document.getElementById("reasoning-box");
+          if (box && viewingThisPass) {
+            // Skip the append when _advanceReasoningPass already rebuilt the section
+            // from the (now-current) state; appending again would duplicate this delta.
+            // Text node append (not `textContent += ...`) avoids the DOM re-serialisation
+            // that produced the visible scrollbar wobble on long streams.
+            if (!rebuilt) box.appendChild(document.createTextNode(delta));
             box.scrollTop = box.scrollHeight;
           }
-        } else if (viewingThisPass) {
-          // Only append to the visible box when the user is viewing this pass
-          box.textContent += delta;
-          box.scrollTop = box.scrollHeight;
+          // When the box is absent (Inspector closed, or user is on the Secondary tab)
+          // state accumulates silently; renderInspector will paint the full text the
+          // next time it runs.
+          break;
+        }
+        const pipeline = S.workflowPipelines.find((p) => p.passes.some((pp) => pp.id === passKey));
+        if (pipeline) {
+          S.reasoningByPass[passKey] = (S.reasoningByPass[passKey] || "") + delta;
+          if (S.inspectorTab === "secondary") {
+            const wbox = document.getElementById("reasoning-box-" + pipeline.id);
+            if (wbox && wbox.dataset.passId === passKey) {
+              wbox.appendChild(document.createTextNode(delta));
+              wbox.scrollTop = wbox.scrollHeight;
+            }
+          }
+          break;
+        }
+        console.warn("Unrouted reasoning event for pass id:", passKey, d);
+      } catch (_) {}
+      break;
+    }
+    case "phase_status": {
+      try {
+        const d = JSON.parse(data);
+        const channel = d.channel;
+        if (typeof channel === "string" && channel.startsWith("workflow:")) {
+          const label = typeof d.label === "string" ? d.label : "";
+          const done = d.state === "done" || !label.trim();
+          if (done) delete S.workflowPhases[channel];
+          else S.workflowPhases[channel] = label;
+          _renderWorkflowPhasesPill();
         }
       } catch (_) {}
       break;
@@ -1360,6 +1542,21 @@ function handleSSEEvent(event, data, container, msgDiv, onToken, onRewrite) {
     case "error":
       toast("Error: " + data, true);
       break;
+    default: {
+      const handler = S.workflowEventHandlers[event];
+      if (typeof handler === "function") {
+        let parsed = data;
+        try {
+          parsed = JSON.parse(data);
+        } catch (_) {}
+        try {
+          handler(parsed, msgDiv || null);
+        } catch (e) {
+          console.error("workflow event handler for", event, "threw:", e);
+        }
+      }
+      break;
+    }
   }
 }
 
@@ -1540,20 +1737,26 @@ const REASONING_PASSES = [
   { key: "editor", label: "Editor", color: "var(--accent-dim)" },
 ];
 
-// Advance the streaming-progress dot to `targetIdx` only if it's further ahead.
-// Always auto-switches the selected view when a new pass begins (once per transition),
-// but within a pass the user's manual selection is respected.
+// Advance the streaming-progress dot to `targetIdx` when it is further ahead.
+// Auto-follows the streaming pass into the selected view only while the user
+// has not manually clicked a dot this turn: once `reasoningUserOverride` is
+// set, subsequent transitions leave the selection alone so the user's click
+// survives until the next turn (which resets the flag in `processSSEStream`).
+// Returns true if the reasoning section was rebuilt -- callers that just
+// updated state and would otherwise append the same delta into the freshly
+// painted box use this to skip their per-chunk append.
 function _advanceReasoningPass(targetIdx) {
-  if (targetIdx <= S.reasoningPassActive) return;
+  if (targetIdx <= S.reasoningPassActive) return false;
   S.reasoningPassActive = targetIdx;
-  const targetKey = REASONING_PASSES[targetIdx]?.key;
-  const targetEnabled = targetKey && S.reasoningEnabled[targetKey] !== false;
-  if (targetEnabled) {
-    S.reasoningPassSelected = targetIdx; // auto-switch view to the new pass
-    S.reasoningUserOverride = false; // reset so in-pass tokens don't fight the user
+  if (!S.reasoningUserOverride) {
+    const targetKey = REASONING_PASSES[targetIdx]?.key;
+    const targetEnabled = targetKey && S.reasoningEnabled[targetKey] !== false;
+    if (targetEnabled) S.reasoningPassSelected = targetIdx;
   }
   const existing = document.getElementById("reasoning-section");
-  if (existing) _refreshReasoningSection();
+  if (!existing) return false;
+  _refreshReasoningSection();
+  return true;
 }
 
 function _buildReasoningHtml() {
@@ -1623,6 +1826,160 @@ export function selectReasoningPass(idx) {
   S.reasoningPassSelected = idx;
   S.reasoningUserOverride = true;
   _refreshReasoningSection();
+}
+
+// Selected pass per workflow pipeline. Keyed by pipeline id; value is one of its
+// pass ids. Defaults to the first pass at registration.
+const _workflowPipelineSelected = new Map();
+
+function _pipelineSelectedPassId(pipeline) {
+  if (!pipeline.passes?.length) return null;
+  const cur = _workflowPipelineSelected.get(pipeline.id);
+  if (cur && pipeline.passes.some((p) => p.id === cur)) return cur;
+  return pipeline.passes[0].id;
+}
+
+function _buildSecondaryReasoningHtml() {
+  if (!S.workflowPipelines.length) return "";
+  return S.workflowPipelines
+    .map((pipeline) => {
+      const selectedId = _pipelineSelectedPassId(pipeline);
+      const dotsHtml = pipeline.passes
+        .map((p, i) => {
+          const hasText = !!S.reasoningByPass[p.id];
+          const isSelected = p.id === selectedId;
+          const lit = hasText || isSelected;
+          const dotStyle = [
+            `background:${lit ? "var(--accent)" : "var(--bg-elevated)"}`,
+            `color:${lit ? "#fff" : "var(--text-muted)"}`,
+            `border:2px solid ${isSelected ? "var(--accent)" : lit ? "var(--accent)" : "var(--border)"}`,
+            isSelected ? "box-shadow:0 0 0 2px var(--accent)" : "",
+          ]
+            .filter(Boolean)
+            .join(";");
+          const lineColor = hasText ? "var(--accent)" : "var(--border)";
+          return (
+            `<div class="reasoning-dot-col">
+              <button class="reasoning-dot" onclick="selectWorkflowPipelinePass('${pipeline.id}','${p.id}')" style="${dotStyle}">${i + 1}</button>
+              <span class="reasoning-pass-label" style="margin:0">${esc(p.label || p.id)}</span>
+            </div>` +
+            (i < pipeline.passes.length - 1
+              ? `<div class="reasoning-rail-line" style="background:${lineColor}"></div>`
+              : "")
+          );
+        })
+        .join("");
+      const text = S.reasoningByPass[selectedId] || "";
+      return `<div class="workflow-card workflow-pipeline-card" data-pipeline-id="${esc(pipeline.id)}">
+        <h4>${esc(pipeline.label || pipeline.id)}</h4>
+        <div class="reasoning-stepper">${dotsHtml}</div>
+        <div class="reasoning-box" id="reasoning-box-${esc(pipeline.id)}" data-pass-id="${esc(selectedId)}">${esc(text)}</div>
+      </div>`;
+    })
+    .join("");
+}
+
+function _buildSecondaryAgentsHtml() {
+  if (!S.workflowInspectorCardRenderers.length) return "";
+  let html = "";
+  for (const fn of S.workflowInspectorCardRenderers) {
+    try {
+      const piece = fn();
+      if (typeof piece === "string" && piece) html += piece;
+    } catch (e) {
+      console.error("workflow inspector card renderer threw:", e);
+    }
+  }
+  return html;
+}
+
+export function selectWorkflowPipelinePass(pipelineId, passId) {
+  _workflowPipelineSelected.set(pipelineId, passId);
+  renderInspectorSecondary();
+}
+
+export function renderInspectorSecondary() {
+  const el = $("inspector-secondary-content");
+  if (!el) return;
+  const reasoning = _buildSecondaryReasoningHtml();
+  const cards = _buildSecondaryAgentsHtml();
+  if (!reasoning && !cards) {
+    el.innerHTML = `<div style="color:var(--text-muted);font-size:12px;padding:8px 0;">No secondary workflows registered.</div>`;
+    return;
+  }
+  el.innerHTML = reasoning + cards;
+}
+
+export function setInspectorTab(name) {
+  S.inspectorTab = name === "secondary" ? "secondary" : "main";
+  _applyInspectorTab();
+}
+
+function _applyInspectorTab() {
+  const main = $("inspector-content");
+  const sec = $("inspector-secondary-content");
+  const btnMain = $("inspector-tab-main");
+  const btnSec = $("inspector-tab-secondary");
+  if (!main || !sec || !btnMain || !btnSec) return;
+  if (S.inspectorTab === "secondary") {
+    main.classList.add("hidden");
+    sec.classList.remove("hidden");
+    btnMain.classList.remove("tab-button-active");
+    btnSec.classList.add("tab-button-active");
+    renderInspectorSecondary();
+  } else {
+    sec.classList.add("hidden");
+    main.classList.remove("hidden");
+    btnSec.classList.remove("tab-button-active");
+    btnMain.classList.add("tab-button-active");
+  }
+}
+
+export function setToolsTab(name) {
+  S.toolsTab = name === "secondary" ? "secondary" : "main";
+  _applyToolsTab();
+}
+
+function _applyToolsTab() {
+  const main = $("tools-pane-main");
+  const sec = $("tools-pane-secondary");
+  const btnMain = $("tools-tab-main");
+  const btnSec = $("tools-tab-secondary");
+  if (!main || !sec || !btnMain || !btnSec) return;
+  if (S.toolsTab === "secondary") {
+    main.classList.add("hidden");
+    sec.classList.remove("hidden");
+    btnMain.classList.remove("tab-button-active");
+    btnSec.classList.add("tab-button-active");
+  } else {
+    sec.classList.add("hidden");
+    main.classList.remove("hidden");
+    btnSec.classList.remove("tab-button-active");
+    btnMain.classList.add("tab-button-active");
+  }
+}
+
+function _renderWorkflowPhasesPill() {
+  const el = $("gen-text-secondary");
+  if (!el) return;
+  const entries = Object.entries(S.workflowPhases);
+  if (!entries.length) {
+    el.textContent = "";
+    el.style.display = "none";
+    return;
+  }
+  const [, label] = entries[entries.length - 1];
+  el.textContent = label;
+  el.style.display = "";
+}
+
+export async function loadSecondaryWorkflowManifest() {
+  try {
+    const manifest = await api.get("/secondary-workflows");
+    if (Array.isArray(manifest)) S.workflowManifest = manifest;
+  } catch (e) {
+    console.error("Failed to load secondary workflow manifest:", e);
+  }
 }
 
 export async function toggleReasoningPass(passKey) {
@@ -1696,6 +2053,11 @@ export function toggleInspector() {
 }
 
 export function renderInspector() {
+  _renderInspectorMain();
+  renderInspectorSecondary();
+}
+
+function _renderInspectorMain() {
   if (S.isStreaming && S.lastDirectorData === null) {
     $("inspector-content").innerHTML = `${_buildReasoningHtml()}
        <div class="inspector-block" id="inspector-context-size"></div>

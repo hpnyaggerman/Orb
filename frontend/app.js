@@ -12,6 +12,7 @@ import {
   initChatSwipeNav,
   hideAvatarPopup,
   loadConversations,
+  loadSecondaryWorkflowManifest,
   newConvForChar,
   regenerate,
   renderMessages,
@@ -22,7 +23,10 @@ import {
   selectChar,
   selectConversation,
   selectReasoningPass,
+  selectWorkflowPipelinePass,
   sendMessage,
+  setInspectorTab,
+  setToolsTab,
   showAvatarPopup,
   showConvHistoryModal,
   startEdit,
@@ -344,6 +348,9 @@ Object.assign(window, {
   toggleReasoningPass,
   clearRefineDiff,
   saveInspectorOpenStates,
+  setInspectorTab,
+  setToolsTab,
+  selectWorkflowPipelinePass,
   // ui
   toggleSection,
   toggleMobileSidebar,
@@ -480,6 +487,12 @@ async function initAll() {
     await loadWorlds();
   } catch (e) {
     console.error("Failed to load worlds:", e);
+  }
+
+  try {
+    await loadSecondaryWorkflowManifest();
+  } catch (e) {
+    console.error("Failed to load secondary workflow manifest:", e);
   }
 }
 

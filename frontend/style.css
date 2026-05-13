@@ -1310,7 +1310,7 @@ details.inspector-block[open] .reasoning-summary-arrow {
   word-wrap: break-word;
   height: 140px;
   overflow-y: auto;
-  scroll-behavior: smooth;
+  scroll-behavior: auto;
 }
 
 .reasoning-box::-webkit-scrollbar { width: 3px; }
@@ -3095,3 +3095,187 @@ mark.cb-hl {
   font-variant-numeric: tabular-nums;
 }
 
+
+/* Secondary workflows ----------------------- */
+
+.tab-row {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.tab-button {
+  flex: 1;
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: .4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: border-color .15s, color .15s, background .15s;
+}
+
+.tab-button:hover {
+  color: var(--text-primary);
+}
+
+.tab-button-active {
+  border-color: var(--accent);
+  color: var(--text-primary);
+  background: var(--accent-glow);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.workflow-card {
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  margin-bottom: 12px;
+  background: var(--bg-surface);
+}
+
+.workflow-card > h4 {
+  margin: 0 0 8px 0;
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: .4px;
+  color: var(--text-secondary);
+}
+
+.workflow-pipeline-card .reasoning-stepper {
+  margin-bottom: 8px;
+}
+
+.workflow-artifacts {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+
+.workflow-artifact-swipe {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--bg-surface);
+}
+
+.workflow-artifact-body {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+
+.workflow-artifact-image {
+  max-width: 100%;
+  max-height: 360px;
+  border-radius: var(--radius);
+  display: block;
+}
+
+.workflow-artifact-link {
+  font-size: 12px;
+  color: var(--accent);
+  text-decoration: none;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.workflow-artifact-link:hover {
+  background: var(--bg-elevated);
+}
+
+.workflow-swipe-btn {
+  flex-shrink: 0;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-size: 11px;
+  cursor: pointer;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.workflow-swipe-btn:hover:not(:disabled) {
+  color: var(--text-primary);
+  border-color: var(--accent);
+}
+
+.workflow-swipe-btn:disabled {
+  opacity: .35;
+  cursor: default;
+}
+
+.workflow-artifact-counter {
+  position: absolute;
+  bottom: 4px;
+  right: 8px;
+  font-size: 10px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.workflow-regen-button {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.workflow-regen-button:hover:not(:disabled) {
+  color: var(--text-primary);
+  border-color: var(--accent);
+}
+
+.workflow-regen-button:disabled {
+  opacity: .5;
+  cursor: default;
+}
+
+.workflow-regen-error {
+  font-size: 11px;
+  color: var(--danger, #c66);
+  margin-top: 6px;
+  width: 100%;
+}
+
+.gen-text-secondary {
+  font-size: 11px;
+  color: var(--text-muted);
+  padding-left: 8px;
+  margin-left: 4px;
+  border-left: 1px solid var(--border);
+}
+
+.gen-text-secondary:empty {
+  display: none;
+}
