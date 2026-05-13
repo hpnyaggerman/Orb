@@ -88,11 +88,8 @@ from .database import (
     update_lorebook_entry,
     delete_lorebook_entry,
     get_active_lorebook_entries,
-    get_db,
     resolve_char_context,
     get_user_persona,
-    get_voice_profile,
-    upsert_voice_profile,
 )
 from .orchestrator import (
     handle_turn,
@@ -106,21 +103,6 @@ from .macros import Macros
 from . import tavern_cards
 from . import prompt_builder
 from .summarizer import ConversationSummarizer
-from .tts import get_adapter, list_backends
-from .tts.cache import (
-    cache_chunk_path,
-    cache_media_type,
-    cache_meta_path,
-    cache_path,
-    cache_stats,
-    chunk_metadata,
-    invalidate_cache_for_card,
-    invalidate_cache_for_conversation,
-    metadata_headers,
-    run_eviction_cycle,
-    synthesize_and_cache,
-    synthesize_and_cache_chunk,
-)
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -128,32 +110,12 @@ logger = logging.getLogger(__name__)
 FRONTEND_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "frontend")
 
 
-_TTS_EVICT_INTERVAL = 30 * 60  # 30 minutes
-
-
-async def _tts_eviction_loop() -> None:
-    """Background task: periodically evict stale / oversized TTS cache entries."""
-    # Run once at startup, then every N minutes.
-    while True:
-        try:
-            run_eviction_cycle()
-        except Exception:
-            logger.warning("TTS cache eviction cycle failed", exc_info=True)
-        await asyncio.sleep(_TTS_EVICT_INTERVAL)
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db()
     run_pending(DB_PATH)
     logger.info("Database initialized")
-    task = asyncio.create_task(_tts_eviction_loop())
     yield
-    task.cancel()
-    try:
-        await task
-    except asyncio.CancelledError:
-        pass
 
 
 app = FastAPI(title="Orb", lifespan=lifespan)
@@ -205,9 +167,6 @@ class SettingsUpdate(BaseModel):
     agent_same_as_writer: Optional[bool] = None
     agent_endpoint_id: Optional[int] = None
     agent_shared_system_prompt: Optional[str] = None
-    tts_enabled: Optional[int] = None
-    tts_auto_speak: Optional[int] = None
-    tts_volume: Optional[float] = None
     inspector_open_states: Optional[dict] = None
 
 
@@ -854,10 +813,6 @@ class ResetConfirm(BaseModel):
     confirm: bool
 
 
-class SpeakChunkRequest(BaseModel):
-    chunk_index: int
-
-
 @app.post("/api/reset")
 async def api_reset(data: ResetConfirm):
     """Reset mood_fragments, director_fragments, phrase_bank, and settings to defaults."""
@@ -928,7 +883,6 @@ async def api_create_conversation(data: ConversationCreate):
 async def api_delete_conversation(cid: str):
     if not await delete_conversation(cid):
         raise HTTPException(status_code=404, detail="Conversation not found")
-    invalidate_cache_for_conversation(cid)
     return {"ok": True}
 
 
@@ -1662,251 +1616,6 @@ async def api_continue_from_user(cid: str, request: Request, data: Optional[Rege
 @app.get("/")
 async def serve_frontend():
     return FileResponse(os.path.join(FRONTEND_DIR, "index.html"))
-
-
-@app.get("/api/tts/backends")
-async def api_tts_backends():
-    """List available TTS backends."""
-    return list_backends()
-
-
-@app.get("/api/tts/cache/stats")
-async def api_tts_cache_stats():
-    """Return TTS cache usage statistics."""
-    return cache_stats()
-
-
-@app.post("/api/tts/cache/evict")
-async def api_tts_cache_evict():
-    """Manually trigger a cache eviction cycle (TTL + LRU)."""
-    return run_eviction_cycle()
-
-
-@app.get("/api/tts/voices")
-async def api_tts_voices(backend: str = "edge", language: str = "", api_url: str = "", api_key: str = ""):
-    """List available voices for a TTS backend."""
-    try:
-        adapter = get_adapter(backend)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    return await adapter.list_voices(language, api_url=api_url, api_key=api_key or None)
-
-
-@app.get("/api/tts/models")
-async def api_tts_models(backend: str = "", api_url: str = "", api_key: str = ""):
-    """List available TTS models for a backend."""
-    if not backend:
-        return []
-    try:
-        adapter = get_adapter(backend)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    if not hasattr(adapter, "list_models"):
-        return []
-    return await adapter.list_models(api_url=api_url, api_key=api_key or None)
-
-
-@app.post("/api/tts/preview")
-async def api_tts_preview(body: dict):
-    """Quick TTS preview — synthesize short text without conversation context."""
-    text = body.get("text", "Preview.")
-    backend = body.get("backend", "edge")
-    voice_id = body.get("voice_id", "en-US-JennyNeural")
-    try:
-        adapter = get_adapter(backend)
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-    from .tts.base import SpeakableChunk
-
-    speed = float(body.get("speed", 1.0))
-    pitch = float(body.get("pitch", 1.0))
-
-    chunk = SpeakableChunk(text=text, emotion="neutral")
-    result = await adapter.synthesize(
-        [chunk],
-        voice_id=voice_id,
-        rate=speed,
-        pitch=pitch,
-        api_url=body.get("api_url", ""),
-        api_key=body.get("api_key", "") or None,
-        model=body.get("model", ""),
-    )
-    return Response(content=result.audio_bytes, media_type=result.content_type)
-
-
-@app.get("/api/characters/{card_id}/voice-profile")
-async def api_get_voice_profile(card_id: str):
-    """Get the TTS voice profile for a character."""
-    profile = await get_voice_profile(card_id)
-    if not profile:
-        return {"character_card_id": card_id, "enabled": 0}
-    return profile
-
-
-@app.put("/api/characters/{card_id}/voice-profile")
-async def api_update_voice_profile(card_id: str, body: dict):
-    """Create or update the TTS voice profile for a character."""
-    # Verify character exists
-    card = await get_character_card(card_id)
-    if not card:
-        raise HTTPException(404, "Character not found")
-
-    # Clear generated TTS files for all conversations using this character.
-    async with get_db() as _db:
-        _rows = await _db.execute(
-            "SELECT id FROM conversations WHERE character_card_id = ?",
-            (card_id,),
-        )
-        _conv_ids = [r["id"] for r in await _rows.fetchall()]
-    invalidate_cache_for_card(_conv_ids)
-
-    profile = await upsert_voice_profile(card_id, body)
-    return profile
-
-
-async def _get_tts_context(cid: str, msg_id: int) -> tuple:
-    """Shared validation for TTS endpoints.
-
-    Returns (msg, conv, card_id, profile, adapter).
-    Raises HTTPException on validation failure.
-    """
-    msg = await get_message_by_id(msg_id)
-    if not msg or msg["conversation_id"] != cid:
-        raise HTTPException(404, "Message not found")
-    if msg["role"] != "assistant":
-        raise HTTPException(400, "TTS is only available for assistant messages")
-
-    conv = await get_conversation(cid)
-    if not conv:
-        raise HTTPException(404, "Conversation not found")
-
-    card_id = conv.get("character_card_id")
-    if not card_id:
-        raise HTTPException(400, "No character associated with this conversation")
-
-    settings = await get_settings()
-    if not settings.get("tts_enabled"):
-        raise HTTPException(403, "TTS is disabled in settings")
-
-    profile = await get_voice_profile(card_id)
-    if not profile or not profile.get("enabled"):
-        raise HTTPException(400, "TTS not enabled for this character")
-
-    try:
-        adapter = get_adapter(profile["backend"])
-    except ValueError as e:
-        raise HTTPException(400, str(e))
-
-    return msg, conv, card_id, profile, adapter
-
-
-@app.post("/api/conversations/{cid}/messages/{msg_id}/speak")
-async def api_speak_message(cid: str, msg_id: int):
-    """Generate TTS audio for a message. Returns MP3 audio."""
-    msg, conv, card_id, profile, adapter = await _get_tts_context(cid, msg_id)
-
-    # Check cache
-    _cache_path = cache_path(cid, msg_id, profile, msg["content"])
-    if os.path.exists(_cache_path):
-        media_type, ext = cache_media_type(profile)
-        metadata: dict = {}
-        meta_path = cache_meta_path(_cache_path)
-        if os.path.exists(meta_path):
-            with open(meta_path, "r", encoding="utf-8") as f:
-                metadata = json.load(f)
-        return FileResponse(
-            _cache_path,
-            media_type=media_type,
-            filename=f"msg_{msg_id}.{ext}",
-            headers=metadata_headers(metadata),
-        )
-
-    # Synthesize and cache
-    try:
-        audio_bytes, content_type, metadata, _cp = await synthesize_and_cache(
-            cid=cid,
-            msg_id=msg_id,
-            profile=profile,
-            content=msg["content"],
-            adapter=adapter,
-        )
-    except ValueError:
-        raise HTTPException(400, "No dialogue found for TTS")
-
-    return Response(
-        content=audio_bytes,
-        media_type=content_type,
-        headers={
-            "Content-Length": str(len(audio_bytes)),
-            **metadata_headers(metadata),
-        },
-    )
-
-
-@app.get("/api/conversations/{cid}/messages/{msg_id}/chunks")
-async def api_get_message_chunks(cid: str, msg_id: int):
-    """Get chunk metadata for a message's TTS extraction."""
-    msg, conv, card_id, profile, adapter = await _get_tts_context(cid, msg_id)
-
-    chunks = chunk_metadata(msg["content"], profile, adapter)
-    return {
-        "chunks": chunks,
-        "extraction_method": "regex",
-    }
-
-
-@app.post("/api/conversations/{cid}/messages/{msg_id}/speak-chunk")
-async def api_speak_chunk(cid: str, msg_id: int, data: SpeakChunkRequest):
-    """Generate TTS audio for a single chunk of a message."""
-    msg, conv, card_id, profile, adapter = await _get_tts_context(cid, msg_id)
-
-    # Validate chunk_index before cache lookup
-    chunks_meta = chunk_metadata(msg["content"], profile, adapter)
-    if not chunks_meta:
-        raise HTTPException(400, "No speakable chunks in this message")
-    if data.chunk_index < 0 or data.chunk_index >= len(chunks_meta):
-        raise HTTPException(
-            400,
-            f"chunk_index {data.chunk_index} out of range (0-{len(chunks_meta) - 1})",
-        )
-
-    # Check per-chunk cache
-    _cp = cache_chunk_path(cid, msg_id, data.chunk_index, profile, msg["content"])
-    if os.path.exists(_cp):
-        media_type, ext = cache_media_type(profile)
-        metadata: dict = {}
-        meta_path = cache_meta_path(_cp)
-        if os.path.exists(meta_path):
-            with open(meta_path, "r", encoding="utf-8") as f:
-                metadata = json.load(f)
-        return FileResponse(
-            _cp,
-            media_type=media_type,
-            filename=f"msg_{msg_id}_chunk{data.chunk_index}.{ext}",
-            headers=metadata_headers(metadata),
-        )
-
-    # Synthesize single chunk
-    try:
-        audio_bytes, content_type, metadata, _cp = await synthesize_and_cache_chunk(
-            cid=cid,
-            msg_id=msg_id,
-            chunk_index=data.chunk_index,
-            profile=profile,
-            content=msg["content"],
-            adapter=adapter,
-        )
-    except ValueError:
-        raise HTTPException(400, "No dialogue found for TTS")
-
-    return Response(
-        content=audio_bytes,
-        media_type=content_type,
-        headers={
-            "Content-Length": str(len(audio_bytes)),
-            **metadata_headers(metadata),
-        },
-    )
 
 
 # Mount static files last

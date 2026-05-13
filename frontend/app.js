@@ -26,16 +26,13 @@ import {
   selectConversation,
   selectReasoningPass,
   sendMessage,
-  setCurrentTtsVolume,
   showAvatarPopup,
   showCompressModal,
   showConvHistoryModal,
-  speakMessageAction,
   startEdit,
   startEditPending,
   startEditTitle,
   stopGeneration,
-  stopSpeaking,
   submitMagicRewrite,
   superRegenerate,
   switchBranch,
@@ -58,7 +55,6 @@ import {
   loadCharacters,
   loadDirectorFragments,
   loadMoodFragments,
-  loadVoiceProfileIntoTab,
   onCharBrowserSearch,
   refreshCharacters,
   renderCharacters,
@@ -66,7 +62,6 @@ import {
   saveDirectorFragment,
   saveImportedChar,
   saveMoodFragment,
-  saveVoiceProfileFromTab,
   setCharBrowserSort,
   setCharBrowserView,
   showCharacterBrowserModal,
@@ -131,13 +126,11 @@ import {
   toggleShowEditorDiff,
   toggleToolEnabled,
   toggleToolsPanel,
-  toggleTtsEnabled,
 } from "./settings.js";
 import { S } from "./state.js";
 import { initTabLock, setLockStateChangeCallback } from "./tabLock.js";
 import { $, formatBytes } from "./utils.js";
 import { validate } from "./validate.js";
-import { setTtsAutoSpeak, setTtsVolume, setTtsVolumeLive } from "./voice.js";
 
 // ── Sidebar toggle
 function toggleSection(header) {
@@ -370,14 +363,6 @@ Object.assign(window, {
   updateAttachmentPreview,
   showAvatarPopup,
   hideAvatarPopup,
-  speakMessage: speakMessageAction,
-  stopSpeaking,
-  setCurrentTtsVolume,
-  // voice
-  setTtsVolumeLive,
-  setTtsVolume,
-  setTtsAutoSpeak,
-  toggleTtsEnabled,
   // worlds / lorebook
   showCreateWorldModal,
   createWorld,

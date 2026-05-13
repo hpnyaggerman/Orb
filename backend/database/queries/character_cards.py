@@ -199,7 +199,6 @@ async def sync_conversations_for_card(card_id: str, card: dict, old_name: str | 
 
 async def delete_character_card(card_id: str, delete_conversations: bool = False) -> bool:
     async with get_db() as db:
-        await db.execute("DELETE FROM voice_profiles WHERE character_card_id = ?", (card_id,))
         if delete_conversations:
             await db.execute("DELETE FROM conversations WHERE character_card_id = ?", (card_id,))
         # When keeping conversations, character_card_id is intentionally left as-is.

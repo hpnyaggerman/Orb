@@ -59,18 +59,6 @@ export const S = {
   hasMultipleTabs: false, // true if multiple tabs of the app are open
   editingPendingUserMsg: false, // true when the pending (not-yet-persisted) user message is in edit mode
   pendingUserMsgEdit: null, // stores edited content for a pending user message to apply after streaming
-  speakingMsgId: null, // message ID currently being spoken (null = idle)
-  ttsLoading: false, // true while fetching TTS audio
-  ttsError: null, // last TTS error message
-  ttsAutoSpeak: false, // automatically speak new assistant messages
-  ttsVolume: 0.75, // audio playback volume, 0.0 - 1.0
-  ttsVoiceProfile: null, // cached voice profile for active character
-  ttsCurrentTime: 0,
-  ttsDuration: 0,
-  ttsEnabled: false, // loaded from settings
-  speakingChunkIdx: null, // currently playing chunk index (null when not playing or monolithic)
-  speakingChunkTotal: null, // total chunks in queue (null when not playing or monolithic)
-  chunkAnnotations: {}, // cache: { [msgId]: chunks[] } — populated on first TTS interaction per message
   inspectedMsgId: null, // when set, Inspector shows director data for this message instead of current state
   inspectedDirectorData: null, // fetched director log data for the inspected message
 };

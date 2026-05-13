@@ -185,9 +185,6 @@ async def update_settings(data: dict) -> dict:
             "agent_same_as_writer",
             "agent_endpoint_id",
             "agent_shared_system_prompt",
-            "tts_enabled",
-            "tts_auto_speak",
-            "tts_volume",
             "inspector_open_states",
         ]
         sets, vals = _build_set_clause(

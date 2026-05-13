@@ -31,9 +31,6 @@ CREATE TABLE IF NOT EXISTS settings (
     agent_same_as_writer INTEGER NOT NULL DEFAULT 1,
     agent_endpoint_id INTEGER REFERENCES endpoints(id) ON DELETE SET NULL,
     agent_shared_system_prompt TEXT NOT NULL DEFAULT '',
-    tts_enabled INTEGER NOT NULL DEFAULT 0,
-    tts_auto_speak INTEGER NOT NULL DEFAULT 0,
-    tts_volume REAL NOT NULL DEFAULT 0.75,
     inspector_open_states TEXT NOT NULL DEFAULT '{"reasoning":true,"tool_calls":false,"injection_block":false,"context_size":true}',
     workflow_config TEXT NOT NULL DEFAULT '{}'
 );
@@ -203,21 +200,4 @@ CREATE TABLE IF NOT EXISTS lorebook_entries (
     updated_at TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS voice_profiles (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    character_card_id TEXT NOT NULL UNIQUE,
-    backend TEXT NOT NULL DEFAULT 'edge',
-    voice_id TEXT NOT NULL DEFAULT 'en-US-JennyNeural',
-    language TEXT NOT NULL DEFAULT 'en-US',
-    rate REAL NOT NULL DEFAULT 1.0,
-    pitch REAL NOT NULL DEFAULT 1.0,
-    enabled INTEGER NOT NULL DEFAULT 0,
-    endpoint_id INTEGER,
-    api_url TEXT DEFAULT '',
-    api_key TEXT DEFAULT '',
-    model TEXT DEFAULT '',
-    created_at TEXT DEFAULT (datetime('now')),
-    updated_at TEXT DEFAULT (datetime('now')),
-    FOREIGN KEY (character_card_id) REFERENCES character_cards(id)
-);
 """

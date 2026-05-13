@@ -97,7 +97,6 @@ from .queries.user_personas import (
     get_user_personas,
     update_user_persona,
 )
-from .queries.voice_profiles import get_voice_profile, upsert_voice_profile
 from .queries.worlds import (
     create_lorebook_entry,
     create_world,
@@ -180,7 +179,6 @@ __all__ = [
     "get_settings",
     "get_user_persona",
     "get_user_personas",
-    "get_voice_profile",
     "get_workflow_config",
     "get_workflow_message_state",
     "get_workflow_state",
@@ -213,5 +211,4 @@ __all__ = [
     "update_settings",
     "update_user_persona",
     "update_world",
-    "upsert_voice_profile",
 ]
