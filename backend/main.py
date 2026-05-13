@@ -10,7 +10,7 @@ import tempfile
 from contextlib import asynccontextmanager
 
 from typing import Annotated, Any, AsyncGenerator, Optional, List, cast
-from fastapi import Depends, FastAPI, HTTPException, Request, UploadFile, File
+from fastapi import Body, Depends, FastAPI, HTTPException, Request, UploadFile, File
 from fastapi.responses import StreamingResponse, FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, field_validator
@@ -90,6 +90,16 @@ from .database import (
     get_active_lorebook_entries,
     resolve_char_context,
     get_user_persona,
+    get_attachment_by_id,
+    add_workflow_attachment,
+)
+from .endpoint_profiles import profile_for
+from .secondary_workflows import (
+    OnDemandCtx,
+    RegenCtx,
+    _readonly,
+    get_workflow,
+    list_workflows,
 )
 from .orchestrator import (
     handle_turn,
@@ -1477,6 +1487,139 @@ async def api_continue_from_user(cid: str, request: Request, data: Optional[Rege
         ),
         media_type="text/event-stream",
     )
+
+
+# Secondary workflows --
+
+
+@app.get("/api/secondary-workflows")
+async def api_list_secondary_workflows():
+    """Manifest the frontend reads once at boot to populate Secondary tabs and buttons."""
+    return [
+        {
+            "id": w.id,
+            "display_name": w.display_name,
+            "config_schema": w.config_schema,
+            "config_defaults": w.config_defaults,
+            "supports_regenerate": w.regenerate is not None,
+            "auto_regen_button": w.auto_regen_button,
+        }
+        for w in list_workflows()
+    ]
+
+
+@app.post("/api/conversations/{cid}/workflows/{workflow_id}/trigger")
+async def api_trigger_workflow(cid: str, workflow_id: str, body: dict = Body(default={})):  # noqa: B008
+    """Run a workflow's on_demand hook against the current conversation state."""
+    w = get_workflow(workflow_id)
+    if w is None or w.on_demand is None:
+        raise HTTPException(status_code=404, detail=f"Workflow {workflow_id!r} is not registered")
+    conv = await get_conversation(cid)
+    if conv is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    msgs = await get_messages(cid)
+    last_user = next((m["content"] for m in reversed(msgs) if m["role"] == "user"), "")
+    settings_snapshot = await get_settings()
+    client = LLMClient(
+        settings_snapshot["endpoint_url"],
+        api_key=settings_snapshot.get("api_key", ""),
+        profile=profile_for(settings_snapshot["endpoint_url"], settings_snapshot.get("model_name", "")),
+    )
+    try:
+        od_ctx = OnDemandCtx(
+            conversation_id=cid,
+            history=_readonly(msgs),
+            last_user_message=last_user,
+            settings=_readonly(settings_snapshot),
+            client=client,
+        )
+        return await w.on_demand(od_ctx, body)
+    except Exception:
+        logger.exception("on_demand hook %r failed", workflow_id)
+        raise HTTPException(status_code=500, detail="On-demand handler raised; see server logs")
+
+
+@app.post("/api/conversations/{cid}/messages/{mid}/attachments/{aid}/regenerate")
+async def api_regenerate_attachment(cid: str, mid: int, aid: int, body: dict = Body(default={})):  # noqa: B008
+    """Append a new sibling variant under a workflow-produced attachment's root."""
+    conv = await get_conversation(cid)
+    if conv is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    att = await get_attachment_by_id(aid)
+    if att is None or att["message_id"] != mid:
+        raise HTTPException(status_code=404, detail="Attachment not found on this message")
+    source = att.get("source") or "user"
+    if not source.startswith("workflow:"):
+        raise HTTPException(status_code=404, detail="Attachment is not workflow-produced")
+    wid = att.get("workflow_id")
+    w = get_workflow(wid) if wid else None
+    if w is None or w.regenerate is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Workflow {wid!r} is not registered or has no regenerate handler",
+        )
+    # Single hop suffices: the dispatcher itself assigns parent_attachment_id = root_id
+    # on every write, so the variant tree is flat by construction (root + N siblings).
+    root_id = att["parent_attachment_id"] or aid
+
+    msgs = await get_messages(cid)
+    msg = next((m for m in msgs if m["id"] == mid), None)
+    if msg is None:
+        raise HTTPException(status_code=404, detail="Message not found in conversation")
+    last_user = next((m["content"] for m in reversed(msgs) if m["role"] == "user"), "")
+    settings_snapshot = await get_settings()
+    client = LLMClient(
+        settings_snapshot["endpoint_url"],
+        api_key=settings_snapshot.get("api_key", ""),
+        profile=profile_for(settings_snapshot["endpoint_url"], settings_snapshot.get("model_name", "")),
+    )
+
+    try:
+        regen_ctx = RegenCtx(
+            conversation_id=cid,
+            message_id=mid,
+            attachment_id=aid,
+            original_attachment=_readonly(att),
+            history=_readonly(msgs),
+            last_user_message=last_user,
+            settings=_readonly(settings_snapshot),
+            client=client,
+        )
+        new_dicts = await w.regenerate(regen_ctx, body)
+    except Exception:
+        logger.exception("regenerate hook %r failed for attachment %r", wid, aid)
+        raise HTTPException(status_code=500, detail="Regenerate handler raised; see server logs")
+
+    if not isinstance(new_dicts, list):
+        logger.warning(
+            "regenerate hook %r returned non-list (%s); treating as empty",
+            wid,
+            type(new_dicts).__name__,
+        )
+        new_dicts = []
+
+    new_ids: list[int] = []
+    for d in new_dicts:
+        if not isinstance(d, dict):
+            logger.warning("regenerate hook %r returned non-dict entry; skipping", wid)
+            continue
+        fixed = {
+            **d,
+            "source": f"workflow:{w.id}",
+            "workflow_id": w.id,
+            "parent_attachment_id": root_id,
+        }
+        try:
+            new_id = await add_workflow_attachment(mid, fixed)
+        except (ValueError, LookupError, OSError):
+            logger.exception(
+                "regenerate hook %r yielded an attachment that failed insert; skipping",
+                wid,
+            )
+            continue
+        new_ids.append(new_id)
+
+    return {"attachments": new_ids}
 
 
 # Frontend serving ──

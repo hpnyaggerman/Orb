@@ -54,7 +54,7 @@ from .queries.endpoints import (
     update_endpoint,
     update_model_config,
 )
-from .queries.message_attachments import add_workflow_attachment
+from .queries.message_attachments import add_workflow_attachment, get_attachment_by_id
 from .queries.messages import (
     add_message,
     delete_message_with_descendants,
@@ -151,6 +151,7 @@ __all__ = [
     "delete_user_persona",
     "delete_world",
     "get_active_lorebook_entries",
+    "get_attachment_by_id",
     "get_attachments_for_message",
     "get_character_avatar",
     "get_character_card",

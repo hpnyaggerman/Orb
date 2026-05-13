@@ -17,6 +17,20 @@ from datetime import datetime, timezone
 from ..connection import get_db
 
 
+async def get_attachment_by_id(att_id: int) -> dict | None:
+    """Fetch a single attachment row by its primary key, or None if absent."""
+    async with get_db() as db:
+        rows = list(
+            await db.execute_fetchall(
+                "SELECT id, message_id, mime_type, data_b64, filename, size, created_at, "
+                "source, workflow_id, parent_attachment_id, annotation "
+                "FROM message_attachments WHERE id = ?",
+                (att_id,),
+            )
+        )
+        return dict(rows[0]) if rows else None
+
+
 async def add_workflow_attachment(message_id: int, attachment: dict) -> int:
     """Insert a workflow-owned attachment row.
 
