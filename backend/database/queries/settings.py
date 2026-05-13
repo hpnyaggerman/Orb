@@ -109,6 +109,51 @@ async def get_settings() -> dict:
         return s
 
 
+# Empty slot returns {} here; per-workflow default fallback lives in the
+# registry wrapper that owns the Workflow objects, so this layer stays free
+# of upward imports into the workflow package.
+
+
+async def get_workflow_config(workflow_id: str) -> dict:
+    """Return the workflow's slot, or {} if the slot is empty."""
+    async with get_db() as db:
+        rows = list(
+            await db.execute_fetchall(
+                "SELECT json_extract(workflow_config, '$.' || ?) AS slot FROM settings WHERE id = 1",
+                (workflow_id,),
+            )
+        )
+        if not rows:
+            return {}
+        slot = rows[0]["slot"]
+        if slot is None:
+            return {}
+        return json.loads(slot)
+
+
+async def set_workflow_config(workflow_id: str, payload: dict) -> None:
+    """Atomic per-slot write via SQLite JSON1.
+
+    Empty dict clears the slot (json_remove); non-empty stores it (json_set).
+    """
+    async with get_db() as db:
+        if not payload:
+            await db.execute(
+                "UPDATE settings "
+                "SET workflow_config = json_remove(COALESCE(workflow_config, '{}'), '$.' || ?) "
+                "WHERE id = 1",
+                (workflow_id,),
+            )
+        else:
+            await db.execute(
+                "UPDATE settings "
+                "SET workflow_config = json_set(COALESCE(workflow_config, '{}'), '$.' || ?, json(?)) "
+                "WHERE id = 1",
+                (workflow_id, json.dumps(payload)),
+            )
+        await db.commit()
+
+
 async def update_settings(data: dict) -> dict:
     async with get_db() as db:
         allowed = [

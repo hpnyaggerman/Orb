@@ -29,7 +29,9 @@ from .queries.conversations import (
     create_conversation,
     delete_conversation,
     get_conversation,
+    get_workflow_state,
     list_conversations,
+    set_workflow_state,
     touch_conversation,
     update_conversation,
 )
@@ -52,6 +54,7 @@ from .queries.endpoints import (
     update_endpoint,
     update_model_config,
 )
+from .queries.message_attachments import add_workflow_attachment
 from .queries.messages import (
     add_message,
     delete_message_with_descendants,
@@ -61,7 +64,9 @@ from .queries.messages import (
     get_messages,
     get_messages_with_branch_info,
     get_path_to_leaf,
+    get_workflow_message_state,
     set_active_leaf,
+    set_workflow_message_state,
     switch_to_branch,
     update_message_content,
 )
@@ -79,7 +84,12 @@ from .queries.phrase_bank import (
     get_phrase_bank_rows,
     update_phrase_group,
 )
-from .queries.settings import get_settings, update_settings
+from .queries.settings import (
+    get_settings,
+    get_workflow_config,
+    set_workflow_config,
+    update_settings,
+)
 from .queries.user_personas import (
     create_user_persona,
     delete_user_persona,
@@ -120,6 +130,7 @@ __all__ = [
     "add_conversation_log",
     "add_message",
     "add_phrase_group",
+    "add_workflow_attachment",
     "create_character_card",
     "create_conversation",
     "create_director_fragment",
@@ -170,6 +181,9 @@ __all__ = [
     "get_user_persona",
     "get_user_personas",
     "get_voice_profile",
+    "get_workflow_config",
+    "get_workflow_message_state",
+    "get_workflow_state",
     "get_world",
     "get_world_by_name",
     "get_worlds",
@@ -180,6 +194,9 @@ __all__ = [
     "reset_to_defaults",
     "resolve_char_context",
     "set_active_leaf",
+    "set_workflow_config",
+    "set_workflow_message_state",
+    "set_workflow_state",
     "switch_to_branch",
     "sync_conversations_for_card",
     "touch_conversation",

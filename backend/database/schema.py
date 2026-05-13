@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS settings (
     tts_enabled INTEGER NOT NULL DEFAULT 0,
     tts_auto_speak INTEGER NOT NULL DEFAULT 0,
     tts_volume REAL NOT NULL DEFAULT 0.75,
-    inspector_open_states TEXT NOT NULL DEFAULT '{"reasoning":true,"tool_calls":false,"injection_block":false,"context_size":true}'
+    inspector_open_states TEXT NOT NULL DEFAULT '{"reasoning":true,"tool_calls":false,"injection_block":false,"context_size":true}',
+    workflow_config TEXT NOT NULL DEFAULT '{}'
 );
 
 CREATE TABLE IF NOT EXISTS mood_fragments (
@@ -55,7 +56,8 @@ CREATE TABLE IF NOT EXISTS conversations (
     post_history_instructions TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
     updated_at TEXT,
-    active_leaf_id INTEGER REFERENCES messages(id) ON DELETE SET NULL
+    active_leaf_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
+    workflow_state TEXT DEFAULT NULL
 );
 
 CREATE TABLE IF NOT EXISTS character_cards (
@@ -89,7 +91,8 @@ CREATE TABLE IF NOT EXISTS messages (
     turn_index INTEGER NOT NULL,
     parent_id INTEGER REFERENCES messages(id) ON DELETE CASCADE,
     progressive_fields TEXT NOT NULL DEFAULT '{}',
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    workflow_state TEXT DEFAULT NULL
 );
 
 CREATE TABLE IF NOT EXISTS director_state (
@@ -148,7 +151,11 @@ CREATE TABLE IF NOT EXISTS message_attachments (
     data_b64 TEXT NOT NULL,
     filename TEXT,
     size INTEGER,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    source TEXT NOT NULL DEFAULT 'user',
+    workflow_id TEXT DEFAULT NULL,
+    parent_attachment_id INTEGER DEFAULT NULL,
+    annotation TEXT DEFAULT NULL
 );
 
 CREATE TABLE IF NOT EXISTS endpoints (
