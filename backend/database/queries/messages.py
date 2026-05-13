@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import base64
 import json
 import sqlite3
 from datetime import datetime, timezone
@@ -106,11 +107,19 @@ async def add_message(
     progressive_fields: dict | None = None,
 ) -> int:
     """Add a message. Returns the new message id.
-    If attachments is provided, each dict must have keys:
-    - mime_type (str)
-    - data_b64 (str)
-    - filename (optional str)
-    - size (optional int)
+
+    Each attachment dict is one of two shapes, distinguished by its
+    'source' field:
+
+    - User uploads (no 'source' or 'source' == 'user'): expects
+      'mime_type' (str), 'data_b64' (str), and optional 'filename' /
+      'size'. Existing behavior.
+    - Workflow artifacts ('source' starts with 'workflow:'): expects
+      'mime' (str), 'data' (bytes), 'filename' (str), 'workflow_id'
+      (str), plus optional 'parent_attachment_id' and 'annotation'. The
+      caller is trusted to have validated shape and impersonation guards
+      already; this helper only encodes bytes and writes the row in the
+      same transaction as the parent message INSERT.
     """
     async with get_db() as db:
         now = datetime.now(timezone.utc).isoformat()
@@ -133,17 +142,41 @@ async def add_message(
         assert message_id is not None
         if attachments:
             for att in attachments:
-                await db.execute(
-                    "INSERT INTO message_attachments (message_id, mime_type, data_b64, filename, size, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                    (
-                        message_id,
-                        att["mime_type"],
-                        att["data_b64"],
-                        att.get("filename"),
-                        att.get("size"),
-                        now,
-                    ),
-                )
+                src = att.get("source")
+                if isinstance(src, str) and src.startswith("workflow:"):
+                    raw = att.get("data")
+                    data_bytes = bytes(raw) if isinstance(raw, (bytes, bytearray)) else b""
+                    data_b64 = base64.b64encode(data_bytes).decode("ascii")
+                    await db.execute(
+                        "INSERT INTO message_attachments "
+                        "(message_id, mime_type, data_b64, filename, size, created_at, "
+                        " source, workflow_id, parent_attachment_id, annotation) "
+                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                        (
+                            message_id,
+                            att["mime"],
+                            data_b64,
+                            att["filename"],
+                            len(data_bytes),
+                            now,
+                            src,
+                            att["workflow_id"],
+                            att.get("parent_attachment_id"),
+                            att.get("annotation"),
+                        ),
+                    )
+                else:
+                    await db.execute(
+                        "INSERT INTO message_attachments (message_id, mime_type, data_b64, filename, size, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+                        (
+                            message_id,
+                            att["mime_type"],
+                            att["data_b64"],
+                            att.get("filename"),
+                            att.get("size"),
+                            now,
+                        ),
+                    )
         await db.execute("UPDATE conversations SET updated_at = ? WHERE id = ?", (now, cid))
         await db.commit()
         return message_id
