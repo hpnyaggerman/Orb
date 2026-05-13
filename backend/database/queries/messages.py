@@ -154,7 +154,9 @@ async def get_attachments_for_message(message_id: int) -> List[dict]:
     async with get_db() as db:
         rows = list(
             await db.execute_fetchall(
-                "SELECT id, mime_type, data_b64, filename, size, created_at FROM message_attachments WHERE message_id = ? ORDER BY id",
+                "SELECT id, mime_type, data_b64, filename, size, created_at, "
+                "source, workflow_id, parent_attachment_id, annotation "
+                "FROM message_attachments WHERE message_id = ? ORDER BY id",
                 (message_id,),
             )
         )
@@ -216,6 +218,51 @@ async def switch_to_branch(cid: str, message_id: int) -> bool:
     leaf_id = await get_deepest_descendant(cid, message_id)
     await set_active_leaf(cid, leaf_id)
     return True
+
+
+# workflow_id is constrained to [a-z_][a-z0-9_]* so the JSON path component is
+# injection-safe; bound as a parameter via '$.' || ? regardless.
+
+
+async def get_workflow_message_state(message_id: int, workflow_id: str) -> dict | None:
+    """Return the workflow's slot on this message, or None if message missing or slot empty."""
+    async with get_db() as db:
+        rows = list(
+            await db.execute_fetchall(
+                "SELECT json_extract(workflow_state, '$.' || ?) AS slot FROM messages WHERE id = ?",
+                (workflow_id, message_id),
+            )
+        )
+        if not rows:
+            return None
+        slot = rows[0]["slot"]
+        if slot is None:
+            return None
+        return json.loads(slot)
+
+
+async def set_workflow_message_state(message_id: int, workflow_id: str, payload: dict | None) -> None:
+    """Atomic per-slot write via SQLite JSON1.
+
+    payload=None removes the slot. Empty dict stores {}. No-op if message
+    missing (UPDATE matches zero rows).
+    """
+    async with get_db() as db:
+        if payload is None:
+            await db.execute(
+                "UPDATE messages "
+                "SET workflow_state = json_remove(COALESCE(workflow_state, '{}'), '$.' || ?) "
+                "WHERE id = ?",
+                (workflow_id, message_id),
+            )
+        else:
+            await db.execute(
+                "UPDATE messages "
+                "SET workflow_state = json_set(COALESCE(workflow_state, '{}'), '$.' || ?, json(?)) "
+                "WHERE id = ?",
+                (workflow_id, json.dumps(payload), message_id),
+            )
+        await db.commit()
 
 
 async def delete_message_with_descendants(cid: str, msg_id: int) -> bool:
