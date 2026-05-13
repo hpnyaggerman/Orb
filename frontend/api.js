@@ -38,15 +38,6 @@ export async function getContextSize(convId) {
   return r.json();
 }
 
-export function summarizeConversation(convId, { keepCount, customInstructions }, signal) {
-  return fetch(`/api/conversations/${convId}/summarize`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ keep_count: keepCount, custom_instructions: customInstructions }),
-    signal,
-  });
-}
-
 export function streamPost(path, body, signal) {
   return fetch("/api" + path, {
     method: "POST",

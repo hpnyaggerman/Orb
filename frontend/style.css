@@ -1679,21 +1679,6 @@ input[type="range"]::-moz-range-track {
   margin-top: 6px;
 }
 
-/* Large review/edit textarea (e.g. compress summary) */
-.modal-textarea {
-  width: 100%;
-  resize: vertical;
-  font-family: inherit;
-}
-
-.modal-textarea-lg {
-  width: 100%;
-  height: 280px;
-  min-height: 120px;
-  resize: vertical;
-  font-family: inherit;
-}
-
 .alt-greeting-row {
   display: flex;
   gap: 6px;

@@ -98,11 +98,9 @@ from .orchestrator import (
     handle_magic_rewrite,
 )
 from .llm_client import LLMClient
-from .endpoint_profiles import profile_for
 from .macros import Macros
 from . import tavern_cards
 from . import prompt_builder
-from .summarizer import ConversationSummarizer
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -297,16 +295,6 @@ class ConversationCreate(BaseModel):
 
 class ConversationUpdate(BaseModel):
     title: Optional[str] = None
-
-
-class SummarizeRequest(BaseModel):
-    keep_count: int  # must be one of 2, 4, 6, 8
-    custom_instructions: Optional[str] = None
-
-
-class CompressRequest(BaseModel):
-    summary: str
-    keep_count: int  # must be one of 2, 4, 6, 8
 
 
 class CharacterCardCreate(BaseModel):
@@ -900,125 +888,6 @@ async def api_update_conversation(cid: str, data: ConversationUpdate):
         raise HTTPException(status_code=404, detail="Conversation not found")
     result = await update_conversation(cid, data.model_dump(exclude_unset=True))
     return result
-
-
-@app.post("/api/conversations/{cid}/summarize")
-async def api_summarize_conversation(cid: str, data: SummarizeRequest, request: Request):
-    """Stream a narrative summary of the conversation history, excluding the last keep_count messages."""
-    if data.keep_count not in (2, 4, 6, 8):
-        raise HTTPException(status_code=400, detail="keep_count must be one of 2, 4, 6, 8")
-
-    conv = await get_conversation(cid)
-    if not conv:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-
-    messages = await get_messages_with_branch_info(cid)
-    history_slice = messages[: max(0, len(messages) - data.keep_count)]
-
-    if not history_slice:
-        raise HTTPException(status_code=400, detail="Not enough messages to summarize")
-
-    settings = await get_settings()
-    char_name = conv.get("character_name", "Character") or "Character"
-    active_persona_id = settings.get("active_persona_id")
-    active_persona = await get_user_persona(active_persona_id) if active_persona_id else None
-    system_prompt, char_persona, mes_example = await resolve_char_context(conv, settings)
-    macros = Macros.from_settings(settings, char_name, active_persona)
-    user_description = active_persona.get("description", "") if active_persona else settings.get("user_description", "")
-
-    client = LLMClient(
-        settings["endpoint_url"],
-        api_key=settings.get("api_key", ""),
-        profile=profile_for(settings["endpoint_url"], settings.get("model_name", "")),
-    )
-    summarizer = ConversationSummarizer(client, settings)
-    llm_messages = summarizer.build_messages(
-        system_prompt,
-        char_persona,
-        conv.get("character_scenario", "") or "",
-        mes_example,
-        ("" if settings.get("prevent_prompt_overrides") else conv.get("post_history_instructions", "")),
-        history_slice,
-        macros,
-        user_description,
-        custom_instructions=data.custom_instructions,
-    )
-
-    async def _gen():
-        try:
-            async for delta in summarizer.stream(llm_messages, settings.get("model_name", "")):
-                yield {"event": "token", "data": delta}
-            yield {"event": "done", "data": ""}
-        except Exception as e:
-            logger.error("Summarize error: %s", e)
-            yield {"event": "error", "data": str(e)}
-
-    return _CleanupStreamingResponse(
-        _sse_stream(_gen(), request, client_ref=[client], cid=cid),
-        media_type="text/event-stream",
-    )
-
-
-@app.post("/api/conversations/{cid}/compress")
-async def api_compress_conversation(cid: str, data: CompressRequest):
-    """Create a new conversation seeded with a summary, then re-append the last keep_count messages."""
-    if data.keep_count not in (2, 4, 6, 8):
-        raise HTTPException(status_code=400, detail="keep_count must be one of 2, 4, 6, 8")
-    if not data.summary.strip():
-        raise HTTPException(status_code=400, detail="summary must not be empty")
-
-    conv = await get_conversation(cid)
-    if not conv:
-        raise HTTPException(status_code=404, detail="Conversation not found")
-
-    messages = await get_messages_with_branch_info(cid)
-    tail = messages[max(0, len(messages) - data.keep_count) :]
-
-    char_name = conv.get("character_name", "") or ""
-    old_title = conv.get("title", "") or ""
-    new_title = f"{old_title} (continued)" if old_title else "Continued"
-    new_cid = str(uuid.uuid4())
-
-    await create_conversation(
-        cid=new_cid,
-        title=new_title,
-        char_name=char_name,
-        char_scenario=conv.get("character_scenario", "") or "",
-        post_history_instructions=conv.get("post_history_instructions", "") or "",
-        character_card_id=conv.get("character_card_id"),
-    )
-
-    # Seed with the approved summary as the first assistant message
-    prev_id = await add_message(new_cid, "assistant", data.summary.strip(), 0)
-    await set_active_leaf(new_cid, prev_id)
-
-    # Re-insert tail messages, chaining via parent_id
-    for i, msg in enumerate(tail):
-        atts = msg.get("attachments") or []
-        att_list = (
-            [
-                {
-                    "mime_type": a["mime_type"],
-                    "data_b64": a["data_b64"],
-                    "filename": a.get("filename"),
-                    "size": a.get("size"),
-                }
-                for a in atts
-            ]
-            if atts
-            else None
-        )
-        prev_id = await add_message(
-            new_cid,
-            msg["role"],
-            msg["content"],
-            i + 1,
-            parent_id=prev_id,
-            attachments=att_list,
-        )
-        await set_active_leaf(new_cid, prev_id)
-
-    return {"new_conversation_id": new_cid}
 
 
 # Character Cards ──

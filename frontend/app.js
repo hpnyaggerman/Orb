@@ -1,6 +1,4 @@
 import {
-  applyCompression,
-  cancelCompression,
   cancelEdit,
   cancelEditPending,
   cancelTitleEdit,
@@ -8,7 +6,6 @@ import {
   continueFromUser,
   deleteConversationFromModal,
   deleteMessage,
-  generateCompressionSummary,
   handleChatKeyNav,
   handleMagicKey,
   handleTitleEditKey,
@@ -27,7 +24,6 @@ import {
   selectReasoningPass,
   sendMessage,
   showAvatarPopup,
-  showCompressModal,
   showConvHistoryModal,
   startEdit,
   startEditPending,
@@ -320,10 +316,6 @@ Object.assign(window, {
   selectConversation,
   deleteConversationFromModal,
   showConvHistoryModal,
-  showCompressModal,
-  generateCompressionSummary,
-  cancelCompression,
-  applyCompression,
   // title edit
   startEditTitle,
   saveTitleEdit,
