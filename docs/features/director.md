@@ -16,8 +16,6 @@ Each mood fragment has:
 - **Prompt text** — injected into the Scene Direction block when the mood is **active**.
 - **Negative prompt** — injected when the mood was active last turn but has just been **deactivated**, so the Writer knows to dial it back.
 
-The Director selects which moods are active each turn by calling the `direct_scene` tool. Active moods persist until explicitly changed; they are stored per conversation and survive page reloads.
-
 You can create, edit, enable/disable, and delete moods. The defaults cover writing style, but nothing stops you from using moods for content rules or any other instruction you want toggled dynamically.
 
 ---
@@ -36,7 +34,7 @@ Each director fragment has:
 
 ### Ordering and precedence
 
-Fragments can be reordered; precedence runs top-down and the Director tries to follow this ordering strictly. A fragment that appears earlier carries more weight when the Director must make trade-offs. Drag the handle on any fragment row to change its position.
+Fragments can be reordered; precedence runs top-down and the Director tries to follow this ordering strictly. A fragment that appears earlier impacts how latter fragments are generated, like a one-way train of thought. Drag the handle on any fragment row to change its position.
 
 ### Data types
 
