@@ -129,7 +129,7 @@ async def _run_pipeline(
     # All three passes must send byte-identical tools; direct_scene is dynamic
     # so it's built once here and shared via schema_overrides.
     schema_overrides = {
-        "direct_scene": build_direct_scene_tool(director_fragments, progressive_state),
+        "direct_scene": build_direct_scene_tool(director_fragments),
     }
 
     # --- Director pass ---
