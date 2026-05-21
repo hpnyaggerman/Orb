@@ -9,6 +9,8 @@ defaults; an unregistered id falls through to ``{}``.
 
 from __future__ import annotations
 
+from copy import deepcopy
+
 import pytest
 
 from backend.secondary_workflows import (
@@ -23,13 +25,10 @@ from backend.tool_defs import STANDALONE_TOOLS, TOOLS
 
 @pytest.fixture(autouse=True)
 def _restore_registry():
-    workflows_snapshot = list(registry_module._WORKFLOWS)
-    by_id_snapshot = dict(registry_module._WORKFLOWS_BY_ID)
+    by_id_snapshot = {k: deepcopy(v) for k, v in registry_module._WORKFLOWS_BY_ID.items()}
     tools_snapshot = dict(TOOLS)
     standalone_snapshot = set(STANDALONE_TOOLS)
     yield
-    registry_module._WORKFLOWS.clear()
-    registry_module._WORKFLOWS.extend(workflows_snapshot)
     registry_module._WORKFLOWS_BY_ID.clear()
     registry_module._WORKFLOWS_BY_ID.update(by_id_snapshot)
     TOOLS.clear()

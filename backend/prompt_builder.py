@@ -23,36 +23,28 @@ LOREBOOK_SCAN_DEPTH = 6
 def format_message_with_attachments(message: dict, macros: Macros | None) -> dict:
     """Convert a message dict with optional attachments to OpenAI vision format.
 
-    Attachments partition by their 'source' column:
-      - 'user' (the default): bytes embed as a multimodal image_url part on the
-        message content, preserving existing behavior.
-      - 'workflow:<id>': bytes never enter the prefix. The 'annotation' column
-        on a root row (parent_attachment_id IS NULL) is appended to the message
-        text with a blank-line separator. Sibling variants and rows with empty
-        or whitespace-only annotations contribute nothing.
+    Two attachment lists travel on the message dict:
+      - 'user_attachments': bytes embed as multimodal image_url parts on the
+        message content.
+      - 'workflow_attachments': bytes never enter the prefix. The 'annotation'
+        column on a root row (parent_attachment_id IS NULL) is appended to the
+        message text with a blank-line separator. Sibling variants and rows
+        with empty or whitespace-only annotations contribute nothing.
 
-    Input message dict expects keys: 'role', 'content' (str), 'attachments'
-    (list of dicts). Each user attachment dict must have 'mime_type' and
-    'data_b64'. Returns a dict with 'role' and 'content' (string or list of
-    parts).
+    Returns a dict with 'role' and 'content' (string or list of parts).
     """
     role = message["role"]
     raw = message.get("content", "")
     text = macros.resolve_prompt(raw) if macros else raw
-    attachments = message.get("attachments") or []
 
-    user_atts: list[dict] = []
+    user_atts: list[dict] = list(message.get("user_attachments") or [])
     workflow_annotations: list[str] = []
-    for att in attachments:
-        source = att.get("source") or "user"
-        if source.startswith("workflow:"):
-            if att.get("parent_attachment_id") is not None:
-                continue
-            annot = att.get("annotation")
-            if isinstance(annot, str) and annot.strip():
-                workflow_annotations.append(annot)
-        else:
-            user_atts.append(att)
+    for att in message.get("workflow_attachments") or []:
+        if att.get("parent_attachment_id") is not None:
+            continue
+        annot = att.get("annotation")
+        if isinstance(annot, str) and annot.strip():
+            workflow_annotations.append(annot)
 
     text_parts = [text] if text else []
     text_parts.extend(workflow_annotations)

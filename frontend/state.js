@@ -68,7 +68,7 @@ export const S = {
   workflowToolsPanelRenderers: [], // [() => htmlString], rendered into the Agents panel Secondary tab
   workflowMessageButtonRenderers: [], // [(msg) => htmlString], extra per-message toolbar buttons
   workflowEventHandlers: {}, // {[event_name]: (data, msgDiv|null) => void}, custom SSE event dispatch
-  workflowAttachmentRenderers: {}, // {[source]: (att, regenButtonHtml) => htmlString}, custom workflow-artifact rendering
+  workflowAttachmentRenderers: {}, // {[workflow_id]: (ctx) => htmlString} where ctx = {att, buttons:{regen,reroll}, defaultHtml}; widget renders one row (the active sibling) and may splice ctx.defaultHtml or the button strings anywhere in its returned body
   workflowPipelines: [], // [{id, label, passes:[{id,label}]}], pushed by registerWorkflowPipeline
   workflowState: {}, // {[workflow_id]: any}, per-workflow opaque UI state
   workflowPhases: {}, // {[channel]: label}, live status pill text per workflow channel
@@ -77,6 +77,16 @@ export const S = {
   reasoningByPass: {}, // {[pass_id]: accumulatedText}, per-workflow-pipeline reasoning buffer
   inspectorTab: "main", // "main" | "secondary"
   toolsTab: "main", // "main" | "secondary"
+
+  // Flat list of workflow-attachment rejection records. Each entry:
+  //   {message_id (number), originating_attachment_id (number|null),
+  //    filename, workflow_id, mime, reason}
+  // originating_attachment_id is null for SSE-path entries (pre-insert
+  // rejection, no DB row); for regenerate/reroll routes it carries the
+  // root_id of the swipe group the operation targeted. Writers merge
+  // per (message_id, originating_attachment_id) tuple; the reader splits
+  // into footer chips (null tag) and per-widget chips (root_id tag).
+  rejectedWorkflowAtts: [],
 };
 
 const RESERVED_PASS_IDS = new Set(["director", "writer", "editor"]);

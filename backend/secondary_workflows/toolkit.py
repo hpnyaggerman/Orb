@@ -11,15 +11,15 @@ runs).
 
 Workflows do not import orchestration symbols, the transactional DB
 helpers (``add_message``, ``create_swipe``, etc.), director-state
-mutators, or pass internals. ``add_workflow_attachment`` is included as
-the only attachment writer, scoped by the ``source = "workflow:..."``
-guard so it cannot impersonate user uploads.
+mutators, or pass internals. ``insert_workflow_attachment`` is exported
+as the only attachment writer -- the workflow byte cache wraps the raw
+row insert with budget + eviction, so all workflow byte writes flow
+through one chokepoint.
 """
 
 from __future__ import annotations
 
 from backend.database import (
-    add_workflow_attachment,
     get_character_card,
     get_conversation,
     get_director_fragments,
@@ -41,7 +41,10 @@ from backend.prompt_builder import (
 )
 from backend.tool_defs import STANDALONE_TOOLS, TOOLS, enabled_schemas
 
+from backend.locks import workflow_config_lock
+
 from ._forced_call import forced_tool_call
+from .attachment_cache import insert_workflow_attachment
 from .registry import (
     get_workflow_config,
     get_workflow_message_state,
@@ -58,7 +61,6 @@ __all__ = [
     "Macros",
     "STANDALONE_TOOLS",
     "TOOLS",
-    "add_workflow_attachment",
     "build_prefix",
     "compute_lorebook_injection_block",
     "compute_style_injection_block",
@@ -78,6 +80,7 @@ __all__ = [
     "get_workflow_config",
     "get_workflow_message_state",
     "get_workflow_state",
+    "insert_workflow_attachment",
     "overlay_enable_tools",
     "parse_tool_calls",
     "reasoning_cfg",
@@ -85,4 +88,5 @@ __all__ = [
     "set_workflow_config",
     "set_workflow_message_state",
     "set_workflow_state",
+    "workflow_config_lock",
 ]

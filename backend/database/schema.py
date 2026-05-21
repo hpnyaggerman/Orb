@@ -32,7 +32,9 @@ CREATE TABLE IF NOT EXISTS settings (
     agent_endpoint_id INTEGER REFERENCES endpoints(id) ON DELETE SET NULL,
     agent_shared_system_prompt TEXT NOT NULL DEFAULT '',
     inspector_open_states TEXT NOT NULL DEFAULT '{"reasoning":true,"tool_calls":false,"injection_block":false,"context_size":true}',
-    workflow_config TEXT NOT NULL DEFAULT '{}'
+    workflow_config TEXT NOT NULL DEFAULT '{}',
+    attachment_cache_budget_bytes INTEGER NOT NULL DEFAULT 524288000,
+    attachment_access_counter INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS mood_fragments (
@@ -141,6 +143,9 @@ CREATE TABLE IF NOT EXISTS user_personas (
     updated_at TEXT NOT NULL
 );
 
+-- Required by migrations 0002 and 0021 during fresh-install bootstrap;
+-- 0024 drops the table at the end of the migration chain. No rows
+-- persist in a fully-migrated database.
 CREATE TABLE IF NOT EXISTS message_attachments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
@@ -148,11 +153,34 @@ CREATE TABLE IF NOT EXISTS message_attachments (
     data_b64 TEXT NOT NULL,
     filename TEXT,
     size INTEGER,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS user_attachments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    mime_type TEXT NOT NULL,
+    data_b64 TEXT NOT NULL,
+    filename TEXT,
+    size INTEGER,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS workflow_attachments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    mime_type TEXT NOT NULL,
+    data_b64 TEXT NOT NULL,
+    filename TEXT,
     created_at TEXT NOT NULL,
-    source TEXT NOT NULL DEFAULT 'user',
-    workflow_id TEXT DEFAULT NULL,
-    parent_attachment_id INTEGER DEFAULT NULL,
-    annotation TEXT DEFAULT NULL
+    workflow_id TEXT NOT NULL,
+    parent_attachment_id INTEGER REFERENCES workflow_attachments(id) ON DELETE CASCADE,
+    annotation TEXT DEFAULT NULL,
+    seed TEXT DEFAULT NULL,
+    generation_metadata TEXT DEFAULT NULL,
+    consumption_metadata TEXT DEFAULT NULL,
+    active_sibling_id INTEGER REFERENCES workflow_attachments(id) ON DELETE SET NULL,
+    recent_accesses TEXT DEFAULT NULL
 );
 
 CREATE TABLE IF NOT EXISTS endpoints (

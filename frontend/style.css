@@ -3180,6 +3180,10 @@ mark.cb-hl {
   gap: 8px;
 }
 
+.workflow-widget {
+  display: contents;
+}
+
 .workflow-artifact-image {
   max-width: 100%;
   max-height: 360px;
@@ -3266,6 +3270,97 @@ mark.cb-hl {
   color: var(--danger, #c66);
   margin-top: 6px;
   width: 100%;
+}
+
+.workflow-reroll-button {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.workflow-reroll-button:hover:not(:disabled) {
+  color: var(--text-primary);
+  border-color: var(--accent);
+}
+
+.workflow-reroll-button:disabled {
+  opacity: .5;
+  cursor: default;
+}
+
+.workflow-reroll-error {
+  font-size: 11px;
+  color: var(--danger, #c66);
+  margin-top: 6px;
+  width: 100%;
+}
+
+.workflow-artifact-evicted {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--bg-elevated);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.workflow-artifact-evicted-label {
+  font-style: italic;
+}
+
+.workflow-rehydrate-button {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  padding: 2px 8px;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.workflow-rehydrate-button:hover:not(:disabled) {
+  color: var(--text-primary);
+  border-color: var(--accent);
+}
+
+.workflow-rehydrate-button:disabled {
+  opacity: .5;
+  cursor: default;
+}
+
+.workflow-rehydrate-disabled {
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.workflow-rehydrate-error {
+  font-size: 11px;
+  color: var(--danger, #c66);
+  margin-top: 6px;
+  width: 100%;
+}
+
+.workflow-rejected-warning {
+  margin-top: 6px;
+  padding: 6px 10px;
+  background: var(--bg-elevated);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  color: var(--text-secondary);
+  font-size: 12px;
+  font-style: italic;
 }
 
 .gen-text-secondary {

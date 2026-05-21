@@ -19,13 +19,17 @@ from .prompt_builder import (
     compute_lorebook_injection_block,
 )
 from .kv_tracker import _KVCacheTracker
+from .locks import workflow_state_lock
 from .macros import Macros
 from .secondary_workflows import (
+    HookType,
     PostCtx,
     PreCtx,
     _readonly,
-    list_workflows,
+    get_workflow,
+    iter_subscriptions,
 )
+from .secondary_workflows.attachment_cache import OVERSIZE_NO_METADATA_REASON
 from .utils import extract_hyperparams
 from .passes.director import _director_pass
 from .passes.writer import _writer_pass, build_writer_content
@@ -348,56 +352,84 @@ async def _run_pipeline(
         "extra_fields": extra_fields,
         "progressive_fields": progressive_fields,
     }
-    for w in list_workflows():
-        if w.post_pipeline is None:
-            continue
+    for sub in iter_subscriptions(HookType.POST_PIPELINE):
         replaced_this_hook = False
-        try:
-            post_ctx = PostCtx(
-                conversation_id=conversation_id or "",
-                draft=draft,
-                effective_msg=effective_msg,
-                director_output=_readonly(director_output),
-                settings=_readonly(settings),
-                prefix=_readonly(prefix),
-                enabled_tools=_readonly(enabled_tools),
-                turn_scratch=turn_scratch,
-                client=client,
-                kv_tracker=kv_tracker,
-            )
-            async for ev in w.post_pipeline(post_ctx):
-                t = ev.get("type") if isinstance(ev, dict) else None
-                if t == "draft_replaced":
-                    if replaced_this_hook:
+        # Serialize same-(cid, workflow_id) writers against concurrent
+        # /trigger calls and any other in-flight pipeline that reaches this
+        # hook on the same conversation. Different workflows on the same
+        # conversation keep distinct lock keys, so they still run in parallel.
+        async with workflow_state_lock(conversation_id or "", sub.workflow_id):
+            try:
+                post_ctx = PostCtx(
+                    conversation_id=conversation_id or "",
+                    draft=draft,
+                    effective_msg=effective_msg,
+                    director_output=_readonly(director_output),
+                    settings=_readonly(settings),
+                    prefix=_readonly(prefix),
+                    enabled_tools=_readonly(enabled_tools),
+                    turn_scratch=turn_scratch,
+                    client=client,
+                    kv_tracker=kv_tracker,
+                )
+                async for ev in sub.callable(post_ctx):
+                    t = ev.get("type") if isinstance(ev, dict) else None
+                    if t == "draft_replaced":
+                        if replaced_this_hook:
+                            logger.warning(
+                                "post_pipeline hook %r yielded a second draft_replaced; ignoring",
+                                sub.workflow_id,
+                            )
+                            continue
+                        new_draft = ev.get("draft")
+                        if not isinstance(new_draft, str) or new_draft == draft:
+                            logger.warning(
+                                "post_pipeline hook %r yielded malformed draft_replaced " "(draft type=%s, unchanged=%s); ignoring",
+                                sub.workflow_id,
+                                type(new_draft).__name__,
+                                new_draft == draft,
+                            )
+                            continue
+                        draft = new_draft
+                        replaced_this_hook = True
+                        yield {"event": "writer_rewrite", "data": {"refined_text": draft}}
+                        continue
+                    if t == "attach_artifact":
+                        # Only workflows declared with produces_artifacts=True
+                        # may persist attachments. Drop silently otherwise so a
+                        # misconfigured workflow cannot corrupt the turn.
+                        w = get_workflow(sub.workflow_id)
+                        if not (w and w.produces_artifacts):
+                            logger.warning(
+                                "post_pipeline hook %r yielded attach_artifact but "
+                                "workflow does not declare produces_artifacts=True; "
+                                "dropping entry",
+                                sub.workflow_id,
+                            )
+                            continue
+                        staged = _stage_workflow_attachment(
+                            ev.get("attachment") if isinstance(ev, dict) else None,
+                            sub.workflow_id,
+                        )
+                        if staged is not None:
+                            staged_attachments.append(staged)
+                        continue
+                    # Underscore-prefixed event names are reserved by
+                    # _consume_pipeline for internal persistence signals
+                    # (_result, _refined_result, _editor_reasoning). Refuse
+                    # them here so a hook cannot drive an extra db.add_message
+                    # or rewrite of the assistant row via impersonation.
+                    e_name = ev.get("event") if isinstance(ev, dict) else None
+                    if isinstance(e_name, str) and e_name.startswith("_"):
                         logger.warning(
-                            "post_pipeline hook %r yielded a second draft_replaced; ignoring",
-                            w.id,
+                            "post_pipeline hook %r yielded reserved internal event %r; dropping",
+                            sub.workflow_id,
+                            e_name,
                         )
                         continue
-                    new_draft = ev.get("draft")
-                    if not isinstance(new_draft, str) or new_draft == draft:
-                        logger.warning(
-                            "post_pipeline hook %r yielded malformed draft_replaced " "(draft type=%s, unchanged=%s); ignoring",
-                            w.id,
-                            type(new_draft).__name__,
-                            new_draft == draft,
-                        )
-                        continue
-                    draft = new_draft
-                    replaced_this_hook = True
-                    yield {"event": "writer_rewrite", "data": {"refined_text": draft}}
-                    continue
-                if t == "attach_artifact":
-                    staged = _stage_workflow_attachment(
-                        ev.get("attachment") if isinstance(ev, dict) else None,
-                        w.id,
-                    )
-                    if staged is not None:
-                        staged_attachments.append(staged)
-                    continue
-                yield ev
-        except Exception:
-            logger.exception("post_pipeline hook %r failed", w.id)
+                    yield ev
+            except Exception:
+                logger.exception("post_pipeline hook %r failed", sub.workflow_id)
 
     yield _make_result(draft, staged_attachments)
     kv_tracker.log_summary()
@@ -453,6 +485,17 @@ def _stage_workflow_attachment(att: object, workflow_id: str) -> dict | None:
     if isinstance(raw_annotation, str) and not raw_annotation.strip():
         out["annotation"] = None
 
+    raw_cm = out.get("consumption_metadata")
+    if raw_cm is not None and not isinstance(raw_cm, dict):
+        logger.warning(
+            "post_pipeline hook %r yielded attach_artifact with non-dict consumption_metadata "
+            "(filename=%r, type=%s); coercing to None",
+            workflow_id,
+            filename,
+            type(raw_cm).__name__,
+        )
+        out["consumption_metadata"] = None
+
     if has_path:
         try:
             with open(att["path"], "rb") as f:
@@ -494,9 +537,10 @@ async def _iterate_pre_pipeline_hooks(
     kv_tracker,
     accumulators: dict,
 ) -> AsyncIterator[dict]:
-    """Drive each registered workflow's pre_pipeline hook in (priority, id)
-    order. Yields SSE pass-through events; mutates *accumulators* with the
-    merged enable_tools map and the system_prompt block list.
+    """Drive each pre_pipeline subscription in priority-ascending order,
+    ties broken by registration order. Yields SSE pass-through events;
+    mutates *accumulators* with the merged enable_tools map and the
+    system_prompt block list.
 
     *accumulators* must enter populated with
     ``{"merged_enabled_tools": <fresh dict>, "extras": []}``; this helper
@@ -504,67 +548,80 @@ async def _iterate_pre_pipeline_hooks(
     ``_readonly`` failure on pathological input is logged-and-skipped rather
     than crashing the turn.
     """
-    for w in list_workflows():
-        if w.pre_pipeline is None:
-            continue
-        try:
-            pre_ctx = PreCtx(
-                conversation_id=conversation_id,
-                history=_readonly(history),
-                last_user_message=last_user_message,
-                settings=_readonly(settings),
-                prefix=_readonly(prefix_base),
-                enabled_tools_pre_merge=_readonly(enabled_tools_pre_merge),
-                turn_scratch=turn_scratch,
-                client=client,
-                kv_tracker=kv_tracker,
-            )
-            async for ev in w.pre_pipeline(pre_ctx):
-                t = ev.get("type") if isinstance(ev, dict) else None
-                if t == "enable_tools":
-                    tools = ev.get("tools")
-                    if isinstance(tools, (set, frozenset)):
-                        items = ((n, True) for n in tools)
-                    elif isinstance(tools, dict):
-                        items = tools.items()
-                    else:
-                        logger.warning(
-                            "pre_pipeline hook %r yielded enable_tools with " "invalid tools payload (type=%s); ignoring",
-                            w.id,
-                            type(tools).__name__,
-                        )
-                        continue
-                    for name, val in items:
-                        if val is not True:
+    for sub in iter_subscriptions(HookType.PRE_PIPELINE):
+        # See workflow_state_lock invariant in backend/locks.py: held across the
+        # hook's full lifetime to keep its workflow_state RMW atomic against any
+        # concurrent /trigger or pipeline iteration on the same (cid, wid).
+        async with workflow_state_lock(conversation_id, sub.workflow_id):
+            try:
+                pre_ctx = PreCtx(
+                    conversation_id=conversation_id,
+                    history=_readonly(history),
+                    last_user_message=last_user_message,
+                    settings=_readonly(settings),
+                    prefix=_readonly(prefix_base),
+                    enabled_tools_pre_merge=_readonly(enabled_tools_pre_merge),
+                    turn_scratch=turn_scratch,
+                    client=client,
+                    kv_tracker=kv_tracker,
+                )
+                async for ev in sub.callable(pre_ctx):
+                    t = ev.get("type") if isinstance(ev, dict) else None
+                    if t == "enable_tools":
+                        tools = ev.get("tools")
+                        if isinstance(tools, (set, frozenset)):
+                            items = ((n, True) for n in tools)
+                        elif isinstance(tools, dict):
+                            items = tools.items()
+                        else:
                             logger.warning(
-                                "workflow %r yielded enable_tools %r=%r; only True " "is honored, entry dropped",
-                                w.id,
-                                name,
-                                val,
+                                "pre_pipeline hook %r yielded enable_tools with " "invalid tools payload (type=%s); ignoring",
+                                sub.workflow_id,
+                                type(tools).__name__,
                             )
                             continue
-                        if name not in TOOLS:
+                        for name, val in items:
+                            if val is not True:
+                                logger.warning(
+                                    "workflow %r yielded enable_tools %r=%r; only True " "is honored, entry dropped",
+                                    sub.workflow_id,
+                                    name,
+                                    val,
+                                )
+                                continue
+                            if name not in TOOLS:
+                                logger.warning(
+                                    "workflow %r enabled unregistered tool %r; dropping",
+                                    sub.workflow_id,
+                                    name,
+                                )
+                                continue
+                            accumulators["merged_enabled_tools"][name] = True
+                        continue
+                    if t == "system_prompt":
+                        block = ev.get("block")
+                        if not isinstance(block, str) or not block.strip():
                             logger.warning(
-                                "workflow %r enabled unregistered tool %r; dropping",
-                                w.id,
-                                name,
+                                "pre_pipeline hook %r yielded empty/whitespace-only " "system_prompt; ignoring",
+                                sub.workflow_id,
                             )
                             continue
-                        accumulators["merged_enabled_tools"][name] = True
-                    continue
-                if t == "system_prompt":
-                    block = ev.get("block")
-                    if not isinstance(block, str) or not block.strip():
+                        accumulators["extras"].append(block)
+                        continue
+                    # Reserved by _consume_pipeline; refused here as
+                    # defense-in-depth even though pre_pipeline events do not
+                    # currently flow through that consumer.
+                    e_name = ev.get("event") if isinstance(ev, dict) else None
+                    if isinstance(e_name, str) and e_name.startswith("_"):
                         logger.warning(
-                            "pre_pipeline hook %r yielded empty/whitespace-only " "system_prompt; ignoring",
-                            w.id,
+                            "pre_pipeline hook %r yielded reserved internal event %r; dropping",
+                            sub.workflow_id,
+                            e_name,
                         )
                         continue
-                    accumulators["extras"].append(block)
-                    continue
-                yield ev
-        except Exception:
-            logger.exception("pre_pipeline hook %r failed", w.id)
+                    yield ev
+            except Exception:
+                logger.exception("pre_pipeline hook %r failed", sub.workflow_id)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -738,7 +795,7 @@ async def _prepare_regen_context(
     grandparent = next((m for m in reversed(history) if m["role"] == "assistant"), None)
     ctx["director"]["progressive_fields"] = grandparent.get("progressive_fields") or {} if grandparent else {}
     user_msg_id = target["parent_id"]
-    attachments = await db.get_attachments_for_message(user_msg_id) if user_msg_id else []
+    attachments = await db.get_user_attachments_for_message(user_msg_id) if user_msg_id else []
     return history, attachments
 
 
@@ -748,8 +805,14 @@ async def _persist_result(
     settings: dict,
     user_msg_id: int | None,
     turn_index: int,
-) -> int | None:
-    """Persist the assistant message after _result.  Returns the new assistant message id."""
+) -> tuple[int | None, list[dict]]:
+    """Persist the assistant message after _result. Returns
+    ``(asst_id, rejected_workflow_atts)``. The rejected list is empty
+    when the cache accepted all workflow atts; populated when the cache
+    dropped atts for rehydratability reasons (oversize without
+    seed+generation_metadata). The caller (``_consume_pipeline``) emits
+    a SSE event for non-empty rejections so the frontend can surface a
+    warning chip on the affected message."""
     if settings.get("enable_agent", 1):
         await db.update_director_state(
             conversation_id,
@@ -768,7 +831,7 @@ async def _persist_result(
         # INSERT so they persist iff the message persists; an aborted turn
         # that never reaches this call leaves no orphan attachment rows.
         staged = res.get("staged_attachments") or None
-        asst_id = await db.add_message(
+        asst_id, rejected = await db.add_message(
             conversation_id,
             "assistant",
             resp_text,
@@ -778,10 +841,10 @@ async def _persist_result(
             progressive_fields=res.get("progressive_fields"),
         )
         await db.set_active_leaf(conversation_id, asst_id)
-        return asst_id
+        return asst_id, rejected
     else:
         logger.info("Skipping assistant message persistence: resp_text is empty (reasoning‑only output)")
-        return None
+        return None, []
 
 
 async def _fallback_persist(
@@ -815,7 +878,7 @@ async def _fallback_persist(
         # NOT included here. This prevents creating message nodes when the
         # user stops generation during the reasoning phase (no writer output).
         if accumulated_text.strip():
-            asst_id = await db.add_message(
+            asst_id, _ = await db.add_message(
                 conversation_id,
                 "assistant",
                 accumulated_text,
@@ -894,8 +957,32 @@ async def _consume_pipeline(
                 yield event
             elif etype == "_result":
                 res = event["data"]
-                asst_id = await _persist_result(conversation_id, res, settings, user_msg_id, turn_index)
+                asst_id, rejected = await _persist_result(conversation_id, res, settings, user_msg_id, turn_index)
                 persisted = True
+                if rejected and asst_id is not None:
+                    # Surface the cache's rejections so the frontend can render a warning
+                    # chip on the message. Bytes never enter the SSE payload. ``reason``
+                    # falls back to the oversize-no-metadata constant for any legacy
+                    # entry the helper failed to tag. ``originating_attachment_id`` is
+                    # always None on this path because no DB row was produced for these
+                    # rejected entries (they are first-write rejections); the frontend
+                    # interprets null as "message-level, not bound to a swipe widget".
+                    yield {
+                        "event": "workflow_attachments_rejected",
+                        "data": {
+                            "message_id": asst_id,
+                            "rejected": [
+                                {
+                                    "filename": a.get("filename"),
+                                    "workflow_id": a.get("workflow_id"),
+                                    "mime": a.get("mime"),
+                                    "reason": a.get("reason") or OVERSIZE_NO_METADATA_REASON,
+                                    "originating_attachment_id": None,
+                                }
+                                for a in rejected
+                            ],
+                        },
+                    }
             elif etype == "_editor_reasoning":
                 res["reasoning_editor"] = event["data"]["reasoning_editor"]
             elif etype == "_refined_result":
@@ -981,7 +1068,7 @@ async def handle_turn(
                         "size": att.get("size"),
                     }
                 )
-            user_msg_id = await db.add_message(
+            user_msg_id, _ = await db.add_message(
                 conversation_id,
                 "user",
                 user_message,

@@ -16,8 +16,9 @@ and ``frozenset.add``, ``TypeError`` from tuple item assignment.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import Enum
 from types import MappingProxyType
-from typing import Any
+from typing import Any, AsyncIterator, Awaitable, Callable
 
 
 def _readonly(obj: Any) -> Any:
@@ -143,12 +144,16 @@ class OnDemandCtx:
 class RegenCtx:
     """Inputs available to a workflow's regenerate HTTP handler.
 
-    ``original_attachment`` carries the row currently being regenerated
-    (the workflow may read its own prior workflow-specific metadata keys
-    off it as a starting point). ``history`` reflects the current
-    conversation at regen time, not the conversation as it stood at the
-    moment of original creation. No ``turn_scratch`` or ``kv_tracker``:
-    regen runs outside any turn.
+    This ctx feeds the *full-reprocess* path: the workflow consumes the
+    sliced history (messages strictly before the anchor message) and may
+    re-derive generation parameters from scratch. The two other regen
+    flows -- same-params with a fresh seed, and same-params + same-seed
+    rehydrate -- use the lighter ``RerollGenCtx`` instead.
+
+    ``original_attachment`` carries the workflow_attachments row currently
+    being regenerated; ``history`` is the conversation as sliced for this
+    regenerate call. No ``turn_scratch`` or ``kv_tracker``: regen runs
+    outside any turn.
     """
 
     conversation_id: str
@@ -159,3 +164,55 @@ class RegenCtx:
     last_user_message: str
     settings: MappingProxyType
     client: Any
+
+
+@dataclass(frozen=True)
+class RerollGenCtx:
+    """Inputs to a workflow's ``reroll_gen`` hook -- the shared backend for
+    two routes (``/reroll-gen``, ``/rehydrate``) that ask the workflow to
+    re-call its generation model with caller-supplied ``params`` + ``seed``
+    and return bytes.
+
+    The hook does not branch on the triggering route. It may return either
+    raw ``bytes`` or a ``(bytes, dict | None)`` tuple; the optional dict is
+    a fresh ``consumption_metadata`` payload used only on the reroll-gen
+    path (it produces a new sibling row) and ignored on rehydrate (which
+    writes back into the original row, valid only when ``data_b64`` is the
+    eviction sentinel).
+
+    ``prior_consumption_metadata`` is the parent attachment's stored
+    ``consumption_metadata`` pre-decoded from JSON, exposed for workflows
+    that want to reuse the parent's payload rather than compute a fresh
+    one. ``history``, ``turn_scratch``, ``kv_tracker`` are absent by
+    design: this ctx is for "no context work, just call the model".
+    """
+
+    conversation_id: str
+    message_id: int
+    attachment_id: int
+    original_attachment: MappingProxyType
+    settings: MappingProxyType
+    client: Any
+    prior_consumption_metadata: MappingProxyType | None = None
+
+
+class HookType(Enum):
+    """Identifies which pipeline slot a subscription binds to.
+
+    PRE_PIPELINE and POST_PIPELINE fan out over every subscribed workflow
+    per turn; ON_DEMAND, REGENERATE, and REROLL_GEN are single-dispatch
+    slots resolved by workflow id from an HTTP route.
+    """
+
+    PRE_PIPELINE = "pre_pipeline"
+    POST_PIPELINE = "post_pipeline"
+    ON_DEMAND = "on_demand"
+    REGENERATE = "regenerate"
+    REROLL_GEN = "reroll_gen"
+
+
+PreHook = Callable[[PreCtx], AsyncIterator[dict]]
+PostHook = Callable[[PostCtx], AsyncIterator[dict]]
+OnDemandHook = Callable[[OnDemandCtx, dict], Awaitable[dict]]
+RegenHook = Callable[[RegenCtx, dict], Awaitable[list[dict]]]
+RerollGenHook = Callable[[RerollGenCtx, dict, str], Awaitable["bytes | tuple[bytes, dict | None]"]]
