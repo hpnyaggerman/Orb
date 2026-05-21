@@ -10,6 +10,7 @@ import {
   handleMagicKey,
   handleTitleEditKey,
   initChatSwipeNav,
+  initWorkflowMutationListener,
   hideAvatarPopup,
   loadConversations,
   loadSecondaryWorkflowManifest,
@@ -444,6 +445,7 @@ setLockStateChangeCallback((hasMultipleTabs) => {
     renderMessages();
   }
 });
+initWorkflowMutationListener();
 
 // Load data independently to prevent failures from blocking other loads
 async function initAll() {

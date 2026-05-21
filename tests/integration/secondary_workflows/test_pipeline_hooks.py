@@ -146,14 +146,14 @@ async def test_pre_pipeline_iter_unregistered_tool_name_dropped():
     assert accumulators["merged_enabled_tools"] == {}
 
 
-async def test_pre_pipeline_iter_system_prompt_collected_in_priority_id_order():
+async def test_pre_pipeline_iter_system_prompt_collected_in_subscription_order():
     async def hook_a(pre_ctx):
         yield {"type": "system_prompt", "block": "block-a"}
 
     async def hook_b(pre_ctx):
         yield {"type": "system_prompt", "block": "block-b"}
 
-    # priority breaks ties by id alphabetical; w_a runs before w_b.
+    # Equal priorities (both default 0) preserve registration order.
     w_a = make_workflow("w_a", pre_pipeline=hook_a)
     w_b = make_workflow("w_b", pre_pipeline=hook_b)
     with register_for_test(w_a), register_for_test(w_b):
@@ -384,6 +384,49 @@ def test_stage_attachment_bad_filename_or_mime_rejected():
         assert _stage_workflow_attachment(bad, "tts") is None
 
 
+def test_stage_attachment_dict_consumption_metadata_passes_through():
+    att = {
+        "filename": "x.bin",
+        "mime": "application/octet-stream",
+        "data": b"x",
+        "source": "workflow:tts",
+        "workflow_id": "tts",
+        "consumption_metadata": {"cues": [0.5, 1.0]},
+    }
+    staged = _stage_workflow_attachment(att, "tts")
+    assert staged is not None
+    assert staged["consumption_metadata"] == {"cues": [0.5, 1.0]}
+
+
+def test_stage_attachment_null_consumption_metadata_passes_through():
+    att = {
+        "filename": "x.bin",
+        "mime": "application/octet-stream",
+        "data": b"x",
+        "source": "workflow:tts",
+        "workflow_id": "tts",
+        "consumption_metadata": None,
+    }
+    staged = _stage_workflow_attachment(att, "tts")
+    assert staged is not None
+    assert staged["consumption_metadata"] is None
+
+
+def test_stage_attachment_non_dict_consumption_metadata_coerces_to_none_without_rejecting():
+    for bad_cm in ("string", 42, [1, 2, 3], True):
+        att = {
+            "filename": "x.bin",
+            "mime": "application/octet-stream",
+            "data": b"x",
+            "source": "workflow:tts",
+            "workflow_id": "tts",
+            "consumption_metadata": bad_cm,
+        }
+        staged = _stage_workflow_attachment(att, "tts")
+        assert staged is not None, f"non-dict consumption_metadata {bad_cm!r} should not reject the attachment"
+        assert staged["consumption_metadata"] is None
+
+
 # -- _run_pipeline post-pipeline iteration --------------------------------
 
 
@@ -417,7 +460,13 @@ async def test_run_pipeline_emits_single_result_with_staged_attachments():
             },
         }
 
-    w = make_workflow("tts", post_pipeline=post_hook)
+    w = make_workflow(
+        "tts",
+        post_pipeline=post_hook,
+        produces_artifacts=True,
+        regenerate=lambda ctx, body: [],
+        reroll_gen=lambda ctx, params, seed: b"",
+    )
     with register_for_test(w):
         with patch("backend.orchestrator._writer_pass", new=mock_writer):
             events = await _drain(
@@ -458,7 +507,13 @@ async def test_run_pipeline_drops_attach_artifact_with_mismatched_source():
             },
         }
 
-    w = make_workflow("tts", post_pipeline=post_hook)
+    w = make_workflow(
+        "tts",
+        post_pipeline=post_hook,
+        produces_artifacts=True,
+        regenerate=lambda ctx, body: [],
+        reroll_gen=lambda ctx, params, seed: b"",
+    )
     with register_for_test(w):
         with patch("backend.orchestrator._writer_pass", new=mock_writer):
             events = await _drain(

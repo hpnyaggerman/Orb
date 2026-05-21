@@ -79,9 +79,10 @@ def test_format_user_attachment_only_produces_multimodal_parts():
     msg = {
         "role": "user",
         "content": "look",
-        "attachments": [
-            {"mime_type": "image/png", "data_b64": "ZmFrZQ==", "source": "user"},
+        "user_attachments": [
+            {"mime_type": "image/png", "data_b64": "ZmFrZQ=="},
         ],
+        "workflow_attachments": [],
     }
     out = format_message_with_attachments(msg, macros=None)
     assert out["role"] == "user"
@@ -95,9 +96,9 @@ def test_format_workflow_root_with_annotation_appends_to_text():
     msg = {
         "role": "assistant",
         "content": "spoken line",
-        "attachments": [
+        "user_attachments": [],
+        "workflow_attachments": [
             {
-                "source": "workflow:tts",
                 "workflow_id": "tts",
                 "parent_attachment_id": None,
                 "annotation": "[audio: 4 second clip]",
@@ -116,9 +117,9 @@ def test_format_workflow_root_without_annotation_contributes_nothing():
     msg = {
         "role": "assistant",
         "content": "silent",
-        "attachments": [
+        "user_attachments": [],
+        "workflow_attachments": [
             {
-                "source": "workflow:tts",
                 "workflow_id": "tts",
                 "parent_attachment_id": None,
                 "annotation": None,
@@ -135,9 +136,9 @@ def test_format_workflow_root_with_whitespace_annotation_ignored():
     msg = {
         "role": "assistant",
         "content": "draft",
-        "attachments": [
+        "user_attachments": [],
+        "workflow_attachments": [
             {
-                "source": "workflow:tts",
                 "workflow_id": "tts",
                 "parent_attachment_id": None,
                 "annotation": "   \n  ",
@@ -154,9 +155,9 @@ def test_format_workflow_sibling_variant_ignored_even_with_annotation():
     msg = {
         "role": "assistant",
         "content": "draft",
-        "attachments": [
+        "user_attachments": [],
+        "workflow_attachments": [
             {
-                "source": "workflow:tts",
                 "workflow_id": "tts",
                 "parent_attachment_id": 17,
                 "annotation": "should-not-appear",
@@ -173,10 +174,11 @@ def test_format_mixed_user_image_and_workflow_annotation():
     msg = {
         "role": "user",
         "content": "describe",
-        "attachments": [
-            {"mime_type": "image/png", "data_b64": "WA==", "source": "user"},
+        "user_attachments": [
+            {"mime_type": "image/png", "data_b64": "WA=="},
+        ],
+        "workflow_attachments": [
             {
-                "source": "workflow:scenebot",
                 "workflow_id": "scenebot",
                 "parent_attachment_id": None,
                 "annotation": "scene tag",
@@ -194,15 +196,14 @@ def test_format_mixed_user_image_and_workflow_annotation():
     assert image_parts[0]["image_url"]["url"] == "data:image/png;base64,WA=="
 
 
-def test_format_attachment_without_source_treated_as_user():
-    # Legacy rows (pre-0021 migration) may not carry a source column at all.
-    # The renderer treats missing source as 'user' so bytes embed normally.
+def test_format_attachment_with_only_user_list_treated_as_user():
     msg = {
         "role": "user",
         "content": "legacy",
-        "attachments": [
+        "user_attachments": [
             {"mime_type": "image/png", "data_b64": "WA=="},
         ],
+        "workflow_attachments": [],
     }
     out = format_message_with_attachments(msg, macros=None)
     assert isinstance(out["content"], list)
@@ -213,9 +214,9 @@ def test_format_workflow_annotation_with_empty_message_text():
     msg = {
         "role": "assistant",
         "content": "",
-        "attachments": [
+        "user_attachments": [],
+        "workflow_attachments": [
             {
-                "source": "workflow:tts",
                 "workflow_id": "tts",
                 "parent_attachment_id": None,
                 "annotation": "voice line",

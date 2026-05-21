@@ -1,9 +1,10 @@
 import { api, getContextSize, stopConversation, streamPost } from "./api.js";
 import { loadCharacters, refreshCharacters, renderCharacters } from "./library.js";
 import { activateAndPrioritizeWorld, deactivateWorld } from "./lorebooks.js";
+import { renderDefaultWidget } from "./default_widget.js";
 import { closeModal, showConfirmModal, showModal } from "./modal.js";
 import { S } from "./state.js";
-import { requestSendPermission } from "./tabLock.js";
+import { broadcastWorkflowMutation, requestSendPermission, setWorkflowMutationCallback } from "./tabLock.js";
 import {
   $,
   avatarUrl,
@@ -29,10 +30,20 @@ function canStartGeneration() {
 function normalizeMessages(msgs) {
   if (!Array.isArray(msgs)) return msgs;
   for (const m of msgs) {
-    if (m.attachments && Array.isArray(m.attachments)) {
-      for (const att of m.attachments) {
+    for (const field of ["user_attachments", "workflow_attachments"]) {
+      const list = m[field];
+      if (!Array.isArray(list)) continue;
+      for (const att of list) {
         if (att.data_b64 != null && att.b64 == null) att.b64 = att.data_b64;
         if (att.mime_type != null && att.mime == null) att.mime = att.mime_type;
+        if (typeof att.consumption_metadata === "string") {
+          try {
+            att.consumption_metadata = JSON.parse(att.consumption_metadata);
+          } catch (e) {
+            console.warn("workflow attachment", att.id, "has malformed consumption_metadata:", e);
+            att.consumption_metadata = null;
+          }
+        }
       }
     }
   }
@@ -50,10 +61,15 @@ function setMessages(serverMsgs) {
   } else {
     S.messages = normalized;
   }
+  // Drop rejection records whose message is no longer present (deleted
+  // message or conversation switch). Keeps the flat list bounded.
+  const liveIds = new Set(S.messages.map((m) => m.id).filter((id) => id != null));
+  S.rejectedWorkflowAtts = S.rejectedWorkflowAtts.filter((r) => liveIds.has(r.message_id));
 }
 
 const ICON_EDIT = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>`;
 const ICON_REGEN = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 .49-4.5"/></svg>`;
+const ICON_REROLL = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><circle cx="12" cy="12" r="9"/><circle cx="8" cy="9" r="1.2"/><circle cx="16" cy="9" r="1.2"/><circle cx="12" cy="14" r="1.2"/></svg>`;
 const ICON_DEL = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>`;
 const ICON_CLEAR = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"/><path d="M22 21H7"/><path d="m5 11 9 9"/></svg>`;
 const ICON_SUPER_REGEN = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>`;
@@ -124,14 +140,8 @@ function _renderExtraButtons(msg) {
 }
 
 // ── Attachments rendering
-function _isWorkflowAttachment(att) {
-  return typeof att.source === "string" && att.source.startsWith("workflow:");
-}
-
-function renderAttachments(attachments) {
-  if (!attachments || attachments.length === 0) return "";
-  const userAtts = attachments.filter((a) => !_isWorkflowAttachment(a));
-  if (!userAtts.length) return "";
+function renderUserAttachments(userAtts) {
+  if (!userAtts || userAtts.length === 0) return "";
   const items = userAtts
     .map((att) => {
       const b64 = att.b64 || att.data_b64 || "";
@@ -152,62 +162,133 @@ function renderAttachments(attachments) {
   return `<div class="attachments">${items}</div>`;
 }
 
-// Per-instance swipe-widget index across re-renders. Default is "show the latest
-// variant" so a freshly regenerated sibling lands in view immediately.
-const _workflowSwipeIndexes = new Map();
+// Eviction sentinel for workflow attachment bytes -- must match
+// `EVICTED_MARKER` in backend/secondary_workflows/attachment_cache.py.
+const WORKFLOW_ATT_EVICTED_MARKER = "[evicted]";
 
-function _autoRenderAttachment(att) {
-  const b64 = att.b64 || att.data_b64 || "";
-  const mime = att.mime || att.mime_type || "application/octet-stream";
-  const filename = att.filename || att.workflow_id || "artifact";
-  if (mime.startsWith("image/")) {
-    return `<img class="workflow-artifact-image" src="data:${mime};base64,${b64}" alt="${esc(filename)}">`;
+function _isAttachmentEvicted(att) {
+  const v = att.b64 || att.data_b64 || "";
+  return v === WORKFLOW_ATT_EVICTED_MARKER;
+}
+
+function _evictedAttachmentHtml(msg, att) {
+  const filename = esc(att.filename || att.workflow_id || "artifact");
+  const canRehydrate = !!att.seed;
+  let btn;
+  if (!canRehydrate) {
+    btn = `<span class="workflow-rehydrate-disabled" title="No stored seed -- bytes cannot be recovered">Bytes evicted</span>`;
+  } else if (S.hasMultipleTabs) {
+    btn = `<button class="workflow-rehydrate-button" disabled title="Close other tabs to rehydrate">Rehydrate</button>`;
+  } else {
+    btn = `<button class="workflow-rehydrate-button" onclick="event.stopPropagation();workflowRehydrate(${msg.id},${att.id},this)">Rehydrate</button>`;
   }
-  return `<a class="workflow-artifact-link" href="data:${mime};base64,${b64}" download="${esc(filename)}">${esc(filename)}</a>`;
+  return `<div class="workflow-artifact-evicted">
+    <span class="workflow-artifact-evicted-label">${filename}</span>
+    ${btn}
+  </div>`;
 }
 
 function _workflowRegenButtonHtml(msg, att) {
   const wid = att.workflow_id;
   if (!wid) return "";
   const entry = S.workflowManifest.find((w) => w.id === wid);
-  if (!entry || !entry.supports_regenerate || !entry.auto_regen_button) return "";
+  if (!entry) return "";
+  if (S.hasMultipleTabs) {
+    return `<button class="workflow-regen-button" disabled title="Close other tabs to regenerate">${ICON_REGEN}</button>`;
+  }
   return `<button class="workflow-regen-button" title="Regenerate" onclick="event.stopPropagation();workflowRegenerate(${msg.id},${att.id},this)">${ICON_REGEN}</button>`;
+}
+
+function _workflowRerollButtonHtml(msg, att) {
+  const wid = att.workflow_id;
+  if (!wid) return "";
+  const entry = S.workflowManifest.find((w) => w.id === wid);
+  if (!entry) return "";
+  if (S.hasMultipleTabs) {
+    return `<button class="workflow-reroll-button" disabled title="Close other tabs to reroll">${ICON_REROLL}</button>`;
+  }
+  return `<button class="workflow-reroll-button" title="Reroll" onclick="event.stopPropagation();workflowReroll(${msg.id},${att.id},this)">${ICON_REROLL}</button>`;
+}
+
+function _activeAttachmentForGroup(atts, root) {
+  // active_sibling_id lives on the root row only; NULL renders the
+  // newest sibling as active.
+  if (!atts.length) return null;
+  if (atts.length === 1) return atts[0];
+  const activeId = root && root.active_sibling_id;
+  if (activeId == null) return atts[atts.length - 1];
+  const found = atts.find((a) => a.id === activeId);
+  return found || atts[atts.length - 1];
+}
+
+function _activeIndexForGroup(atts, root) {
+  const active = _activeAttachmentForGroup(atts, root);
+  if (!active) return 0;
+  const idx = atts.indexOf(active);
+  return idx >= 0 ? idx : 0;
+}
+
+// Returns "" for an empty list so callers can concat the result unconditionally.
+// Entries with originating_attachment_id null vs a root_id are split upstream
+// (one renders as a footer chip, the other beside a widget); this helper does
+// not distinguish them.
+function _workflowRejectionChipHtml(entries) {
+  if (!entries.length) return "";
+  const items = entries.map((r) => `${esc(r.filename || r.workflow_id || "artifact")} (${esc(r.reason)})`).join(", ");
+  return `<div class="workflow-rejected-warning">Workflow attachment(s) rejected: ${items}</div>`;
 }
 
 function _renderWorkflowSwipeContainer(msg, rootId, atts) {
   const instanceId = `ws-${msg.id}-${rootId}`;
   const total = atts.length;
-  const stored = _workflowSwipeIndexes.get(instanceId);
-  const idx = Math.min(stored ?? total - 1, total - 1);
+  const root = atts.find((a) => a.id === rootId) || atts[0];
+  const idx = _activeIndexForGroup(atts, root);
   const active = atts[idx];
-  const renderer = S.workflowAttachmentRenderers[active.source];
   const regenBtn = _workflowRegenButtonHtml(msg, active);
+  const rerollBtn = _workflowRerollButtonHtml(msg, active);
+  const actionButtons = regenBtn + rerollBtn;
   let bodyHtml;
-  if (typeof renderer === "function") {
-    try {
-      bodyHtml = renderer(active, regenBtn) || "";
-    } catch (e) {
-      console.error("workflow attachment renderer for", active.source, "threw:", e);
-      bodyHtml = _autoRenderAttachment(active);
-      if (regenBtn) bodyHtml += regenBtn;
-    }
+  if (_isAttachmentEvicted(active)) {
+    bodyHtml = _evictedAttachmentHtml(msg, active) + actionButtons;
   } else {
-    bodyHtml = _autoRenderAttachment(active);
-    if (regenBtn) bodyHtml += regenBtn;
+    const defaultHtml = renderDefaultWidget(active);
+    const renderer = S.workflowAttachmentRenderers[active.workflow_id];
+    let widgetHtml;
+    if (typeof renderer === "function") {
+      try {
+        widgetHtml = renderer({ att: active, buttons: { regen: regenBtn, reroll: rerollBtn }, defaultHtml }) || "";
+      } catch (e) {
+        console.error("widget for", active.workflow_id, "att", active.id, "threw:", e);
+        widgetHtml = defaultHtml + actionButtons;
+      }
+    } else {
+      widgetHtml = defaultHtml + actionButtons;
+    }
+    bodyHtml = `<div class="workflow-widget" data-workflow-id="${esc(active.workflow_id)}" data-attachment-id="${active.id}">${widgetHtml}</div>`;
   }
   const indicator = total > 1 ? `<span class="workflow-artifact-counter">${idx + 1} / ${total}</span>` : "";
-  const navDisabled = total <= 1 ? " disabled" : "";
+  const navDisabled = total <= 1 || S.hasMultipleTabs ? " disabled" : "";
+  const navTitle = S.hasMultipleTabs ? ` title="Close other tabs to swipe"` : "";
+  // Rejections that target this swipe group's root render as a column
+  // sibling of the swipe widget under .workflow-artifacts so the user
+  // sees which artifact failed without having to map filenames back to
+  // widgets. Kept outside .workflow-artifact-swipe because that is a
+  // no-wrap flex row of nav controls; a banner inside that row would
+  // compress them horizontally.
+  const widgetRejected = S.rejectedWorkflowAtts.filter(
+    (r) => r.message_id === msg.id && r.originating_attachment_id === rootId,
+  );
+  const rejectionChip = _workflowRejectionChipHtml(widgetRejected);
   return `<div class="workflow-artifact-swipe" id="${instanceId}" data-msg-id="${msg.id}" data-root-id="${rootId}">
-    <button class="workflow-swipe-btn"${navDisabled} onclick="event.stopPropagation();workflowArtifactStep('${instanceId}',-1)">&#9664;</button>
+    <button class="workflow-swipe-btn"${navDisabled}${navTitle} onclick="event.stopPropagation();workflowArtifactStep('${instanceId}',-1)">&#9664;</button>
     <div class="workflow-artifact-body">${bodyHtml}</div>
-    <button class="workflow-swipe-btn"${navDisabled} onclick="event.stopPropagation();workflowArtifactStep('${instanceId}',1)">&#9654;</button>
+    <button class="workflow-swipe-btn"${navDisabled}${navTitle} onclick="event.stopPropagation();workflowArtifactStep('${instanceId}',1)">&#9654;</button>
     ${indicator}
-  </div>`;
+  </div>${rejectionChip}`;
 }
 
 function _workflowAttachmentGroups(msg) {
-  if (!msg.attachments || !msg.attachments.length) return [];
-  const workflowAtts = msg.attachments.filter(_isWorkflowAttachment);
+  const workflowAtts = msg.workflow_attachments || [];
   if (!workflowAtts.length) return [];
   const byId = new Map();
   for (const a of workflowAtts) byId.set(a.id, a);
@@ -234,7 +315,28 @@ function _renderWorkflowArtifacts(msg) {
   return `<div class="workflow-artifacts">${containers.join("")}</div>`;
 }
 
-window.workflowArtifactStep = function (instanceId, delta) {
+// Renders rejections whose originating_attachment_id is null -- SSE
+// assistant-persist rejections for which no DB row exists to attach to.
+// Per-widget rejections (root_id-tagged) are rendered by
+// _renderWorkflowSwipeContainer instead.
+function _renderWorkflowRejection(msg) {
+  const rejected = S.rejectedWorkflowAtts.filter((r) => r.message_id === msg.id && r.originating_attachment_id == null);
+  return _workflowRejectionChipHtml(rejected);
+}
+
+// Per-rootId in-flight lock for workflowArtifactStep. Two rapid arrow
+// clicks on the same root within network RTT can produce overlapping
+// POSTs whose responses return in indeterminate order, leaving the
+// server's active_sibling_id on the earlier-click sibling while the UI
+// shows the later-click one (optimistic paint reconciles only on next
+// setMessages refetch). Drop-the-second-click semantic keeps UI and
+// server consistent at the cost of one dropped fast click. The value
+// is `{ msgId, activeId }` so the cross-tab refetch listener can both
+// gate per-msgId and re-apply the in-flight optimistic active_sibling_id
+// after any wholesale setMessages it issues.
+const _workflowSwipeInFlight = new Map();
+
+window.workflowArtifactStep = async function (instanceId, delta) {
   const el = document.getElementById(instanceId);
   if (!el) return;
   const msgId = Number(el.dataset.msgId);
@@ -243,37 +345,139 @@ window.workflowArtifactStep = function (instanceId, delta) {
   if (!msg) return;
   const group = _workflowAttachmentGroups(msg).find((g) => g.rootId === rootId);
   if (!group || group.atts.length <= 1) return;
-  const cur = _workflowSwipeIndexes.get(instanceId) ?? group.atts.length - 1;
+  if (_workflowSwipeInFlight.has(rootId)) return;
+  if (!requestSendPermission()) return;
+  const root = group.atts.find((a) => a.id === rootId) || group.atts[0];
+  const cur = _activeIndexForGroup(group.atts, root);
   let next = cur + delta;
   if (next < 0) next = group.atts.length - 1;
   if (next >= group.atts.length) next = 0;
-  _workflowSwipeIndexes.set(instanceId, next);
+  const newActiveId = group.atts[next].id;
+  _workflowSwipeInFlight.set(rootId, { msgId, activeId: newActiveId });
+  // Local mutation first so the swipe feels instant; reconcile on next
+  // server fetch if the POST fails.
+  if (root) root.active_sibling_id = newActiveId;
   el.outerHTML = _renderWorkflowSwipeContainer(msg, rootId, group.atts);
+  try {
+    await api.post(convUrl(S.activeConvId, "messages", msgId, "workflow-attachments", rootId, "activate"), {
+      sibling_id: newActiveId,
+    });
+    // Record the swipe as an access on the new sibling so the LRU
+    // picker sees the row the user is now viewing as recently
+    // accessed. Independent of the per-msg viewport dedup.
+    _workflowViewportPendingIds.add(newActiveId);
+    _scheduleWorkflowViewportFlush();
+    broadcastWorkflowMutation({ convId: S.activeConvId, msgId });
+  } catch (e) {
+    console.warn("workflow-attachments activate POST failed", e);
+  } finally {
+    _workflowSwipeInFlight.delete(rootId);
+  }
 };
+
+// Per-attId in-flight lock for workflowRehydrate. Each evicted workflow
+// attachment renders its own Rehydrate button; without this lock a fast
+// double-click on the same button (or rapid clicks on distinct evicted
+// buttons within one message) can produce overlapping POSTs that both
+// hit the cache helper's precondition re-check and surface the 409 race.
+// Per-tab module scope; cross-tab duplicates are handled by the route's
+// 409 mapping below. The value is the owning message id, consumed by
+// the cross-tab refetch guard.
+const _workflowRehydrateInFlight = new Map();
+
+window.workflowRehydrate = async function (msgId, attId, btn) {
+  if (!S.activeConvId) return;
+  if (!requestSendPermission()) return;
+  if (_workflowRehydrateInFlight.has(attId)) return;
+  _workflowRehydrateInFlight.set(attId, msgId);
+  btn.disabled = true;
+  const container = btn.closest(".workflow-artifact-swipe");
+  try {
+    await api.post(convUrl(S.activeConvId, "messages", msgId, "workflow-attachments", attId, "rehydrate"), {});
+    setMessages(await api.get(convUrl(S.activeConvId, "messages")));
+    renderMessages();
+    broadcastWorkflowMutation({ convId: S.activeConvId, msgId });
+  } catch (e) {
+    // 409 means a concurrent rehydrate (or this tab's prior in-flight
+    // POST) already restored the bytes. End state is correct -- refetch
+    // and rerender so the UI reflects the restored bytes, no chip.
+    if (e && e.status === 409) {
+      try {
+        setMessages(await api.get(convUrl(S.activeConvId, "messages")));
+        renderMessages();
+        broadcastWorkflowMutation({ convId: S.activeConvId, msgId });
+      } catch (e2) {
+        console.warn("Rehydrate post-409 refetch failed", e2);
+      }
+    } else {
+      console.error("Rehydrate failed:", e);
+      if (container && !container.querySelector(".workflow-rehydrate-error")) {
+        const cap = document.createElement("div");
+        cap.className = "workflow-rehydrate-error";
+        cap.textContent = "Rehydrate failed";
+        container.appendChild(cap);
+      }
+    }
+  } finally {
+    _workflowRehydrateInFlight.delete(attId);
+    btn.disabled = false;
+  }
+};
+
+// Per-rootId in-flight lock covering both Regenerate and Reroll. Both ops
+// publish their result into the shared S.rejectedWorkflowAtts list via a
+// drop-then-append merge keyed by (message_id, root_id). Two ops targeting
+// different siblings of the same root therefore share the same merge key;
+// without serialization, the second response's drop step would erase the
+// first response's just-appended entries. The server already serializes
+// per-root via _workflow_root_lock, so this lock matches that grain and
+// allows full parallelism across distinct roots. The value is the owning
+// message id, consumed by the cross-tab refetch guard.
+const _workflowActionInFlight = new Map();
+
+// Falls back to attId when the message or attachment is no longer locally
+// known (closure outlived a refetch). attId is always a real id at click
+// time, so the fallback still yields a key serializable against itself.
+function _resolveWorkflowRootId(msgId, attId) {
+  const msg = S.messages.find((m) => m.id === msgId);
+  const atts = msg && msg.workflow_attachments;
+  if (!atts) return attId;
+  const att = atts.find((a) => a.id === attId);
+  if (!att) return attId;
+  return att.parent_attachment_id || attId;
+}
+
+// Drops existing entries whose (message_id, originating_attachment_id)
+// tuple matches the operation's key, then appends the response entries
+// with message_id injected. Drop-then-append guarantees an empty response
+// clears stale entries for the same key, and that an operation cannot
+// erase entries belonging to a different (msg, originating) key.
+function _mergeWorkflowRejections(msgId, originatingId, incoming) {
+  S.rejectedWorkflowAtts = S.rejectedWorkflowAtts
+    .filter((r) => !(r.message_id === msgId && r.originating_attachment_id === originatingId))
+    .concat(incoming.map((e) => ({ ...e, message_id: msgId })));
+}
 
 window.workflowRegenerate = async function (msgId, attId, btn) {
   if (!S.activeConvId) return;
+  if (!requestSendPermission()) return;
+  const rootId = _resolveWorkflowRootId(msgId, attId);
+  if (_workflowActionInFlight.has(rootId)) return;
+  _workflowActionInFlight.set(rootId, msgId);
   const container = btn.closest(".workflow-artifact-swipe");
   btn.disabled = true;
   try {
-    const result = await api.post(convUrl(S.activeConvId, "messages", msgId, "attachments", attId, "regenerate"), {});
-    const newIds = Array.isArray(result?.attachments) ? result.attachments : [];
+    const result = await api.post(
+      convUrl(S.activeConvId, "messages", msgId, "workflow-attachments", attId, "regenerate"),
+      {},
+    );
+    const incoming = result && Array.isArray(result.rejected_workflow_atts) ? result.rejected_workflow_atts : [];
+    _mergeWorkflowRejections(msgId, rootId, incoming);
+    // Dispatcher writes active_sibling_id = new sibling for each new row,
+    // so the refreshed state already points the renderer at the latest.
     setMessages(await api.get(convUrl(S.activeConvId, "messages")));
-    const msg = S.messages.find((m) => m.id === msgId);
-    if (msg && newIds.length) {
-      const byId = new Map();
-      for (const a of msg.attachments || []) byId.set(a.id, a);
-      const original = byId.get(attId);
-      if (original) {
-        const rootId =
-          original.parent_attachment_id && byId.has(original.parent_attachment_id)
-            ? original.parent_attachment_id
-            : attId;
-        const group = _workflowAttachmentGroups(msg).find((g) => g.rootId === rootId);
-        if (group) _workflowSwipeIndexes.set(`ws-${msgId}-${rootId}`, group.atts.length - 1);
-      }
-    }
     renderMessages();
+    broadcastWorkflowMutation({ convId: S.activeConvId, msgId });
   } catch (e) {
     console.error("Regenerate failed:", e);
     if (container && !container.querySelector(".workflow-regen-error")) {
@@ -283,9 +487,78 @@ window.workflowRegenerate = async function (msgId, attId, btn) {
       container.appendChild(cap);
     }
   } finally {
+    _workflowActionInFlight.delete(rootId);
     btn.disabled = false;
   }
 };
+
+window.workflowReroll = async function (msgId, attId, btn) {
+  if (!S.activeConvId) return;
+  if (!requestSendPermission()) return;
+  const rootId = _resolveWorkflowRootId(msgId, attId);
+  if (_workflowActionInFlight.has(rootId)) return;
+  _workflowActionInFlight.set(rootId, msgId);
+  const container = btn.closest(".workflow-artifact-swipe");
+  btn.disabled = true;
+  try {
+    const result = await api.post(
+      convUrl(S.activeConvId, "messages", msgId, "workflow-attachments", attId, "reroll-gen"),
+      {},
+    );
+    const incoming = result && Array.isArray(result.rejected_workflow_atts) ? result.rejected_workflow_atts : [];
+    _mergeWorkflowRejections(msgId, rootId, incoming);
+    setMessages(await api.get(convUrl(S.activeConvId, "messages")));
+    renderMessages();
+    broadcastWorkflowMutation({ convId: S.activeConvId, msgId });
+  } catch (e) {
+    console.error("Reroll failed:", e);
+    if (container && !container.querySelector(".workflow-reroll-error")) {
+      const cap = document.createElement("div");
+      cap.className = "workflow-reroll-error";
+      cap.textContent = "Reroll failed";
+      container.appendChild(cap);
+    }
+  } finally {
+    _workflowActionInFlight.delete(rootId);
+    btn.disabled = false;
+  }
+};
+
+// Skip-silently when a local edit, magic input, in-flight workflow op,
+// or active stream would be clobbered by a full setMessages refetch; the
+// stale state recovers on the next user-initiated refetch or reload.
+export function initWorkflowMutationListener() {
+  setWorkflowMutationCallback(async ({ convId, msgId }) => {
+    if (convId !== S.activeConvId) return;
+    if (S.isStreaming) return;
+    if (S.editingMsgId != null || S.editingPendingUserMsg || S.magicInputMsgId != null) return;
+    // All three in-flight maps gate per-msgId: refetching mid-POST on
+    // the same message races with the op's own reconcile. Swipe also
+    // paints active_sibling_id locally before its POST awaits, so the
+    // wholesale setMessages below would drop that optimistic value for
+    // any in-flight swipe on a different msgId in the same conversation.
+    // The re-apply pass after setMessages restores those optimistic ids
+    // until each swipe POST lands and the next refetch carries them.
+    const inFlightMsgIds = new Set([
+      ..._workflowRehydrateInFlight.values(),
+      ..._workflowActionInFlight.values(),
+      ...Array.from(_workflowSwipeInFlight.values(), (v) => v.msgId),
+    ]);
+    if (inFlightMsgIds.has(msgId)) return;
+    try {
+      setMessages(await api.get(convUrl(S.activeConvId, "messages")));
+      for (const [rootId, { msgId: swipeMsgId, activeId }] of _workflowSwipeInFlight) {
+        const m = S.messages.find((x) => x.id === swipeMsgId);
+        if (!m || !Array.isArray(m.workflow_attachments)) continue;
+        const root = m.workflow_attachments.find((a) => a.id === rootId);
+        if (root) root.active_sibling_id = activeId;
+      }
+      renderMessages();
+    } catch (e) {
+      console.warn("cross-tab workflow refetch failed", e);
+    }
+  });
+}
 
 // ── Generation Phase
 const PHASE_ORDER = { pending: 0, directing: 0, generating: 1, refining: 2 };
@@ -525,6 +798,14 @@ export async function selectConversation(id) {
   S.directorState = await api.get(convUrl(id, "director"));
   S.editingMsgId = null;
   S.magicInputMsgId = null;
+  // Reset viewport-tracking state before re-rendering so each conv-open
+  // starts a fresh "what has been reported" session.
+  _workflowObservedMsgIds.clear();
+  _workflowViewportPendingIds.clear();
+  if (_workflowViewportFlushTimer) {
+    clearTimeout(_workflowViewportFlushTimer);
+    _workflowViewportFlushTimer = null;
+  }
   renderMessages();
   const lastAsst = [...S.messages].reverse().find((m) => m.role === "assistant" && m.id);
   if (lastAsst) {
@@ -754,11 +1035,12 @@ export function renderMessages() {
                 ? formatProseWithDiff(S.pendingRefineDiff.ops)
                 : formatProse(resolvePlaceholders(m.content))
             }</div>`;
-        const attachmentsHtml = renderAttachments(m.attachments);
+        const attachmentsHtml = renderUserAttachments(m.user_attachments);
         const workflowArtifactsHtml = _renderWorkflowArtifacts(m);
+        const rejectionHtml = _renderWorkflowRejection(m);
         return `<div class="message ${m.role}" data-msg-id="${m.id}">
         <div class="msg-role">${m.role === "user" ? "You" : esc(getCharName())} ${branchHtml}</div>
-        ${body}${attachmentsHtml}${workflowArtifactsHtml}${toolbar}
+        ${body}${attachmentsHtml}${workflowArtifactsHtml}${rejectionHtml}${toolbar}
       </div>`;
       })
       .join("");
@@ -774,6 +1056,92 @@ export function renderMessages() {
     ct.scrollTop = Math.max(0, ct.scrollHeight - ct.clientHeight - distFromBottom);
   }
   if (!S.isStreaming) updateContextCounter();
+  _refreshWorkflowViewportObserver();
+}
+
+// ── Workflow-attachment access tracking
+//
+// Reports viewport-visible workflow attachments to the backend's LRU-3
+// access counter so the cache picker favors rows the user is looking at.
+//
+// Per-msg dedup (_workflowObservedMsgIds) is required because
+// renderMessages destroys and recreates DOM, so the observer must
+// re-attach every render; without the set, each re-attach re-reports
+// every visible msg.
+//
+// Swipe-bump is independent of the dedup set -- workflowArtifactStep
+// pushes the new active att-id on every swipe so the picker sees the
+// row the user just swiped to as recently accessed.
+
+const _workflowViewportPendingIds = new Set();
+const _workflowObservedMsgIds = new Set();
+let _workflowViewportFlushTimer = null;
+
+function _activeAttachmentIdsForMessage(msg) {
+  // Posts the id of the row the renderer is currently displaying per
+  // group, not the group root. Birth/rehydrate already record specific
+  // row ids (attachment_cache._record_access_inner([att_id])); viewport
+  // reports mirror that granularity so the picker's recent_accesses
+  // tracks bytes the user actually sees.
+  const groups = _workflowAttachmentGroups(msg);
+  if (!groups.length) return [];
+  const ids = [];
+  for (const g of groups) {
+    const root = g.atts.find((a) => a.id === g.rootId) || g.atts[0];
+    const active = _activeAttachmentForGroup(g.atts, root);
+    if (active) ids.push(active.id);
+  }
+  return ids;
+}
+
+const _workflowViewportObserver =
+  typeof IntersectionObserver !== "undefined"
+    ? new IntersectionObserver(
+        (entries) => {
+          for (const entry of entries) {
+            if (!entry.isIntersecting) continue;
+            const msgId = Number(entry.target.dataset.msgId);
+            if (_workflowObservedMsgIds.has(msgId)) continue;
+            _workflowObservedMsgIds.add(msgId);
+            const msg = S.messages.find((m) => m.id === msgId);
+            if (!msg) continue;
+            for (const id of _activeAttachmentIdsForMessage(msg)) {
+              _workflowViewportPendingIds.add(id);
+            }
+          }
+          if (_workflowViewportPendingIds.size) _scheduleWorkflowViewportFlush();
+        },
+        { rootMargin: "0px", threshold: 0.1 },
+      )
+    : null;
+
+function _scheduleWorkflowViewportFlush() {
+  if (_workflowViewportFlushTimer) return;
+  _workflowViewportFlushTimer = setTimeout(_flushWorkflowViewportReport, 250);
+}
+
+async function _flushWorkflowViewportReport() {
+  _workflowViewportFlushTimer = null;
+  if (!_workflowViewportPendingIds.size || !S.activeConvId) return;
+  const ids = [..._workflowViewportPendingIds];
+  _workflowViewportPendingIds.clear();
+  try {
+    await api.post(convUrl(S.activeConvId, "workflow-attachments", "access"), { ids });
+  } catch (e) {
+    console.warn("workflow-attachments access (viewport) failed", e);
+  }
+}
+
+function _refreshWorkflowViewportObserver() {
+  if (!_workflowViewportObserver) return;
+  _workflowViewportObserver.disconnect();
+  for (const el of document.querySelectorAll("#chat-messages .message[data-msg-id]")) {
+    const msgId = Number(el.dataset.msgId);
+    const msg = S.messages.find((m) => m.id === msgId);
+    if (msg && msg.workflow_attachments && msg.workflow_attachments.length) {
+      _workflowViewportObserver.observe(el);
+    }
+  }
 }
 
 function refreshMessageToolbar(msgId) {
@@ -1542,6 +1910,23 @@ function handleSSEEvent(event, data, container, msgDiv, onToken, onRewrite) {
     case "error":
       toast("Error: " + data, true);
       break;
+    case "workflow_attachments_rejected": {
+      // Stash for the post-stream renderMessages paint. Do NOT call
+      // renderMessages here -- S.messages doesn't yet contain the new
+      // asst_id (it lands via afterStream's setMessages refetch),
+      // and renderMessages mid-stream would clobber the streaming bubble.
+      try {
+        const parsed = JSON.parse(data);
+        const msgIdNum = Number(parsed.message_id);
+        const rejected = Array.isArray(parsed.rejected) ? parsed.rejected : [];
+        if (Number.isFinite(msgIdNum) && rejected.length) {
+          _mergeWorkflowRejections(msgIdNum, null, rejected);
+        }
+      } catch (e) {
+        console.warn("workflow_attachments_rejected parse failed", e);
+      }
+      break;
+    }
     default: {
       const handler = S.workflowEventHandlers[event];
       if (typeof handler === "function") {
@@ -1640,7 +2025,10 @@ export async function sendMessage() {
     branch_index: 0,
     prev_branch_id: null,
     next_branch_id: null,
-    attachments,
+    // Key matches the renderer's read (`m.user_attachments` in renderMessages)
+    // so the optimistic bubble shows the image during the SSE stream window,
+    // not just after afterStream() re-fetches the server-shaped message.
+    user_attachments: attachments,
   };
   S.messages.push(userMsg);
   S.pendingUserMsg = userMsg;

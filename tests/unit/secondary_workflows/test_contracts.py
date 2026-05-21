@@ -13,6 +13,7 @@ from backend.secondary_workflows.contracts import (
     PostCtx,
     PreCtx,
     RegenCtx,
+    RerollGenCtx,
     ToolSpec,
     _readonly,
 )
@@ -226,6 +227,58 @@ class TestAllCtxFrozen:
         )
         with pytest.raises(dataclasses.FrozenInstanceError):
             rc.client = None  # type: ignore[misc]
+
+    def test_rerollgenctx_frozen(self):
+        rg = RerollGenCtx(
+            conversation_id="c1",
+            message_id=1,
+            attachment_id=1,
+            original_attachment=_readonly({}),
+            settings=_readonly({}),
+            client=object(),
+        )
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            rg.client = None  # type: ignore[misc]
+
+
+class TestRerollGenCtxFields:
+    """Pin RerollGenCtx field set: no history, no turn_scratch, no kv_tracker."""
+
+    def test_no_history_field(self):
+        fields = {f.name for f in dataclasses.fields(RerollGenCtx)}
+        assert "history" not in fields
+
+    def test_no_turn_scratch_field(self):
+        fields = {f.name for f in dataclasses.fields(RerollGenCtx)}
+        assert "turn_scratch" not in fields
+
+    def test_no_kv_tracker_field(self):
+        fields = {f.name for f in dataclasses.fields(RerollGenCtx)}
+        assert "kv_tracker" not in fields
+
+    def test_expected_field_set(self):
+        fields = {f.name for f in dataclasses.fields(RerollGenCtx)}
+        assert fields == {
+            "conversation_id",
+            "message_id",
+            "attachment_id",
+            "original_attachment",
+            "settings",
+            "client",
+            "prior_consumption_metadata",
+        }
+
+    def test_original_attachment_is_mapping_proxy_in_practice(self):
+        rg = RerollGenCtx(
+            conversation_id="c",
+            message_id=1,
+            attachment_id=2,
+            original_attachment=_readonly({"seed": "abc"}),
+            settings=_readonly({}),
+            client=object(),
+        )
+        with pytest.raises(TypeError):
+            rg.original_attachment["seed"] = "x"  # type: ignore[index]
 
 
 class TestToolSpec:

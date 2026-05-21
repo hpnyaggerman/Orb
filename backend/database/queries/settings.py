@@ -135,6 +135,14 @@ async def set_workflow_config(workflow_id: str, payload: dict) -> None:
     """Atomic per-slot write via SQLite JSON1.
 
     Empty dict clears the slot (json_remove); non-empty stores it (json_set).
+
+    Caller must hold ``backend.locks.workflow_config_lock()`` across the
+    read-then-write the payload was computed from. Direct use without the
+    lock is safe for blind-replace writes -- a single ``json_set`` is
+    atomic at the SQL layer -- but RMW sequences (``get_workflow_config``
+    -> mutate -> ``set_workflow_config``) silently lose writes under
+    contention because the read happens in a separate transaction outside
+    the lock window.
     """
     async with get_db() as db:
         if not payload:
