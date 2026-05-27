@@ -19,9 +19,11 @@ from dataclasses import dataclass, field
 from typing import Callable, Mapping, Optional
 
 from backend.database import (
+    get_workflow_character_state as _db_get_workflow_character_state,
     get_workflow_config as _db_get_workflow_config,
     get_workflow_message_state as _db_get_workflow_message_state,
     get_workflow_state as _db_get_workflow_state,
+    set_workflow_character_state as _db_set_workflow_character_state,
     set_workflow_config as _db_set_workflow_config,
     set_workflow_message_state as _db_set_workflow_message_state,
     set_workflow_state as _db_set_workflow_state,
@@ -226,6 +228,14 @@ async def get_workflow_message_state(message_id: int, workflow_id: str) -> dict 
 async def set_workflow_message_state(message_id: int, workflow_id: str, payload: dict | None) -> None:
     """Write the workflow's per-message slot. None removes it."""
     await _db_set_workflow_message_state(message_id, workflow_id, payload)
+
+
+async def get_workflow_character_state(character_id: str, workflow_id: str) -> dict | None:
+    return await _db_get_workflow_character_state(character_id, workflow_id)
+
+
+async def set_workflow_character_state(character_id: str, workflow_id: str, payload: dict | None) -> None:
+    await _db_set_workflow_character_state(character_id, workflow_id, payload)
 
 
 async def get_workflow_config(workflow_id: str) -> dict:

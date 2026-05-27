@@ -96,6 +96,8 @@ class PreCtx:
     turn_scratch: dict
     client: Any
     kv_tracker: Any
+    character_id: str | None = None
+    character: MappingProxyType | None = None
 
 
 @dataclass(frozen=True)
@@ -122,6 +124,8 @@ class PostCtx:
     turn_scratch: dict
     client: Any
     kv_tracker: Any
+    character_id: str | None = None
+    character: MappingProxyType | None = None
 
 
 @dataclass(frozen=True)
@@ -138,6 +142,8 @@ class OnDemandCtx:
     last_user_message: str
     settings: MappingProxyType
     client: Any
+    character_id: str | None = None
+    character: MappingProxyType | None = None
 
 
 @dataclass(frozen=True)
@@ -164,6 +170,8 @@ class RegenCtx:
     last_user_message: str
     settings: MappingProxyType
     client: Any
+    character_id: str | None = None
+    character: MappingProxyType | None = None
 
 
 @dataclass(frozen=True)
@@ -175,10 +183,10 @@ class RerollGenCtx:
 
     The hook does not branch on the triggering route. It may return either
     raw ``bytes`` or a ``(bytes, dict | None)`` tuple; the optional dict is
-    a fresh ``consumption_metadata`` payload used only on the reroll-gen
-    path (it produces a new sibling row) and ignored on rehydrate (which
-    writes back into the original row, valid only when ``data_b64`` is the
-    eviction sentinel).
+    a fresh ``consumption_metadata`` payload honored on both routes -- it
+    becomes the new sibling's metadata on reroll-gen, and overwrites the
+    original row's metadata in place on rehydrate. A raw ``bytes`` return
+    (or a ``None`` second element) leaves the stored value unchanged.
 
     ``prior_consumption_metadata`` is the parent attachment's stored
     ``consumption_metadata`` pre-decoded from JSON, exposed for workflows

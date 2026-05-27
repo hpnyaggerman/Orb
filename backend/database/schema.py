@@ -79,7 +79,8 @@ CREATE TABLE IF NOT EXISTS character_cards (
     source_format TEXT NOT NULL DEFAULT 'manual',
     world_id TEXT DEFAULT NULL REFERENCES worlds(id) ON DELETE SET NULL,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    workflow_state TEXT DEFAULT NULL
 );
 
 CREATE TABLE IF NOT EXISTS messages (
@@ -143,9 +144,11 @@ CREATE TABLE IF NOT EXISTS user_personas (
     updated_at TEXT NOT NULL
 );
 
--- Required by migrations 0002 and 0021 during fresh-install bootstrap;
--- 0024 drops the table at the end of the migration chain. No rows
--- persist in a fully-migrated database.
+-- Required on fresh install by migration 0002, which deletes orphan rows
+-- from this table before any migration could create it. Migration
+-- 0020_secondary_workflows copies surviving rows into user_attachments and
+-- drops this table at the end of the chain. No rows persist in a
+-- fully-migrated database.
 CREATE TABLE IF NOT EXISTS message_attachments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,

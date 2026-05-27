@@ -2,7 +2,25 @@
 
 from __future__ import annotations
 
+from copy import deepcopy
+
+import pytest
+
+from backend.secondary_workflows import registry as registry_module
+
 from ._fixtures import make_workflow, register_for_test
+
+
+@pytest.fixture(autouse=True)
+def _empty_registry():
+    # These tests assert the manifest's exact list contents, so clear the
+    # first-party workflows registered at import time and restore them on
+    # teardown; each test then controls the whole registry itself.
+    snapshot = {k: deepcopy(v) for k, v in registry_module._WORKFLOWS_BY_ID.items()}
+    registry_module._WORKFLOWS_BY_ID.clear()
+    yield
+    registry_module._WORKFLOWS_BY_ID.clear()
+    registry_module._WORKFLOWS_BY_ID.update(snapshot)
 
 
 async def test_empty_registry_returns_empty_list(client):

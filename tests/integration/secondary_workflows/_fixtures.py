@@ -145,6 +145,7 @@ def _gated_async_generator(gate: asyncio.Event, release: asyncio.Event):
         release.set()
         if False:
             yield  # pragma: no cover -- async generator with no yields
+
     return hook
 
 

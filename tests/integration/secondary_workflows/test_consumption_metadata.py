@@ -220,12 +220,36 @@ async def test_reroll_gen_hook_prior_consumption_metadata_is_none_when_absent(cl
     assert captured == [None]
 
 
-async def test_rehydrate_discards_tuple_dict_element_and_preserves_existing_metadata(client):
+async def test_rehydrate_tuple_dict_overwrites_consumption_metadata(client):
     cid, mid, aid = await _seed_with_consumption_metadata(client, {"orig": True})
     await evict(aid)
 
     async def reroll(ctx, params, seed):
-        return (b"RECOVERED", {"hook_attempted_overwrite": True})
+        return (b"RECOVERED", {"fresh": True})
+
+    wf = make_workflow(
+        "img",
+        regenerate=lambda ctx, body: [],
+        reroll_gen=reroll,
+        produces_artifacts=True,
+    )
+    with register_for_test(wf):
+        resp = await client.post(
+            f"/api/conversations/{cid}/messages/{mid}/workflow-attachments/{aid}/rehydrate",
+            json={},
+        )
+    assert resp.status_code == 200
+    row = await must_get_workflow_attachment(aid)
+    assert row["data_b64"] != EVICTED_MARKER
+    assert json.loads(row["consumption_metadata"]) == {"fresh": True}
+
+
+async def test_rehydrate_raw_bytes_keeps_stored_consumption_metadata(client):
+    cid, mid, aid = await _seed_with_consumption_metadata(client, {"orig": True})
+    await evict(aid)
+
+    async def reroll(ctx, params, seed):
+        return b"RECOVERED"
 
     wf = make_workflow(
         "img",
@@ -242,3 +266,72 @@ async def test_rehydrate_discards_tuple_dict_element_and_preserves_existing_meta
     row = await must_get_workflow_attachment(aid)
     assert row["data_b64"] != EVICTED_MARKER
     assert json.loads(row["consumption_metadata"]) == {"orig": True}
+
+
+async def test_rehydrate_tuple_none_keeps_stored_consumption_metadata(client):
+    cid, mid, aid = await _seed_with_consumption_metadata(client, {"orig": True})
+    await evict(aid)
+
+    async def reroll(ctx, params, seed):
+        return (b"RECOVERED", None)
+
+    wf = make_workflow(
+        "img",
+        regenerate=lambda ctx, body: [],
+        reroll_gen=reroll,
+        produces_artifacts=True,
+    )
+    with register_for_test(wf):
+        resp = await client.post(
+            f"/api/conversations/{cid}/messages/{mid}/workflow-attachments/{aid}/rehydrate",
+            json={},
+        )
+    assert resp.status_code == 200
+    row = await must_get_workflow_attachment(aid)
+    assert json.loads(row["consumption_metadata"]) == {"orig": True}
+
+
+async def test_rehydrate_tuple_non_dict_coerces_and_keeps_stored(client):
+    cid, mid, aid = await _seed_with_consumption_metadata(client, {"orig": True})
+    await evict(aid)
+
+    async def reroll(ctx, params, seed):
+        return (b"RECOVERED", "not a dict")
+
+    wf = make_workflow(
+        "img",
+        regenerate=lambda ctx, body: [],
+        reroll_gen=reroll,
+        produces_artifacts=True,
+    )
+    with register_for_test(wf):
+        resp = await client.post(
+            f"/api/conversations/{cid}/messages/{mid}/workflow-attachments/{aid}/rehydrate",
+            json={},
+        )
+    assert resp.status_code == 200
+    row = await must_get_workflow_attachment(aid)
+    assert json.loads(row["consumption_metadata"]) == {"orig": True}
+
+
+async def test_rehydrate_overwrites_when_stored_was_null(client):
+    cid, mid, aid = await _seed_with_consumption_metadata(client, None)
+    await evict(aid)
+
+    async def reroll(ctx, params, seed):
+        return (b"RECOVERED", {"new": 1})
+
+    wf = make_workflow(
+        "img",
+        regenerate=lambda ctx, body: [],
+        reroll_gen=reroll,
+        produces_artifacts=True,
+    )
+    with register_for_test(wf):
+        resp = await client.post(
+            f"/api/conversations/{cid}/messages/{mid}/workflow-attachments/{aid}/rehydrate",
+            json={},
+        )
+    assert resp.status_code == 200
+    row = await must_get_workflow_attachment(aid)
+    assert json.loads(row["consumption_metadata"]) == {"new": 1}

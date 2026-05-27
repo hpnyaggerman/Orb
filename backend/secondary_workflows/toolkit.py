@@ -46,10 +46,12 @@ from backend.locks import workflow_config_lock
 from ._forced_call import forced_tool_call
 from .attachment_cache import insert_workflow_attachment
 from .registry import (
+    get_workflow_character_state,
     get_workflow_config,
     get_workflow_message_state,
     get_workflow_state,
     overlay_enable_tools,
+    set_workflow_character_state,
     set_workflow_config,
     set_workflow_message_state,
     set_workflow_state,
@@ -77,6 +79,7 @@ __all__ = [
     "get_mood_fragments",
     "get_phrase_bank",
     "get_user_personas",
+    "get_workflow_character_state",
     "get_workflow_config",
     "get_workflow_message_state",
     "get_workflow_state",
@@ -85,6 +88,7 @@ __all__ = [
     "parse_tool_calls",
     "reasoning_cfg",
     "run_audit",
+    "set_workflow_character_state",
     "set_workflow_config",
     "set_workflow_message_state",
     "set_workflow_state",

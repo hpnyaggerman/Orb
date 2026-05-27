@@ -420,6 +420,35 @@ async def test_rehydrate_attachment_counts_as_access(client, db):
     assert after - before == 1
 
 
+async def test_rehydrate_attachment_writes_consumption_metadata_when_supplied(client):
+    cid, mid = await _seed_message(client)
+    aid = await _seed_row(mid, data=b"ORIGINAL")
+    await evict(aid)
+    await rehydrate_attachment(aid, b"NEW", consumption_metadata={"x": 1})
+    row = await must_get_workflow_attachment(aid)
+    assert row["data_b64"] == base64.b64encode(b"NEW").decode("ascii")
+    assert json.loads(row["consumption_metadata"]) == {"x": 1}
+
+
+async def test_rehydrate_attachment_does_not_mutate_generation_metadata(client):
+    cid, mid = await _seed_message(client)
+    aid = await insert_workflow_attachment_row(
+        mid,
+        {
+            "filename": "x",
+            "mime": "application/octet-stream",
+            "data": b"ORIGINAL",
+            "workflow_id": "wf",
+            "seed": "s",
+            "generation_metadata": {"steps": 7},
+        },
+    )
+    await evict(aid)
+    await rehydrate_attachment(aid, b"NEW", consumption_metadata={"x": 1})
+    row = await must_get_workflow_attachment(aid)
+    assert json.loads(row["generation_metadata"]) == {"steps": 7}
+
+
 async def test_set_active_sibling_writes_value(client):
     cid, mid = await _seed_message(client)
     root_id = await _seed_row(mid)

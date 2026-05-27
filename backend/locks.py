@@ -16,6 +16,17 @@ window cannot be clobbered mid-stream. ``asyncio.Lock`` is non-reentrant,
 so a hook callable must not re-enter an HTTP route that takes this lock
 for the same pair.
 
+``workflow_character_state_lock(character_id, workflow_id)`` is the
+per-character analogue, keyed by ``character_id`` rather than ``cid``
+because one character card is referenced by many conversations
+(``conversations.character_card_id`` is nullable and non-FK), so two
+concurrent turns on different conversations of the same character would
+otherwise read-then-write the same ``character_cards.workflow_state``
+slot under different keys and clobber each other. It is acquired INSIDE
+``workflow_state_lock`` at every site (conversation lock outer, character
+lock inner) to fix one global acquisition order; the same non-reentrancy
+rule applies.
+
 ``workflow_config_lock()`` serializes ALL ``workflow_config``
 read-then-write windows across the process regardless of workflow id,
 because every slot lives in one JSON blob on the global ``settings``
@@ -42,6 +53,16 @@ _workflow_state_locks: dict[tuple[str, str], asyncio.Lock] = {}
 @asynccontextmanager
 async def workflow_state_lock(cid: str, workflow_id: str):
     lock = _workflow_state_locks.setdefault((cid, workflow_id), asyncio.Lock())
+    async with lock:
+        yield
+
+
+_workflow_character_state_locks: dict[tuple[str, str], asyncio.Lock] = {}
+
+
+@asynccontextmanager
+async def workflow_character_state_lock(character_id: str, workflow_id: str):
+    lock = _workflow_character_state_locks.setdefault((character_id, workflow_id), asyncio.Lock())
     async with lock:
         yield
 

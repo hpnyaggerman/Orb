@@ -61,6 +61,10 @@ def _restore_globals():
     by_id_snapshot = {k: deepcopy(v) for k, v in registry_module._WORKFLOWS_BY_ID.items()}
     tools_snapshot = dict(TOOLS)
     standalone_snapshot = set(STANDALONE_TOOLS)
+    # Tests below assert exact registry contents, so start from an empty
+    # workflow registry rather than the first-party workflows registered at
+    # import time. Built-in tools in TOOLS are left intact.
+    registry_module._WORKFLOWS_BY_ID.clear()
     yield
     registry_module._WORKFLOWS_BY_ID.clear()
     registry_module._WORKFLOWS_BY_ID.update(by_id_snapshot)

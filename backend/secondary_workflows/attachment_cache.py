@@ -18,7 +18,7 @@ import os
 from typing import Any
 
 from backend.database.connection import get_db
-from backend.database.queries.workflow_attachments import insert_workflow_attachment_row
+from backend.database.queries.workflow_attachments import _encode_metadata_field, insert_workflow_attachment_row
 
 from .registry import get_workflow
 
@@ -140,12 +140,19 @@ async def _byte_bearing_candidates_on(db) -> list[dict]:
     return out
 
 
-async def rehydrate_attachment(attachment_id: int, data: bytes) -> None:
+async def rehydrate_attachment(attachment_id: int, data: bytes, *, consumption_metadata: dict | None = None) -> None:
     """Restore bytes into an evicted workflow_attachments row in place.
 
     Atomic: one connection holds ``BEGIN IMMEDIATE`` across the
     precondition recheck, eviction prefix, and final UPDATE. Concurrent
     rehydrates of the same id serialize on the SQLite write lock.
+
+    ``consumption_metadata`` overwrites the row's stored value in the same
+    transaction as the byte write when a dict is supplied; ``None`` leaves
+    the stored value intact. The bytes are the runtime truth and their
+    ``consumption_metadata`` is the derived store co-written here, so a
+    regeneration that yields byte-different output can replace metadata that
+    no longer describes the restored bytes.
 
     Budget accounting uses ``len(data)`` directly -- the caller already
     holds the bytes to be written, so the precise new byte count is
@@ -166,6 +173,11 @@ async def rehydrate_attachment(attachment_id: int, data: bytes) -> None:
 
     new_size = len(data)
     data_b64 = base64.b64encode(bytes(data)).decode("ascii")
+    cm_json = (
+        _encode_metadata_field(consumption_metadata, "consumption_metadata", "<rehydrate>", "<rehydrate>")
+        if consumption_metadata is not None
+        else None
+    )
 
     async with get_db() as db:
         await db.execute("BEGIN IMMEDIATE")
@@ -205,10 +217,17 @@ async def rehydrate_attachment(attachment_id: int, data: bytes) -> None:
         # _lru3_key reads a stale oldest entry, making the just-rehydrated row
         # the next eviction leader -- defeating the user's "give me this back"
         # intent on the very next insert.
-        await db.execute(
-            "UPDATE workflow_attachments SET data_b64 = ?, recent_accesses = NULL WHERE id = ?",
-            (data_b64, attachment_id),
-        )
+        if cm_json is not None:
+            await db.execute(
+                "UPDATE workflow_attachments "
+                "SET data_b64 = ?, recent_accesses = NULL, consumption_metadata = ? WHERE id = ?",
+                (data_b64, cm_json, attachment_id),
+            )
+        else:
+            await db.execute(
+                "UPDATE workflow_attachments SET data_b64 = ?, recent_accesses = NULL WHERE id = ?",
+                (data_b64, attachment_id),
+            )
         await _record_access_inner(db, [attachment_id])
         await db.commit()
 
@@ -788,3 +807,145 @@ async def set_active_sibling(
                 raise ValueError(f"sibling {sibling_id!r} does not belong to root {root_id!r}'s group")
         await _set_active_sibling_on(db, root_id, sibling_id)
         await db.commit()
+
+
+async def delete_workflow_attachments(
+    target_id: int,
+    *,
+    scope: str,
+    expected_message_id: int | None = None,
+) -> dict:
+    """Delete a workflow-attachment variant or a whole group.
+
+    Validation and writes share one ``BEGIN IMMEDIATE`` (matching
+    ``set_active_sibling``) so a concurrent mutation cannot land between
+    check and write. The group root is derived from the target inside the
+    transaction.
+
+    scope "group": delete the root and every sibling.
+    scope "variant": delete ``target_id``. When ``target_id`` is the group
+      root and siblings survive, the oldest survivor is promoted to root
+      (the others are re-parented onto it) before the old root is deleted,
+      so the survivors remain one group rather than scattering into
+      singletons. Only a root row's annotation reaches the LLM prefix
+      (see ``prompt_builder``), so the promoted root inherits the deleted
+      root's annotation, keeping the message's model-visible text stable.
+
+    Performs no eviction or access-counter bookkeeping: deleted rows
+    release their own byte budget and their access records vanish with
+    them.
+
+    Returns ``{"deleted_ids": list[int], "group_empty": bool,
+    "root_id": int, "active_sibling_id": int | None}``. ``root_id`` is the
+    post-op root (the deleted root id when ``group_empty``).
+    ``active_sibling_id`` is meaningful only when ``group_empty`` is False,
+    where it may still be None (deleting the active variant reverts the
+    group to newest-wins via the ``ON DELETE SET NULL`` foreign key).
+
+    Raises ``LookupError`` (target missing, or not on
+    ``expected_message_id``) and ``ValueError`` (scope not
+    "variant"/"group").
+    """
+    if scope not in ("variant", "group"):
+        raise ValueError(f"scope must be 'variant' or 'group'; got {scope!r}")
+    async with get_db() as db:
+        await db.execute("BEGIN IMMEDIATE")
+        rows = list(
+            await db.execute_fetchall(
+                "SELECT id, parent_attachment_id, message_id, active_sibling_id, annotation "
+                "FROM workflow_attachments WHERE id = ?",
+                (target_id,),
+            )
+        )
+        if not rows:
+            raise LookupError(f"workflow_attachment {target_id!r} does not exist")
+        target = rows[0]
+        if expected_message_id is not None and target["message_id"] != expected_message_id:
+            raise LookupError(f"workflow_attachment {target_id!r} not on message {expected_message_id!r}")
+        root_id = target["parent_attachment_id"] or target_id
+        if root_id == target_id:
+            root_active = target["active_sibling_id"]
+        else:
+            root_rows = list(
+                await db.execute_fetchall(
+                    "SELECT active_sibling_id FROM workflow_attachments WHERE id = ?",
+                    (root_id,),
+                )
+            )
+            root_active = root_rows[0]["active_sibling_id"] if root_rows else None
+
+        if scope == "group":
+            del_ids = [
+                x["id"]
+                for x in await db.execute_fetchall(
+                    "SELECT id FROM workflow_attachments WHERE id = ? OR parent_attachment_id = ?",
+                    (root_id, root_id),
+                )
+            ]
+            await db.execute(
+                "DELETE FROM workflow_attachments WHERE id = ? OR parent_attachment_id = ?",
+                (root_id, root_id),
+            )
+            await db.commit()
+            return {
+                "deleted_ids": del_ids,
+                "group_empty": True,
+                "root_id": root_id,
+                "active_sibling_id": None,
+            }
+
+        if target_id != root_id:
+            await db.execute("DELETE FROM workflow_attachments WHERE id = ?", (target_id,))
+            after = list(
+                await db.execute_fetchall(
+                    "SELECT active_sibling_id FROM workflow_attachments WHERE id = ?",
+                    (root_id,),
+                )
+            )
+            await db.commit()
+            return {
+                "deleted_ids": [target_id],
+                "group_empty": False,
+                "root_id": root_id,
+                "active_sibling_id": after[0]["active_sibling_id"] if after else None,
+            }
+
+        survivors = [
+            x["id"]
+            for x in await db.execute_fetchall(
+                "SELECT id FROM workflow_attachments WHERE parent_attachment_id = ? ORDER BY id",
+                (root_id,),
+            )
+        ]
+        if not survivors:
+            await db.execute("DELETE FROM workflow_attachments WHERE id = ?", (root_id,))
+            await db.commit()
+            return {
+                "deleted_ids": [root_id],
+                "group_empty": True,
+                "root_id": root_id,
+                "active_sibling_id": None,
+            }
+        new_root = survivors[0]
+        new_active = root_active if (root_active is not None and root_active != root_id and root_active in survivors) else None
+        await db.execute(
+            "UPDATE workflow_attachments SET parent_attachment_id = ? WHERE parent_attachment_id = ? AND id != ?",
+            (new_root, root_id, new_root),
+        )
+        # Only a root row's annotation reaches the LLM prefix (prompt_builder), so
+        # the promoted root inherits the deleted root's annotation; otherwise
+        # deleting the root variant would silently change the message's
+        # model-visible text.
+        await db.execute(
+            "UPDATE workflow_attachments SET parent_attachment_id = NULL, annotation = ? WHERE id = ?",
+            (target["annotation"], new_root),
+        )
+        await _set_active_sibling_on(db, new_root, new_active)
+        await db.execute("DELETE FROM workflow_attachments WHERE id = ?", (root_id,))
+        await db.commit()
+        return {
+            "deleted_ids": [root_id],
+            "group_empty": False,
+            "root_id": new_root,
+            "active_sibling_id": new_active,
+        }

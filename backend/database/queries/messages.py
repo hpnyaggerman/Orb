@@ -325,10 +325,6 @@ async def switch_to_branch(cid: str, message_id: int) -> bool:
     return True
 
 
-# workflow_id is constrained to [a-z_][a-z0-9_]* so the JSON path component is
-# injection-safe; bound as a parameter via '$.' || ? regardless.
-
-
 async def get_workflow_message_state(message_id: int, workflow_id: str) -> dict | None:
     """Return the workflow's slot on this message, or None if message missing or slot empty."""
     async with get_db() as db:

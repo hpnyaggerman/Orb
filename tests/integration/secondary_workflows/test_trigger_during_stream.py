@@ -41,6 +41,7 @@ async def test_trigger_during_stream_no_lost_writes(streaming_client, llm_mock):
     llm_mock.enqueue_editor(None)
 
     with register_for_test(wf):
+
         async def consume_send():
             async with streaming_client.stream(
                 "POST",

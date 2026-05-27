@@ -99,10 +99,6 @@ async def update_conversation(cid: str, data: dict) -> dict | None:
         return await get_conversation(cid)
 
 
-# workflow_id is constrained to [a-z_][a-z0-9_]* so the JSON path component is
-# injection-safe; bound as a parameter via '$.' || ? regardless.
-
-
 async def get_workflow_state(conv_id: str, workflow_id: str) -> dict | None:
     """Return the workflow's slot, or None if conversation missing or slot empty."""
     async with get_db() as db:

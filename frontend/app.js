@@ -1,4 +1,6 @@
 import {
+  applyCompression,
+  cancelCompression,
   cancelEdit,
   cancelEditPending,
   cancelTitleEdit,
@@ -6,6 +8,7 @@ import {
   continueFromUser,
   deleteConversationFromModal,
   deleteMessage,
+  generateCompressionSummary,
   handleChatKeyNav,
   handleMagicKey,
   handleTitleEditKey,
@@ -29,6 +32,7 @@ import {
   setInspectorTab,
   setToolsTab,
   showAvatarPopup,
+  showCompressModal,
   showConvHistoryModal,
   startEdit,
   startEditPending,
@@ -132,6 +136,9 @@ import { S } from "./state.js";
 import { initTabLock, setLockStateChangeCallback } from "./tabLock.js";
 import { $, formatBytes } from "./utils.js";
 import { validate } from "./validate.js";
+import { loadWorkflowModules } from "./workflow_loader.js";
+import { initWorkflowTextInteraction } from "./workflow_text_interaction.js";
+import { initAudioPlayer } from "./audio_transport.js";
 
 // ── Sidebar toggle
 function toggleSection(header) {
@@ -321,6 +328,10 @@ Object.assign(window, {
   selectConversation,
   deleteConversationFromModal,
   showConvHistoryModal,
+  showCompressModal,
+  generateCompressionSummary,
+  cancelCompression,
+  applyCompression,
   // title edit
   startEditTitle,
   saveTitleEdit,
@@ -438,6 +449,8 @@ initTheme();
 initThemeList();
 initAutoscroll();
 initChatSwipeNav();
+initWorkflowTextInteraction();
+initAudioPlayer();
 initTabLock();
 // Re-render messages when tab lock state changes to update toolbar buttons
 setLockStateChangeCallback((hasMultipleTabs) => {
@@ -495,6 +508,12 @@ async function initAll() {
     await loadSecondaryWorkflowManifest();
   } catch (e) {
     console.error("Failed to load secondary workflow manifest:", e);
+  }
+
+  try {
+    await loadWorkflowModules();
+  } catch (e) {
+    console.error("Failed to load workflow modules:", e);
   }
 }
 

@@ -64,14 +64,16 @@ export const S = {
 
   // Workflow slot registries -- pushed into at module load by workflow JS files.
   // Built-in chat/settings/index code iterates these; no built-in code knows about specific workflows.
-  workflowInspectorCardRenderers: [], // [(msg?) => htmlString], rendered into the Inspector Secondary tab
+  workflowInspectorCardRenderers: [], // [() => htmlString], rendered into the Inspector Secondary tab (global panel, no per-message context)
   workflowToolsPanelRenderers: [], // [() => htmlString], rendered into the Agents panel Secondary tab
   workflowMessageButtonRenderers: [], // [(msg) => htmlString], extra per-message toolbar buttons
   workflowEventHandlers: {}, // {[event_name]: (data, msgDiv|null) => void}, custom SSE event dispatch
-  workflowAttachmentRenderers: {}, // {[workflow_id]: (ctx) => htmlString} where ctx = {att, buttons:{regen,reroll}, defaultHtml}; widget renders one row (the active sibling) and may splice ctx.defaultHtml or the button strings anywhere in its returned body
+  workflowAttachmentRenderers: {}, // {[workflow_id]: (ctx) => htmlString} where ctx = {att, buttons:{regen,reroll}, defaultHtml}; defaultHtml is the complete default rendering (media plus the regen/reroll button strip) -- returning it reproduces the framework default exactly. buttons.regen/buttons.reroll are the individual button strings, already contained in defaultHtml, for authors who place the controls themselves; splice defaultHtml OR the buttons, not both (both double the strip). One renderer per workflow_id -- a workflow producing multiple attachment kinds should register as multiple workflow ids rather than branching inside one renderer. Widget renders one row (the active sibling)
   workflowPipelines: [], // [{id, label, passes:[{id,label}]}], pushed by registerWorkflowPipeline
   workflowState: {}, // {[workflow_id]: any}, per-workflow opaque UI state
   workflowPhases: {}, // {[channel]: label}, live status pill text per workflow channel
+  workflowTextEffects: [], // [{id, label}], registered text-effect drivers; a non-empty list enables body word-segmentation
+  workflowClickHandlers: [], // [{id, label, priority, claims, onClick}], clickable-text-unit claimants
 
   workflowManifest: [], // fetched from /api/secondary-workflows at boot
   reasoningByPass: {}, // {[pass_id]: accumulatedText}, per-workflow-pipeline reasoning buffer
@@ -130,4 +132,44 @@ export function registerWorkflowPipeline(entry) {
   const record = { id, label: entry.label || id, passes };
   if (existing >= 0) S.workflowPipelines[existing] = record;
   else S.workflowPipelines.push(record);
+}
+
+// Registers a transient text-effect driver. The id gates body word-segmentation
+// -- a registered effect needs `.seg` spans to paint. Idempotent on id;
+// console.error and skip on a missing id.
+export function registerTextEffect(entry) {
+  if (!entry || typeof entry.id !== "string" || !entry.id) {
+    console.error("registerTextEffect: missing or empty effect id", entry);
+    return;
+  }
+  const record = { id: entry.id, label: entry.label || entry.id };
+  const existing = S.workflowTextEffects.findIndex((e) => e.id === entry.id);
+  if (existing >= 0) S.workflowTextEffects[existing] = record;
+  else S.workflowTextEffects.push(record);
+}
+
+// Registers a clickable-text claimant. `claims(seg)` decides which word units
+// this workflow wants (defaults to all); `priority` breaks contention when
+// several workflows claim the same unit (higher wins, registration order on
+// ties); `onClick(seg, msgId)` is the action. Idempotent on id; console.error
+// and skip on a missing id or non-function onClick.
+export function registerClickHandler(entry) {
+  if (!entry || typeof entry.id !== "string" || !entry.id) {
+    console.error("registerClickHandler: missing or empty handler id", entry);
+    return;
+  }
+  if (typeof entry.onClick !== "function") {
+    console.error("registerClickHandler: onClick must be a function (handler", entry.id + ")");
+    return;
+  }
+  const record = {
+    id: entry.id,
+    label: entry.label || entry.id,
+    priority: Number.isInteger(entry.priority) ? entry.priority : 0,
+    claims: typeof entry.claims === "function" ? entry.claims : () => true,
+    onClick: entry.onClick,
+  };
+  const existing = S.workflowClickHandlers.findIndex((e) => e.id === entry.id);
+  if (existing >= 0) S.workflowClickHandlers[existing] = record;
+  else S.workflowClickHandlers.push(record);
 }

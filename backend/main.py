@@ -94,6 +94,7 @@ from .database import (
     get_workflow_attachment_by_id,
 )
 from .secondary_workflows.attachment_cache import (
+    delete_workflow_attachments,
     insert_workflow_attachment,
     insert_workflow_attachments,
     record_access,
@@ -112,9 +113,12 @@ from .secondary_workflows import (
     RerollGenCtx,
     _readonly,
     get_subscription,
+    get_workflow,
+    get_workflow_config,
     list_workflows,
+    set_workflow_config,
 )
-from .locks import workflow_state_lock
+from .locks import workflow_character_state_lock, workflow_config_lock, workflow_state_lock
 from .orchestrator import (
     handle_turn,
     handle_regenerate,
@@ -125,6 +129,7 @@ from .llm_client import LLMClient
 from .macros import Macros
 from . import tavern_cards
 from . import prompt_builder
+from .summarizer import ConversationSummarizer
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -232,6 +237,12 @@ class SettingsUpdate(BaseModel):
     agent_endpoint_id: Optional[int] = None
     agent_shared_system_prompt: Optional[str] = None
     inspector_open_states: Optional[dict] = None
+
+
+class WorkflowConfigUpdate(BaseModel):
+    # Required (no default): a body lacking "config" is a 422, not a silent
+    # clear; an explicit {"config": {}} is the intentional reset-to-defaults.
+    config: dict
 
 
 class EndpointCreate(BaseModel):
@@ -361,6 +372,16 @@ class ConversationCreate(BaseModel):
 
 class ConversationUpdate(BaseModel):
     title: Optional[str] = None
+
+
+class SummarizeRequest(BaseModel):
+    keep_count: int  # must be one of 2, 4, 6, 8
+    custom_instructions: Optional[str] = None
+
+
+class CompressRequest(BaseModel):
+    summary: str
+    keep_count: int  # must be one of 2, 4, 6, 8
 
 
 class CharacterCardCreate(BaseModel):
@@ -955,6 +976,124 @@ async def api_update_conversation(cid: str, data: ConversationUpdate):
     return result
 
 
+@app.post("/api/conversations/{cid}/summarize")
+async def api_summarize_conversation(cid: str, data: SummarizeRequest, request: Request):
+    """Stream a narrative summary of the conversation history, excluding the last keep_count messages."""
+    if data.keep_count not in (2, 4, 6, 8):
+        raise HTTPException(status_code=400, detail="keep_count must be one of 2, 4, 6, 8")
+
+    conv = await get_conversation(cid)
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    messages = await get_messages_with_branch_info(cid)
+    history_slice = messages[: max(0, len(messages) - data.keep_count)]
+
+    if not history_slice:
+        raise HTTPException(status_code=400, detail="Not enough messages to summarize")
+
+    settings = await get_settings()
+    char_name = conv.get("character_name", "Character") or "Character"
+    active_persona_id = settings.get("active_persona_id")
+    active_persona = await get_user_persona(active_persona_id) if active_persona_id else None
+    system_prompt, char_persona, mes_example = await resolve_char_context(conv, settings)
+    macros = Macros.from_settings(settings, char_name, active_persona)
+    user_description = active_persona.get("description", "") if active_persona else settings.get("user_description", "")
+
+    client = LLMClient(
+        settings["endpoint_url"],
+        api_key=settings.get("api_key", ""),
+        profile=profile_for(settings["endpoint_url"], settings.get("model_name", "")),
+    )
+    summarizer = ConversationSummarizer(client, settings)
+    llm_messages = summarizer.build_messages(
+        system_prompt,
+        char_persona,
+        conv.get("character_scenario", "") or "",
+        mes_example,
+        ("" if settings.get("prevent_prompt_overrides") else conv.get("post_history_instructions", "")),
+        history_slice,
+        macros,
+        user_description,
+        custom_instructions=data.custom_instructions,
+    )
+
+    async def _gen():
+        try:
+            async for delta in summarizer.stream(llm_messages, settings.get("model_name", "")):
+                yield {"event": "token", "data": delta}
+            yield {"event": "done", "data": ""}
+        except Exception as e:
+            logger.error("Summarize error: %s", e)
+            yield {"event": "error", "data": str(e)}
+
+    return _CleanupStreamingResponse(
+        _sse_stream(_gen(), request, client_ref=[client], cid=cid),
+        media_type="text/event-stream",
+    )
+
+
+@app.post("/api/conversations/{cid}/compress")
+async def api_compress_conversation(cid: str, data: CompressRequest):
+    """Create a new conversation seeded with a summary, then re-append the last keep_count messages."""
+    if data.keep_count not in (2, 4, 6, 8):
+        raise HTTPException(status_code=400, detail="keep_count must be one of 2, 4, 6, 8")
+    if not data.summary.strip():
+        raise HTTPException(status_code=400, detail="summary must not be empty")
+
+    conv = await get_conversation(cid)
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+
+    messages = await get_messages_with_branch_info(cid)
+    tail = messages[max(0, len(messages) - data.keep_count) :]
+
+    char_name = conv.get("character_name", "") or ""
+    old_title = conv.get("title", "") or ""
+    new_title = f"{old_title} (continued)" if old_title else "Continued"
+    new_cid = str(uuid.uuid4())
+
+    await create_conversation(
+        cid=new_cid,
+        title=new_title,
+        char_name=char_name,
+        char_scenario=conv.get("character_scenario", "") or "",
+        post_history_instructions=conv.get("post_history_instructions", "") or "",
+        character_card_id=conv.get("character_card_id"),
+    )
+
+    prev_id, _ = await add_message(new_cid, "assistant", data.summary.strip(), 0)
+    await set_active_leaf(new_cid, prev_id)
+
+    # Carry user uploads onto the fork; workflow attachments are regenerable and dropped.
+    for i, msg in enumerate(tail):
+        atts = msg.get("user_attachments") or []
+        att_list = (
+            [
+                {
+                    "mime_type": a["mime_type"],
+                    "data_b64": a["data_b64"],
+                    "filename": a.get("filename"),
+                    "size": a.get("size"),
+                }
+                for a in atts
+            ]
+            if atts
+            else None
+        )
+        prev_id, _ = await add_message(
+            new_cid,
+            msg["role"],
+            msg["content"],
+            i + 1,
+            parent_id=prev_id,
+            attachments=att_list,
+        )
+        await set_active_leaf(new_cid, prev_id)
+
+    return {"new_conversation_id": new_cid}
+
+
 # Character Cards ──
 
 
@@ -1170,6 +1309,7 @@ async def _sse_stream(
     A background watcher also polls request.is_disconnected() as a fallback
     for cases like the user closing the browser tab without clicking Stop.
     """
+
     async def _watch_disconnect() -> None:
         try:
             while True:
@@ -1194,7 +1334,7 @@ async def _sse_stream(
             # acquire-cancelled path.
             candidate = _conversation_stream_locks.setdefault(cid, asyncio.Lock())
             if candidate.locked():
-                yield 'event: error\ndata: Another generation is already running\n\n'
+                yield "event: error\ndata: Another generation is already running\n\n"
                 return
             await candidate.acquire()
             lock = candidate
@@ -1545,6 +1685,28 @@ async def api_list_secondary_workflows():
     ]
 
 
+@app.put("/api/secondary-workflows/{workflow_id}/config")
+async def api_set_workflow_config(workflow_id: str, data: WorkflowConfigUpdate):
+    """Persist a workflow's global config slot as a full replacement."""
+    if get_workflow(workflow_id) is None:
+        raise HTTPException(status_code=404, detail=f"Workflow {workflow_id!r} is not registered")
+    # Serialize the replacement with workflow code that updates the same slot via
+    # a locked read-modify-write; a lock-free write here could be lost mid-RMW.
+    async with workflow_config_lock():
+        await set_workflow_config(workflow_id, data.config)
+        effective = await get_workflow_config(workflow_id)
+    logger.info("workflow %r config updated (%d keys)", workflow_id, len(data.config))
+    return {"config": effective}
+
+
+@app.get("/api/secondary-workflows/{workflow_id}/config")
+async def api_get_workflow_config(workflow_id: str):
+    """Return a workflow's effective config: persisted slot, else its defaults."""
+    if get_workflow(workflow_id) is None:
+        raise HTTPException(status_code=404, detail=f"Workflow {workflow_id!r} is not registered")
+    return {"config": await get_workflow_config(workflow_id)}
+
+
 @app.post("/api/conversations/{cid}/workflows/{workflow_id}/trigger")
 async def api_trigger_workflow(cid: str, workflow_id: str, body: dict = Body(default={})):  # noqa: B008
     """Run a workflow's on_demand hook against the current conversation state."""
@@ -1559,6 +1721,8 @@ async def api_trigger_workflow(cid: str, workflow_id: str, body: dict = Body(def
         conv = await get_conversation(cid)
         if conv is None:
             raise HTTPException(status_code=404, detail="Conversation not found")
+        card_id = conv.get("character_card_id")
+        card = await get_character_card(card_id) if card_id else None
         msgs = await get_messages(cid)
         last_user = next((m["content"] for m in reversed(msgs) if m["role"] == "user"), "")
         settings_snapshot = await get_settings()
@@ -1567,18 +1731,21 @@ async def api_trigger_workflow(cid: str, workflow_id: str, body: dict = Body(def
             api_key=settings_snapshot.get("api_key", ""),
             profile=profile_for(settings_snapshot["endpoint_url"], settings_snapshot.get("model_name", "")),
         )
-        try:
-            od_ctx = OnDemandCtx(
-                conversation_id=cid,
-                history=_readonly(msgs),
-                last_user_message=last_user,
-                settings=_readonly(settings_snapshot),
-                client=client,
-            )
-            return await sub.callable(od_ctx, body)
-        except Exception:
-            logger.exception("on_demand hook %r failed", workflow_id)
-            raise HTTPException(status_code=500, detail="On-demand handler raised; see server logs")
+        async with workflow_character_state_lock(conv.get("character_card_id") or "", workflow_id):
+            try:
+                od_ctx = OnDemandCtx(
+                    conversation_id=cid,
+                    history=_readonly(msgs),
+                    last_user_message=last_user,
+                    settings=_readonly(settings_snapshot),
+                    client=client,
+                    character_id=conv.get("character_card_id"),
+                    character=_readonly(card),
+                )
+                return await sub.callable(od_ctx, body)
+            except Exception:
+                logger.exception("on_demand hook %r failed", workflow_id)
+                raise HTTPException(status_code=500, detail="On-demand handler raised; see server logs")
 
 
 @app.post("/api/conversations/{cid}/messages/{mid}/workflow-attachments/{aid}/regenerate")
@@ -1614,6 +1781,8 @@ async def api_regenerate_attachment(cid: str, mid: int, aid: int, body: dict = B
             profile=profile_for(settings_snapshot["endpoint_url"], settings_snapshot.get("model_name", "")),
         )
 
+        card_id = conv.get("character_card_id")
+        card = await get_character_card(card_id) if card_id else None
         try:
             regen_ctx = RegenCtx(
                 conversation_id=cid,
@@ -1624,6 +1793,8 @@ async def api_regenerate_attachment(cid: str, mid: int, aid: int, body: dict = B
                 last_user_message=last_user,
                 settings=_readonly(settings_snapshot),
                 client=client,
+                character_id=conv.get("character_card_id"),
+                character=_readonly(card),
             )
             new_dicts = await sub.callable(regen_ctx, body)
         except Exception:
@@ -1708,6 +1879,28 @@ def _decode_stored_consumption_metadata(att: dict) -> dict | None:
     return parsed if isinstance(parsed, dict) else None
 
 
+def _split_reroll_gen_result(result, workflow_id: str | None) -> tuple[object, dict | None]:
+    """Split a reroll_gen hook return into ``(data, consumption_metadata)``.
+
+    A raw ``bytes`` return carries no metadata; a ``(bytes, dict | None)``
+    tuple supplies a fresh ``consumption_metadata``. A non-dict second element
+    is dropped with a warning. The caller validates that ``data`` is non-empty
+    bytes. Shared by the reroll-gen and rehydrate routes so both interpret the
+    hook return identically.
+    """
+    if isinstance(result, tuple) and len(result) == 2 and isinstance(result[0], (bytes, bytearray)):
+        data, consumption_metadata = result
+        if consumption_metadata is not None and not isinstance(consumption_metadata, dict):
+            logger.warning(
+                "reroll_gen hook %r returned tuple with non-dict consumption_metadata (%s); coercing to None",
+                workflow_id,
+                type(consumption_metadata).__name__,
+            )
+            consumption_metadata = None
+        return data, consumption_metadata
+    return result, None
+
+
 def _build_reroll_gen_ctx(cid: str, mid: int, aid: int, att: dict, settings: dict, client) -> RerollGenCtx:
     prior_cm = _decode_stored_consumption_metadata(att)
     return RerollGenCtx(
@@ -1779,18 +1972,7 @@ async def api_reroll_gen_attachment(cid: str, mid: int, aid: int, body: dict = B
             logger.exception("reroll_gen hook %r failed for attachment %r", wid, aid)
             raise HTTPException(status_code=500, detail="reroll_gen handler raised; see server logs")
 
-        if isinstance(result, tuple) and len(result) == 2 and isinstance(result[0], (bytes, bytearray)):
-            data, new_consumption_metadata = result
-            if new_consumption_metadata is not None and not isinstance(new_consumption_metadata, dict):
-                logger.warning(
-                    "reroll_gen hook %r returned tuple with non-dict consumption_metadata (%s); coercing to None",
-                    wid,
-                    type(new_consumption_metadata).__name__,
-                )
-                new_consumption_metadata = None
-        else:
-            data = result
-            new_consumption_metadata = None
+        data, new_consumption_metadata = _split_reroll_gen_result(result, wid)
 
         if not isinstance(data, (bytes, bytearray)) or not data:
             raise HTTPException(status_code=500, detail="reroll_gen handler returned no bytes")
@@ -1903,19 +2085,13 @@ async def api_rehydrate_attachment(cid: str, mid: int, aid: int, body: dict = Bo
             logger.exception("reroll_gen (rehydrate) %r failed for attachment %r", wid, aid)
             raise HTTPException(status_code=500, detail="reroll_gen handler raised; see server logs")
 
-        # Rehydrate writes the same row; the stored consumption_metadata is the
-        # truth for this artifact, so any dict returned alongside the bytes is
-        # discarded here. Only the bytes are consumed.
-        if isinstance(result, tuple) and len(result) == 2 and isinstance(result[0], (bytes, bytearray)):
-            data = result[0]
-        else:
-            data = result
+        data, new_consumption_metadata = _split_reroll_gen_result(result, wid)
 
         if not isinstance(data, (bytes, bytearray)) or not data:
             raise HTTPException(status_code=500, detail="reroll_gen handler returned no bytes")
 
         try:
-            await rehydrate_attachment(aid, bytes(data))
+            await rehydrate_attachment(aid, bytes(data), consumption_metadata=new_consumption_metadata)
         except RehydrateAlreadyDoneError:
             # Race with a concurrent rehydrate that already restored the bytes.
             # End state is correct; surface as 409 so the client treats it as
@@ -1955,6 +2131,37 @@ async def api_activate_workflow_attachment(cid: str, mid: int, aid: int, body: d
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"active_sibling_id": raw_sibling_id}
+
+
+@app.post("/api/conversations/{cid}/messages/{mid}/workflow-attachments/{aid}/delete")
+async def api_delete_workflow_attachment(cid: str, mid: int, aid: int, body: dict = Body(default={})):  # noqa: B008
+    """Delete a workflow attachment: one variant, or the whole group.
+
+    ``aid`` is the acted-on row. Body: ``{"scope": "variant" | "group"}``.
+    Deleting the root variant of a multi-variant group promotes the oldest
+    survivor to root; the response ``root_id`` reports the resulting root.
+    """
+    conv = await get_conversation(cid)
+    if conv is None:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    anchor = await get_message_by_id(mid)
+    if anchor is None or anchor["conversation_id"] != cid:
+        raise HTTPException(status_code=404, detail="Message not found in conversation")
+    scope = body.get("scope") if isinstance(body, dict) else None
+    if scope not in ("variant", "group"):
+        raise HTTPException(status_code=400, detail="scope must be 'variant' or 'group'")
+    att = await get_workflow_attachment_by_id(aid)
+    if att is None or att["message_id"] != mid:
+        raise HTTPException(status_code=404, detail="Attachment not found on this message")
+    root_id = att["parent_attachment_id"] or aid
+    try:
+        async with _workflow_root_lock(root_id):
+            result = await delete_workflow_attachments(aid, scope=scope, expected_message_id=mid)
+    except LookupError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return result
 
 
 @app.post("/api/conversations/{cid}/workflow-attachments/access")

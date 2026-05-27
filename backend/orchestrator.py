@@ -19,7 +19,7 @@ from .prompt_builder import (
     compute_lorebook_injection_block,
 )
 from .kv_tracker import _KVCacheTracker
-from .locks import workflow_state_lock
+from .locks import workflow_character_state_lock, workflow_state_lock
 from .macros import Macros
 from .secondary_workflows import (
     HookType,
@@ -56,6 +56,8 @@ async def _run_pipeline(
     agent_prefix: list[dict] | None = None,
     macros: Macros | None = None,
     conversation_id: str | None = None,
+    character_id: str | None = None,
+    card: dict | None = None,
     *,
     prefix: list[dict],
     enabled_tools: dict,
@@ -358,7 +360,9 @@ async def _run_pipeline(
         # /trigger calls and any other in-flight pipeline that reaches this
         # hook on the same conversation. Different workflows on the same
         # conversation keep distinct lock keys, so they still run in parallel.
-        async with workflow_state_lock(conversation_id or "", sub.workflow_id):
+        async with workflow_state_lock(conversation_id or "", sub.workflow_id), workflow_character_state_lock(
+            character_id or "", sub.workflow_id
+        ):
             try:
                 post_ctx = PostCtx(
                     conversation_id=conversation_id or "",
@@ -371,6 +375,8 @@ async def _run_pipeline(
                     turn_scratch=turn_scratch,
                     client=client,
                     kv_tracker=kv_tracker,
+                    character_id=character_id,
+                    character=_readonly(card),
                 )
                 async for ev in sub.callable(post_ctx):
                     t = ev.get("type") if isinstance(ev, dict) else None
@@ -384,7 +390,8 @@ async def _run_pipeline(
                         new_draft = ev.get("draft")
                         if not isinstance(new_draft, str) or new_draft == draft:
                             logger.warning(
-                                "post_pipeline hook %r yielded malformed draft_replaced " "(draft type=%s, unchanged=%s); ignoring",
+                                "post_pipeline hook %r yielded malformed draft_replaced "
+                                "(draft type=%s, unchanged=%s); ignoring",
                                 sub.workflow_id,
                                 type(new_draft).__name__,
                                 new_draft == draft,
@@ -527,6 +534,8 @@ def _stage_workflow_attachment(att: object, workflow_id: str) -> dict | None:
 async def _iterate_pre_pipeline_hooks(
     *,
     conversation_id: str,
+    character_id: str | None = None,
+    card: dict | None = None,
     history: list[dict],
     last_user_message: str,
     settings: dict,
@@ -552,7 +561,9 @@ async def _iterate_pre_pipeline_hooks(
         # See workflow_state_lock invariant in backend/locks.py: held across the
         # hook's full lifetime to keep its workflow_state RMW atomic against any
         # concurrent /trigger or pipeline iteration on the same (cid, wid).
-        async with workflow_state_lock(conversation_id, sub.workflow_id):
+        async with workflow_state_lock(conversation_id, sub.workflow_id), workflow_character_state_lock(
+            character_id or "", sub.workflow_id
+        ):
             try:
                 pre_ctx = PreCtx(
                     conversation_id=conversation_id,
@@ -564,6 +575,8 @@ async def _iterate_pre_pipeline_hooks(
                     turn_scratch=turn_scratch,
                     client=client,
                     kv_tracker=kv_tracker,
+                    character_id=character_id,
+                    character=_readonly(card),
                 )
                 async for ev in sub.callable(pre_ctx):
                     t = ev.get("type") if isinstance(ev, dict) else None
@@ -661,7 +674,9 @@ async def _load_pipeline_context(conversation_id: str) -> dict | None:
         ),
     )
 
-    system_prompt, char_persona, mes_example = await db.resolve_char_context(conv, settings)
+    card_id = conv.get("character_card_id")
+    card = await db.get_character_card(card_id) if card_id else None
+    system_prompt, char_persona, mes_example = await db.resolve_char_context(conv, settings, card=card)
 
     # Load active persona if set
     active_persona = None
@@ -682,11 +697,14 @@ async def _load_pipeline_context(conversation_id: str) -> dict | None:
             api_key=agent_api_key,
             profile=profile_for(agent_url, agent_model),
         )
-        agent_system_prompt, _, _ = await db.resolve_char_context(conv, settings, shared_key="agent_shared_system_prompt")
+        agent_system_prompt, _, _ = await db.resolve_char_context(
+            conv, settings, shared_key="agent_shared_system_prompt", card=card
+        )
 
     return {
         "settings": settings,
         "conv": conv,
+        "card": card,
         "director": director,
         "mood_fragments": mood_fragments,
         "director_fragments": director_fragments,
@@ -1106,6 +1124,8 @@ async def handle_turn(
         }
         async for ev in _iterate_pre_pipeline_hooks(
             conversation_id=conversation_id,
+            character_id=ctx["conv"].get("character_card_id"),
+            card=ctx["card"],
             history=history,
             last_user_message=user_message,
             settings=settings,
@@ -1155,6 +1175,8 @@ async def handle_turn(
             agent_prefix=agent_prefix,
             macros=macros,
             conversation_id=conversation_id,
+            character_id=ctx["conv"].get("character_card_id"),
+            card=ctx["card"],
             prefix=prefix,
             enabled_tools=merged_enabled_tools,
             turn_scratch=turn_scratch,
@@ -1218,6 +1240,8 @@ async def handle_regenerate(
         }
         async for ev in _iterate_pre_pipeline_hooks(
             conversation_id=conversation_id,
+            character_id=ctx["conv"].get("character_card_id"),
+            card=ctx["card"],
             history=history,
             last_user_message=user_msg["content"],
             settings=settings,
@@ -1251,6 +1275,8 @@ async def handle_regenerate(
             agent_prefix=agent_prefix,
             macros=macros,
             conversation_id=conversation_id,
+            character_id=ctx["conv"].get("character_card_id"),
+            card=ctx["card"],
             prefix=prefix,
             enabled_tools=merged_enabled_tools,
             turn_scratch=turn_scratch,
@@ -1358,6 +1384,8 @@ async def handle_super_regenerate(
         }
         async for ev in _iterate_pre_pipeline_hooks(
             conversation_id=conversation_id,
+            character_id=ctx["conv"].get("character_card_id"),
+            card=ctx["card"],
             history=extended_history,
             last_user_message=user_msg["content"],
             settings=super_regen_settings,
@@ -1392,6 +1420,8 @@ async def handle_super_regenerate(
             agent_prefix=agent_prefix,
             macros=macros,
             conversation_id=conversation_id,
+            character_id=ctx["conv"].get("character_card_id"),
+            card=ctx["card"],
             prefix=prefix,
             enabled_tools=merged_enabled_tools,
             turn_scratch=turn_scratch,
