@@ -51,6 +51,10 @@ def test_resolve_negative_honors_override():
     assert prompt_assembly.resolve_negative({"negative_prompt": "lowres"}) == "lowres"
 
 
+def test_resolve_negative_sanitizes_stray_commas():
+    assert prompt_assembly.resolve_negative({"negative_prompt": "lowres,, bad hands,"}) == "lowres, bad hands"
+
+
 def test_resolve_quality_falls_back_to_default_when_empty():
     assert prompt_assembly.resolve_quality({}) == prompt_assembly.DEFAULT_QUALITY_TAGS
 
@@ -61,6 +65,13 @@ def test_resolve_quality_honors_override():
 
 def test_assemble_positive_uses_default_quality_when_empty():
     assert prompt_assembly.assemble_positive("a knight", {}) == prompt_assembly.DEFAULT_QUALITY_TAGS + ", a knight"
+
+
+def test_assemble_positive_sanitizes_stray_commas():
+    # Leading, trailing, doubled, and comma-only sections never produce a double
+    # comma or an empty segment in the joined prompt.
+    cfg = {"quality_tags": "best quality,", "style_tags": "anime,,", "artist_tags": ","}
+    assert prompt_assembly.assemble_positive(", a knight ,", cfg) == "best quality, anime, a knight"
 
 
 def test_build_test_positive_orders_pieces_and_appends_scene():

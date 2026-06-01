@@ -148,11 +148,25 @@ def _tag_prefix(cfg: dict) -> list[str]:
     return [resolve_quality(cfg), cfg.get("style_tags", ""), cfg.get("artist_tags", "")]
 
 
+def _join_tag_sections(*sections: object) -> str:
+    """Join tag sections into one comma-separated prompt. Each section is re-split on
+    commas and its tags stripped individually, so a stray leading or trailing comma,
+    a doubled comma, or a comma-only section never yields an empty tag or a double
+    comma in the result. Non-string sections are skipped."""
+    tags: list[str] = []
+    for section in sections:
+        if not isinstance(section, str):
+            continue
+        for tag in section.split(","):
+            tag = tag.strip()
+            if tag:
+                tags.append(tag)
+    return ", ".join(tags)
+
+
 def assemble_positive(composed: str, cfg: dict) -> str:
     """Prepend the quality/style/artist tag prefix to the LLM-composed scene prompt."""
-    parts = [*_tag_prefix(cfg), composed or ""]
-    cleaned = [p.strip().strip(",").strip() for p in parts if isinstance(p, str) and p.strip()]
-    return ", ".join(cleaned)
+    return _join_tag_sections(*_tag_prefix(cfg), composed)
 
 
 def build_test_positive(cfg: dict, char_prompt: str, persona_prompt: str) -> str:
@@ -160,15 +174,13 @@ def build_test_positive(cfg: dict, char_prompt: str, persona_prompt: str) -> str
     tag prefix as a real render, then the character and persona prompts, then the
     neutral baseline scene. Empty pieces are dropped, so nothing about the character
     or persona is assumed when either is unset."""
-    parts = [*_tag_prefix(cfg), char_prompt or "", persona_prompt or "", TEST_SCENE]
-    cleaned = [p.strip().strip(",").strip() for p in parts if isinstance(p, str) and p.strip()]
-    return ", ".join(cleaned)
+    return _join_tag_sections(*_tag_prefix(cfg), char_prompt, persona_prompt, TEST_SCENE)
 
 
 def resolve_negative(cfg: dict) -> str:
-    """The negative prompt: the user's override, or the baked default when the
-    config field is left empty."""
-    return (cfg.get("negative_prompt") or "").strip() or DEFAULT_NEGATIVE
+    """The negative prompt: the user's override (sanitized of stray commas), or the
+    baked default when the config field is left empty."""
+    return _join_tag_sections((cfg.get("negative_prompt") or "").strip() or DEFAULT_NEGATIVE)
 
 
 def resolve_guideline(cfg: dict) -> str:
@@ -197,16 +209,22 @@ def build_generation_metadata(positive: str, negative: str, params: dict, comfy_
 
 
 def analyze_instruction(char_prompt: str) -> str:
-    """The Pass-1 instruction: extract the scene as a structured outfit delta.
-
-    The character's default outfit is supplied so the model reports what is added
-    or absent relative to it rather than re-describing the whole appearance.
+    """The Pass-1 instruction: extract the scene strictly from what the history
+    evidences, defaulting any unestablished attribute to the character's default
+    rather than inferring it from genre convention.
     """
     base = (
-        "Analyze the moment below and call analyze_scene with exactly what is visible. "
-        "Report each present character's outfit as a delta from their default: articles added "
-        "or substituted, and default articles now absent. Capture spatial positions relative to "
-        "named objects and to each other, current poses, and the action in this exact moment."
+        "Analyze the moment below and call analyze_scene using ONLY what the history "
+        "directly evidences. Make no inferences beyond the text. For every attribute "
+        "(outfit, position, pose, action) use the last datapoint -- the most recent "
+        "explicit statement in the history; if an attribute was never changed it stays "
+        "at the default. Report each present character's outfit as a delta from their "
+        "default -- articles added or substituted, and default articles now absent -- "
+        "but ONLY where the history states the change. Do NOT infer outfits, poses, or "
+        "positions from genre conventions, tropes, or what is typical; when the text "
+        "does not establish something, fall back to the default rather than guessing. "
+        "Capture spatial positions relative to named objects and to each other, current "
+        "poses, and the action in this exact moment."
     )
     if char_prompt and char_prompt.strip():
         base += "\n\nDefault appearance and outfit for the main character:\n" + char_prompt.strip()

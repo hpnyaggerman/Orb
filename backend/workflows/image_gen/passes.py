@@ -11,11 +11,14 @@ generator forwards reasoning events and ends with the terminal
 
 from __future__ import annotations
 
+import logging
 from typing import Any, AsyncIterator, Sequence
 
 from backend.workflows.toolkit import forced_tool_call
 
 from .prompt_assembly import analyze_instruction, compose_instruction, render_scene_block
+
+logger = logging.getLogger(__name__)
 
 
 async def analyze_scene(
@@ -43,6 +46,8 @@ async def analyze_scene(
         kv_tracker=kv_tracker,
         temperature=0.4,
     ):
+        if event.get("type") == "result":
+            logger.info("image_gen: analyze_scene tool result: %s", event.get("args"))
         yield event
 
 
@@ -76,4 +81,6 @@ async def compose_prompt(
         kv_tracker=kv_tracker,
         temperature=0.5,
     ):
+        if event.get("type") == "result":
+            logger.info("image_gen: compose_image_prompt tool result: %s", event.get("args"))
         yield event
