@@ -70,6 +70,13 @@ from .tts.hooks import (
     regenerate as _tts_regenerate,
     reroll_gen as _tts_reroll_gen,
 )
+from .image_gen import image_gen_workflow
+from .image_gen.hooks import (
+    on_demand as _image_gen_on_demand,
+    post_pipeline as _image_gen_post_pipeline,
+    regenerate as _image_gen_regenerate,
+    reroll_gen as _image_gen_reroll_gen,
+)
 
 
 __all__ = [
@@ -110,6 +117,12 @@ subscribe(tts_workflow.id, HookType.POST_PIPELINE, _tts_post_pipeline)
 subscribe(tts_workflow.id, HookType.ON_DEMAND, _tts_on_demand)
 subscribe(tts_workflow.id, HookType.REGENERATE, _tts_regenerate)
 subscribe(tts_workflow.id, HookType.REROLL_GEN, _tts_reroll_gen)
+
+register_workflow(image_gen_workflow)
+subscribe(image_gen_workflow.id, HookType.POST_PIPELINE, _image_gen_post_pipeline)
+subscribe(image_gen_workflow.id, HookType.ON_DEMAND, _image_gen_on_demand)
+subscribe(image_gen_workflow.id, HookType.REGENERATE, _image_gen_regenerate)
+subscribe(image_gen_workflow.id, HookType.REROLL_GEN, _image_gen_reroll_gen)
 
 
 finalize_registry()

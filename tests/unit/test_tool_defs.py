@@ -40,15 +40,20 @@ def _restore_registry():
 
 class TestBuiltinToolNames:
     def test_matches_tools_keys_at_module_load(self):
-        assert BUILTIN_TOOL_NAMES == frozenset(TOOLS.keys())
+        # The built-ins are exactly the non-standalone tools. Workflows may
+        # register their own tools, but only as standalone entries, so removing
+        # the standalone names recovers the built-in set.
+        assert BUILTIN_TOOL_NAMES == frozenset(TOOLS.keys()) - STANDALONE_TOOLS
 
     def test_is_a_frozenset(self):
         assert isinstance(BUILTIN_TOOL_NAMES, frozenset)
 
 
 class TestStandaloneToolsBaseline:
-    def test_empty_at_module_load(self):
-        assert STANDALONE_TOOLS == set()
+    def test_no_builtin_tool_is_standalone(self):
+        # Standalone entries come only from workflow-registered tools; keeping
+        # the built-ins out of that set is what holds them in the pipeline union.
+        assert BUILTIN_TOOL_NAMES.isdisjoint(STANDALONE_TOOLS)
 
 
 class TestEnabledSchemasBaseline:
