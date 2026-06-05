@@ -32,13 +32,10 @@ def test_normalize_config_rejects_non_dict_persona_prompts():
     assert cfg["persona_prompts"] == {}
 
 
-def test_assemble_positive_prepends_tags_in_order():
+def test_assemble_positive_prepends_quality_only():
+    # Artist/style are replicated mid-prompt by the composer model; the
+    # mechanical layer prepends nothing but the quality block.
     cfg = {"artist_tags": "by artist", "style_tags": "anime", "quality_tags": "best quality"}
-    assert prompt_assembly.assemble_positive("a knight", cfg) == "best quality, anime, by artist, a knight"
-
-
-def test_assemble_positive_skips_empty_tags_and_trims():
-    cfg = {"artist_tags": "", "style_tags": "  ", "quality_tags": "best quality,"}
     assert prompt_assembly.assemble_positive("a knight", cfg) == "best quality, a knight"
 
 
@@ -68,23 +65,43 @@ def test_assemble_positive_uses_default_quality_when_empty():
 
 
 def test_assemble_positive_sanitizes_stray_commas():
-    # Leading, trailing, doubled, and comma-only sections never produce a double
-    # comma or an empty segment in the joined prompt.
-    cfg = {"quality_tags": "best quality,", "style_tags": "anime,,", "artist_tags": ","}
-    assert prompt_assembly.assemble_positive(", a knight ,", cfg) == "best quality, anime, a knight"
+    # Leading, trailing, and doubled commas never produce a double comma or an
+    # empty segment in the joined prompt.
+    cfg = {"quality_tags": "best quality,"}
+    assert prompt_assembly.assemble_positive(", a knight ,,", cfg) == "best quality, a knight"
 
 
-def test_build_test_positive_orders_pieces_and_appends_scene():
-    cfg = {"quality_tags": "best quality", "style_tags": "anime", "artist_tags": "by x"}
-    out = prompt_assembly.build_test_positive(cfg, "a knight", "a mage")
-    assert out == "best quality, anime, by x, a knight, a mage, " + prompt_assembly.TEST_SCENE
+def test_default_guideline_orders_slots():
+    # The backend's expected tag order: subject count, character, series,
+    # artist, style, general. The guideline is where that order is taught.
+    # Sequential index() asserts each slot appears after the previous one
+    # (and dodges the early "danbooru-style" substring).
+    g = prompt_assembly.DEFAULT_GUIDELINE
+    pos = -1
+    for phrase in ("subject count", "character names", "series names", "artist tags", "style tags", "general tags"):
+        pos = g.index(phrase, pos + 1)
 
 
-def test_build_test_positive_without_character_or_persona():
-    # Nothing about the character or persona is assumed when both are unset: their
-    # fragments drop out and the neutral scene (with the default quality) stands.
-    out = prompt_assembly.build_test_positive({}, "", "")
-    assert out == prompt_assembly.DEFAULT_QUALITY_TAGS + ", " + prompt_assembly.TEST_SCENE
+def test_compose_instruction_carries_artist_and_style_verbatim():
+    out = prompt_assembly.compose_instruction("guide", "char", "persona", "by a, by b", "flat color")
+    assert "by a, by b" in out
+    assert "flat color" in out
+    # The model replicates the tags at their guideline positions; the
+    # instruction must demand verbatim replication.
+    assert out.count("replicate EXACTLY") == 2
+
+
+def test_compose_instruction_omits_empty_tag_blocks():
+    out = prompt_assembly.compose_instruction("guide", "char", "persona", "", "  ")
+    assert "Artist tags" not in out
+    assert "Style tags" not in out
+
+
+def test_compose_instruction_forbids_quality_emission():
+    # Quality is the one mechanically prepended block, so the model must not
+    # emit it too.
+    out = prompt_assembly.compose_instruction("", "", "")
+    assert "prepended automatically" in out
 
 
 def test_resolve_guideline_falls_back_to_default_when_empty():
@@ -150,6 +167,11 @@ def test_render_scene_block_formats_outfit_delta():
     assert "without boots" in text
     assert "fireplace" in text
     assert "kneeling" in text
+
+
+def test_render_scene_block_passes_string_through():
+    # The config-preview test hands the baseline scene over as free text.
+    assert prompt_assembly.render_scene_block("characters at a table") == "characters at a table"
 
 
 def test_render_scene_block_tolerates_garbage():

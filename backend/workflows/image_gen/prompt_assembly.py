@@ -14,11 +14,15 @@ import secrets
 # Backend prompting guideline applied when the config field is left empty. A
 # booru-tag-oriented default that suits the shipped graph; surfaced to the user
 # as the field's placeholder (via the config schema) rather than a stored value,
-# so editing it is an explicit override.
+# so editing it is an explicit override. The tag order is the one the image
+# backend expects; the quality block is absent because assemble_positive
+# prepends it mechanically.
 DEFAULT_GUIDELINE = (
-    "Output ONLY a single comma-separated list of danbooru-style tags. Order subject-first: "
-    "character count and identity, then appearance, outfit, expression, pose, then setting and "
-    "composition. Lowercase, no sentences, no weighting syntax. Prefer concrete visual tags."
+    "Output ONLY a single comma-separated list of danbooru-style tags, in this order: "
+    "subject count (1girl, 1boy, 1other, ...), then character names, then series names, "
+    "then artist tags, then style tags, then general tags (appearance, outfit, expression, "
+    "pose, action, setting, composition). Lowercase, no sentences, no weighting syntax. "
+    "Prefer concrete visual tags."
 )
 
 # Quality tags and negative prompt applied when their config fields are left
@@ -27,10 +31,10 @@ DEFAULT_GUIDELINE = (
 DEFAULT_QUALITY_TAGS = "masterpiece, best quality, highly detailed"
 DEFAULT_NEGATIVE = "lowres, bad anatomy, bad hands, text, error, watermark, signature"
 
-# Neutral baseline scene for the config-preview test. Places the configured
-# subjects in a simple composition without assuming anything about their
-# appearance, count, or relationship, so the preview exercises the prompt
-# settings rather than a specific moment.
+# Neutral baseline scene the config-preview test feeds the composer pass in
+# place of an analyzed moment. Assumes nothing about the subjects' appearance,
+# count, or relationship, so the preview exercises the prompt settings rather
+# than a specific moment.
 TEST_SCENE = "characters sitting in front of a table together"
 
 # Authoritative default config for the workflow's global slot. Also the merge
@@ -141,13 +145,6 @@ def resolve_quality(cfg: dict) -> str:
     return (cfg.get("quality_tags") or "").strip() or DEFAULT_QUALITY_TAGS
 
 
-def _tag_prefix(cfg: dict) -> list[str]:
-    """The quality, style, and artist tags, in the single order every positive
-    prompt -- per-turn render and config test alike -- prepends them. Quality falls
-    back to its baked default; style and artist are optional."""
-    return [resolve_quality(cfg), cfg.get("style_tags", ""), cfg.get("artist_tags", "")]
-
-
 def _join_tag_sections(*sections: object) -> str:
     """Join tag sections into one comma-separated prompt. Each section is re-split on
     commas and its tags stripped individually, so a stray leading or trailing comma,
@@ -165,16 +162,14 @@ def _join_tag_sections(*sections: object) -> str:
 
 
 def assemble_positive(composed: str, cfg: dict) -> str:
-    """Prepend the quality/style/artist tag prefix to the LLM-composed scene prompt."""
-    return _join_tag_sections(*_tag_prefix(cfg), composed)
+    """Prepend the quality tag block to the LLM-composed scene prompt.
 
-
-def build_test_positive(cfg: dict, char_prompt: str, persona_prompt: str) -> str:
-    """The positive prompt for the config-preview test: the same quality/style/artist
-    tag prefix as a real render, then the character and persona prompts, then the
-    neutral baseline scene. Empty pieces are dropped, so nothing about the character
-    or persona is assumed when either is unset."""
-    return _join_tag_sections(*_tag_prefix(cfg), char_prompt, persona_prompt, TEST_SCENE)
+    Quality is the only mechanically-placed block. The artist and style tags sit
+    mid-order, between the model-owned character/series and general sections, so
+    code cannot splice them in without the model marking a boundary -- and the
+    model replicates given tags more reliably than it places a boundary marker.
+    They travel to the composer via compose_instruction instead."""
+    return _join_tag_sections(resolve_quality(cfg), composed)
 
 
 def resolve_negative(cfg: dict) -> str:
@@ -231,8 +226,17 @@ def analyze_instruction(char_prompt: str) -> str:
     return base
 
 
-def compose_instruction(guideline: str, char_prompt: str, persona_prompt: str) -> str:
-    """The Pass-2 framing: guideline plus the character and persona base prompts.
+def compose_instruction(
+    guideline: str,
+    char_prompt: str,
+    persona_prompt: str,
+    artist_tags: str = "",
+    style_tags: str = "",
+) -> str:
+    """The Pass-2 framing: guideline, character and persona base prompts, and the
+    configured artist/style tags the model must replicate at their guideline
+    positions. Replication is the model's duty because those slots fall between
+    its character/series and general sections, where code cannot splice.
 
     The analyzed scene is appended after this block by the caller so it lands last
     in the model's context.
@@ -244,16 +248,27 @@ def compose_instruction(guideline: str, char_prompt: str, persona_prompt: str) -
         parts.append("Character base description:\n" + char_prompt.strip())
     if persona_prompt and persona_prompt.strip():
         parts.append("User-persona base description:\n" + persona_prompt.strip())
-    parts.append("Apply each outfit delta onto the base description, then call compose_image_prompt.")
+    if artist_tags and artist_tags.strip():
+        parts.append("Artist tags -- replicate EXACTLY as given, at the guideline's artist position:\n" + artist_tags.strip())
+    if style_tags and style_tags.strip():
+        parts.append("Style tags -- replicate EXACTLY as given, at the guideline's style position:\n" + style_tags.strip())
+    parts.append(
+        "Quality tags are prepended automatically; do not emit them. "
+        "Apply each outfit delta onto the base description, then call compose_image_prompt."
+    )
     return "\n\n".join(parts)
 
 
 def render_scene_block(scene: object) -> str:
     """Render the structured scene dict as compact plain text for Pass 2.
 
-    Tolerant of missing or malformed fields: any absent section is dropped so a
-    partial scene from the model still yields usable text.
+    A str passes through unchanged -- the config-preview test supplies its
+    baseline scene as free text in place of an analyzed dict. Tolerant of
+    missing or malformed fields: any absent section is dropped so a partial
+    scene from the model still yields usable text.
     """
+    if isinstance(scene, str):
+        return scene
     if not isinstance(scene, dict):
         return ""
     lines: list[str] = []

@@ -33,8 +33,8 @@ _CONFIG_SCHEMA = {
     "properties": {
         "comfy_url": {"type": "string", "title": "ComfyUI base URL"},
         "timeout_s": {"type": "number", "minimum": 1, "title": "Render timeout (seconds)"},
-        "artist_tags": {"type": "string", "title": "Artist tags (prepended)"},
-        "style_tags": {"type": "string", "title": "Style tags (prepended)"},
+        "artist_tags": {"type": "string", "title": "Artist tags (placed by the model)"},
+        "style_tags": {"type": "string", "title": "Style tags (placed by the model)"},
         "quality_tags": {"type": "string", "title": "Quality tags (prepended)", "default": DEFAULT_QUALITY_TAGS},
         "negative_prompt": {"type": "string", "title": "Negative prompt", "default": DEFAULT_NEGATIVE},
         "persona_prompts": {"type": "object", "title": "Per-persona prompts"},

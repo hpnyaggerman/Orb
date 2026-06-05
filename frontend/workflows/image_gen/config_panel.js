@@ -116,7 +116,7 @@ function formHtml(personas) {
       ${row("Render timeout (s)", `<input type="number" id="ig-timeout_s" value="${esc(String(cfg.timeout_s))}">`)}
     </div>
     <div class="ig-section">
-      <div class="ig-heading">Prompt tags (prepended to every positive prompt)</div>
+      <div class="ig-heading">Prompt tags (quality prepended; artist and style placed in-order by the model)</div>
       ${row("Artist", `<input type="text" id="ig-artist_tags" value="${esc(cfg.artist_tags)}">`)}
       ${row("Style", `<input type="text" id="ig-style_tags" value="${esc(cfg.style_tags)}">`)}
       ${row("Quality", `<input type="text" id="ig-quality_tags" value="${esc(cfg.quality_tags)}" placeholder="${esc(schemaDefault("quality_tags"))}">`)}
