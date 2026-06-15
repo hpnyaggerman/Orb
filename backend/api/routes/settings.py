@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
-from ...database import get_settings, update_settings
+from ...database import get_settings, reset_to_defaults, update_settings
 from ...inference import TOOLS
-from ..schemas import SettingsUpdate
+from ..schemas import ResetConfirm, SettingsUpdate
 
 router = APIRouter()
 
@@ -24,3 +24,12 @@ async def api_update_settings(data: SettingsUpdate):
     if isinstance(payload.get("enabled_tools"), dict):
         payload["enabled_tools"] = {k: v for k, v in payload["enabled_tools"].items() if k in TOOLS}
     return await update_settings(payload)
+
+
+@router.post("/api/reset")
+async def api_reset(data: ResetConfirm):
+    """Reset mood_fragments, interactive_fragments, phrase_bank, and settings to defaults."""
+    if not data.confirm:
+        raise HTTPException(status_code=400, detail="Confirmation required")
+    await reset_to_defaults()
+    return {"ok": True}
