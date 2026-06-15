@@ -40,7 +40,7 @@ If any of these fail, fix it before submitting.
 
 AI-generated code is welcome, but it needs extra scrutiny. If you're using an AI coding tool (Claude Code, Codex, Cursor, etc.), read `AGENTS.md` at the repo root first. It contains the architecture, database schema, API reference, and gotchas specific to this project — the stuff these tools need to produce correct code.
 
-## Quick rules
+## 5. Quick rules
 
 - Small models first. If a feature doesn't work on something like Gemma 4 26B4A, it probably doesn't belong here.
 - Only use agentic functionalities when absolutely needed - we will not have useless tools like `dice_roll`
@@ -49,7 +49,7 @@ AI-generated code is welcome, but it needs extra scrutiny. If you're using an AI
 - AI-generated code is accepted. It will be manually reviewed just like human written code. But must be subjected to more testing.
 - What about support for other languages? => The repo is optimized for English only, especially the tts and detection algorithms. You'd probably wanna fork if your use case is non-English. Can't support grammar for every language under the sun.
 
-## Vision
+## 6. Vision
 
 - This is a writing/RP frontend and it will not pretend to be anything else. For general assistant tasks, use proper frontends like llama-ui or Open-WebUI.
 - There will not be support for code execution, file browsing, web uploads, etc. basically anything that opens up an RCE attack surface that may compromise the user's machine and personal data.
