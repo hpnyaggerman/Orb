@@ -217,7 +217,7 @@ const AUDIT_TYPE_DEFS = [
   {
     key: "anti_echo",
     label: "Anti-echo",
-    title: "Flag questions that parrot the user's last message back (e.g. \"Ice cream?\").",
+    title: 'Flag questions that parrot the user\'s last message back (e.g. "Ice cream?").',
   },
 ];
 
