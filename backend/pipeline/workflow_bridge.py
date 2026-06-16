@@ -21,6 +21,11 @@ from typing import Any, AsyncIterator, Mapping, Sequence
 from ..core import ChatMessage, workflow_character_state_lock, workflow_state_lock
 from ..inference import TOOLS, LLMClient, _KVCacheTracker
 from ..workflows import (
+    EV_ATTACH_ARTIFACT,
+    EV_DRAFT_REPLACED,
+    EV_ENABLE_TOOLS,
+    EV_SET_MESSAGE_STATE,
+    EV_SYSTEM_PROMPT,
     HookType,
     PostCtx,
     PreCtx,
@@ -98,7 +103,7 @@ async def _run_post_pipeline(
                 )
                 async for ev in sub.callable(post_ctx):
                     t = ev.get("type") if isinstance(ev, dict) else None
-                    if t == "draft_replaced":
+                    if t == EV_DRAFT_REPLACED:
                         if replaced_this_hook:
                             logger.warning(
                                 "post_pipeline hook %r yielded a second draft_replaced; ignoring",
@@ -122,7 +127,7 @@ async def _run_post_pipeline(
                             "data": {"refined_text": draft},
                         }
                         continue
-                    if t == "attach_artifact":
+                    if t == EV_ATTACH_ARTIFACT:
                         # Only workflows with produces_artifacts=True may persist attachments.
                         w = get_workflow(sub.workflow_id)
                         if not (w and w.produces_artifacts):
@@ -140,7 +145,7 @@ async def _run_post_pipeline(
                         if staged is not None:
                             staged_attachments.append(staged)
                         continue
-                    if t == "set_message_state":
+                    if t == EV_SET_MESSAGE_STATE:
                         # Written in _persist_result once the assistant row id is known.
                         state = ev.get("state") if isinstance(ev, dict) else None
                         if not isinstance(state, dict):
@@ -151,6 +156,17 @@ async def _run_post_pipeline(
                             )
                             continue
                         staged_message_state[sub.workflow_id] = state
+                        continue
+                    # A dict carrying a "type" key is a control event; if it matched
+                    # no known branch above it is malformed (e.g. a typo'd type, or a
+                    # leaked sub-generator terminal). Drop it rather than letting it
+                    # fall through and be emitted to the client as a stray SSE event.
+                    if t is not None:
+                        logger.warning(
+                            "post_pipeline hook %r yielded unknown control event type %r; dropping",
+                            sub.workflow_id,
+                            t,
+                        )
                         continue
                     # Reject reserved internal events (underscore-prefixed) so hooks
                     # cannot impersonate _result and trigger spurious persistence.
@@ -303,7 +319,7 @@ async def _iterate_pre_pipeline_hooks(
                 )
                 async for ev in sub.callable(pre_ctx):
                     t = ev.get("type") if isinstance(ev, dict) else None
-                    if t == "enable_tools":
+                    if t == EV_ENABLE_TOOLS:
                         tools = ev.get("tools")
                         if isinstance(tools, (set, frozenset)):
                             items = ((n, True) for n in tools)
@@ -334,7 +350,7 @@ async def _iterate_pre_pipeline_hooks(
                                 continue
                             accumulators["merged_enabled_tools"][name] = True
                         continue
-                    if t == "system_prompt":
+                    if t == EV_SYSTEM_PROMPT:
                         block = ev.get("block")
                         if not isinstance(block, str) or not block.strip():
                             logger.warning(
@@ -343,6 +359,15 @@ async def _iterate_pre_pipeline_hooks(
                             )
                             continue
                         accumulators["extras"].append(block)
+                        continue
+                    # Unknown control event ("type" present but unmatched): drop it
+                    # instead of leaking it through as a stray SSE event.
+                    if t is not None:
+                        logger.warning(
+                            "pre_pipeline hook %r yielded unknown control event type %r; dropping",
+                            sub.workflow_id,
+                            t,
+                        )
                         continue
                     # Reject reserved internal events (defense-in-depth).
                     e_name = ev.get("event") if isinstance(ev, dict) else None

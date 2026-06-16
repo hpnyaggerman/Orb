@@ -86,6 +86,21 @@ _RESULT_FIELDS = (
 )
 
 
+# Fields seeding ``PostCtx.director_output`` — the read-only director view a
+# post-pipeline workflow hook sees. A named subset of ``TurnState`` (same pattern
+# as ``_RESULT_FIELDS``) so a field rename is caught here rather than silently
+# drifting the orchestrator's hand-built dict.
+_DIRECTOR_OUTPUT_FIELDS = (
+    "active_moods",
+    "agent_raw",
+    "calls",
+    "latency",
+    "rewritten_msg",
+    "extra_fields",
+    "progressive_fields",
+)
+
+
 @dataclass
 class TurnState:
     """Mutable state threaded through all three pass stages, then consumed by persistence.
@@ -137,3 +152,12 @@ class TurnState:
         Shallow copy on purpose: ``staged_attachments`` carries raw artifact bytes.
         """
         return {name: getattr(self, name) for name in _RESULT_FIELDS}
+
+    def as_director_output(self) -> dict:
+        """Return the director-output subset seeding ``PostCtx.director_output``.
+
+        The plain dict the orchestrator hands to post-pipeline workflow hooks
+        (wrapped read-only by the bridge). Co-located with ``_RESULT_FIELDS`` so
+        a field rename surfaces here instead of silently drifting.
+        """
+        return {name: getattr(self, name) for name in _DIRECTOR_OUTPUT_FIELDS}

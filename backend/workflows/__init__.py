@@ -31,6 +31,11 @@ validates that every ``produces_artifacts=True`` workflow has both
 from __future__ import annotations
 
 from .contracts import (
+    EV_ATTACH_ARTIFACT,
+    EV_DRAFT_REPLACED,
+    EV_ENABLE_TOOLS,
+    EV_SET_MESSAGE_STATE,
+    EV_SYSTEM_PROMPT,
     HookType,
     OnDemandCtx,
     PostCtx,
@@ -78,6 +83,11 @@ from .tts.hooks import (
 )
 
 __all__ = [
+    "EV_ATTACH_ARTIFACT",
+    "EV_DRAFT_REPLACED",
+    "EV_ENABLE_TOOLS",
+    "EV_SET_MESSAGE_STATE",
+    "EV_SYSTEM_PROMPT",
     "HookType",
     "OnDemandCtx",
     "PostCtx",

@@ -165,15 +165,7 @@ async def _run_pipeline(
 
     # --- Post-pipeline workflow iteration ---
     # director_output is a plain dict (PostCtx expects a read-only mapping).
-    director_output = {
-        "active_moods": state.active_moods,
-        "agent_raw": state.agent_raw,
-        "calls": state.calls,
-        "latency": state.latency,
-        "rewritten_msg": state.rewritten_msg,
-        "extra_fields": state.extra_fields,
-        "progressive_fields": state.progressive_fields,
-    }
+    director_output = state.as_director_output()
     post: _PostPipelineResult | None = None
     async for ev in _run_post_pipeline(
         draft=state.resp_text,

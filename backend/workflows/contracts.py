@@ -46,6 +46,17 @@ def _readonly(obj: Any) -> Any:
     return obj
 
 
+# Control-event discriminators a workflow hook may yield (the ``"type"`` key the
+# bridge dispatches on). Defined once here, where the seam owns its contract, so
+# the bridge and any workflow import the same names instead of duplicating bare
+# string literals. The string values are the stable wire shape.
+EV_ENABLE_TOOLS = "enable_tools"  # pre-pipeline
+EV_SYSTEM_PROMPT = "system_prompt"  # pre-pipeline
+EV_DRAFT_REPLACED = "draft_replaced"  # post-pipeline
+EV_ATTACH_ARTIFACT = "attach_artifact"  # post-pipeline
+EV_SET_MESSAGE_STATE = "set_message_state"  # post-pipeline
+
+
 @dataclass
 class ToolSpec:
     """A tool a workflow contributes to the global tool registry.
