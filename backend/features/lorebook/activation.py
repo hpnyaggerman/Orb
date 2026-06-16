@@ -60,7 +60,8 @@ def agentic_lorebook_active(
 def build_lorebook_catalog(entries: Sequence[Mapping[str, Any]]) -> str:
     """Build the Director's lorebook catalog for the agentic activation path.
 
-    Lists each non-``constant`` entry (name + up to 5 keywords), grouped by
+    Lists each non-``constant`` entry (name + up to 3 keywords, excluding any
+    keyword equal to the entry name), grouped by
     world. Constant entries are always injected and excluded here. Returns
     ``""`` when there are no non-constant candidates.
     """
@@ -80,7 +81,9 @@ def build_lorebook_catalog(entries: Sequence[Mapping[str, Any]]) -> str:
             parts.append(f"### {world}")
         for e in items:
             name = e.get("name", "")
-            kws = ", ".join((e.get("keywords", []) or [])[:5])
+            name_fold = name.casefold()
+            keywords = [kw for kw in (e.get("keywords", []) or []) if kw.casefold() != name_fold]
+            kws = ", ".join(keywords[:3])
             parts.append(f"- [{name}] — {kws}" if kws else f"- [{name}]")
     return "\n".join(parts)
 
