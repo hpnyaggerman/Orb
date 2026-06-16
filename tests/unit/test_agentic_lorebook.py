@@ -1,18 +1,27 @@
-"""Unit tests for agentic lorebook activation.
+"""Unit tests for lorebook activation.
 
-Covers the direct_scene ``active_lorebook`` parameter, the Director catalog, the
-selection/rendering helpers, and keyword-scan parity after the renderer refactor.
+Covers the direct_scene ``selected_lorebook_entries`` parameter, the Director
+catalog, the unified three-source selection core (``select_active_entries`` and
+its two named wrappers), macro resolution, the ``LorebookTurn`` per-turn bundle,
+activation gating, and keyword-scan parity.
 """
 
 from __future__ import annotations
 
-from backend.inference import (
-    build_direct_scene_tool,
+from backend.features.lorebook import (
+    AGENTIC_LOREBOOK_SCAN_DEPTH,
+    LOREBOOK_SCAN_DEPTH,
+    agentic_lorebook_active,
     build_lorebook_catalog,
     compute_agentic_lorebook_block,
+    compute_lorebook_block,
     compute_lorebook_injection_block,
     render_lorebook_block,
+    select_active_entries,
+    select_keyword_entries,
 )
+from backend.inference import build_direct_scene_tool
+from backend.pipeline import LorebookTurn
 
 
 def _entry(
@@ -220,6 +229,16 @@ class TestKeywordScanParity:
         entries = [_entry("Var", keywords=["sword"], case_insensitive=True)]
         assert "Var" in compute_lorebook_injection_block(msgs, entries)
 
+    def test_case_sensitive_no_match(self):
+        msgs = [{"role": "user", "content": "i draw my sword"}]
+        entries = [_entry("Var", keywords=["Sword"], case_insensitive=False)]
+        assert compute_lorebook_injection_block(msgs, entries) == ""
+
+    def test_case_sensitive_match(self):
+        msgs = [{"role": "user", "content": "a Sword gleams"}]
+        entries = [_entry("Var", keywords=["Sword"], case_insensitive=False)]
+        assert "Var" in compute_lorebook_injection_block(msgs, entries)
+
     def test_no_match_returns_empty(self):
         msgs = [{"role": "user", "content": "nothing relevant here"}]
         assert compute_lorebook_injection_block(msgs, [_entry("Var", keywords=["sword"])]) == ""
@@ -244,3 +263,108 @@ class TestKeywordScanParity:
         msgs = [{"role": "user", "content": "sword"}]
         entries = [_entry("Var", keywords=["sword"])]
         assert compute_lorebook_injection_block(msgs, entries) == render_lorebook_block([entries[0]])
+
+
+# ── render_lorebook_block: macro resolution ──────────────────────────────────
+
+
+class TestRenderMacros:
+    def test_name_and_content_resolved(self):
+        class _Upper:
+            def resolve_message(self, text):
+                return text.upper()
+
+        block = render_lorebook_block([_entry("name", content="body")], _Upper())
+        assert "NAME: BODY" in block
+
+
+# ── select_active_entries: the unified three-source core ─────────────────────
+
+
+class TestSelectActiveEntries:
+    def test_substring_equivalence(self):
+        # With no director picks at depth 6, the unified core selects exactly the
+        # same set (same objects) as the standalone keyword scan.
+        msgs = [{"role": "user", "content": "a sword in the castle"}]
+        entries = [
+            _entry("Const", constant=True),
+            _entry("Sword", keywords=["sword"]),
+            _entry("Unmatched", keywords=["dragon"]),
+        ]
+        assert select_active_entries(entries, msgs, scan_depth=LOREBOOK_SCAN_DEPTH) == select_keyword_entries(msgs, entries)
+
+    def test_agentic_union_matches_wrapper(self):
+        entries = [_entry("Dragon"), _entry("Natlan", keywords=["natlan"])]
+        msgs = [{"role": "user", "content": "we travel to natlan"}]
+        core = compute_lorebook_block(entries, msgs, scan_depth=AGENTIC_LOREBOOK_SCAN_DEPTH, director_selected=["Dragon"])
+        assert core == compute_agentic_lorebook_block(entries, ["Dragon"], None, msgs)
+
+    def test_director_pick_only(self):
+        entries = [_entry("Dragon"), _entry("Castle")]
+        selected = select_active_entries(entries, [], scan_depth=2, director_selected=["dragon"])
+        assert selected == [entries[0]]
+
+    def test_constant_always_selected(self):
+        entries = [_entry("Const", constant=True), _entry("Other", keywords=["nope"])]
+        selected = select_active_entries(entries, [], scan_depth=6)
+        assert selected == [entries[0]]
+
+
+# ── LorebookTurn ──────────────────────────────────────────────────────────────
+
+
+class TestLorebookTurn:
+    def test_scan_depth_by_mode(self):
+        assert LorebookTurn(entries=(), messages=(), agentic=False).scan_depth == LOREBOOK_SCAN_DEPTH
+        assert LorebookTurn(entries=(), messages=(), agentic=True).scan_depth == AGENTIC_LOREBOOK_SCAN_DEPTH
+
+    def test_substring_writer_block_reuses_block_verbatim(self):
+        # In substring mode the writer block is the pre-computed Director-facing
+        # block; director_selected is ignored and nothing is recomputed.
+        lt = LorebookTurn(
+            entries=[_entry("X", keywords=["x"])],
+            messages=[{"role": "user", "content": "x"}],
+            agentic=False,
+            block="**Lorebook**\n\nFixed: value",
+        )
+        assert lt.writer_block(["anything"]) == "**Lorebook**\n\nFixed: value"
+
+    def test_agentic_writer_block_unions(self):
+        entries = [_entry("Dragon"), _entry("Natlan", keywords=["natlan"])]
+        lt = LorebookTurn(
+            entries=entries,
+            messages=[{"role": "user", "content": "go to natlan"}],
+            agentic=True,
+        )
+        block = lt.writer_block(["Dragon"])
+        assert "Dragon: Dragon content" in block
+        assert "Natlan: Natlan content" in block
+
+    def test_agentic_writer_block_matches_compute_agentic(self):
+        entries = [_entry("Dragon"), _entry("Natlan", keywords=["natlan"])]
+        msgs = [{"role": "user", "content": "go to natlan"}]
+        lt = LorebookTurn(entries=entries, messages=msgs, agentic=True)
+        assert lt.writer_block(["Dragon"]) == compute_agentic_lorebook_block(entries, ["Dragon"], None, msgs)
+
+
+# ── agentic_lorebook_active: gating ──────────────────────────────────────────
+
+
+class TestAgenticLorebookActive:
+    _on = {"agentic_lorebook_enabled": 1}
+    _tools = {"direct_scene": True}
+
+    def test_enabled_when_all_conditions_met(self):
+        assert agentic_lorebook_active(self._on, self._tools, [_entry("A")], agent_on=True)
+
+    def test_disabled_when_flag_off(self):
+        assert not agentic_lorebook_active({}, self._tools, [_entry("A")], agent_on=True)
+
+    def test_disabled_when_agent_off(self):
+        assert not agentic_lorebook_active(self._on, self._tools, [_entry("A")], agent_on=False)
+
+    def test_disabled_when_direct_scene_off(self):
+        assert not agentic_lorebook_active(self._on, {"direct_scene": False}, [_entry("A")], agent_on=True)
+
+    def test_disabled_when_only_constants(self):
+        assert not agentic_lorebook_active(self._on, self._tools, [_entry("C", constant=True)], agent_on=True)

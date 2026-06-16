@@ -23,7 +23,7 @@ from .entrypoints import (
     handle_turn,
 )
 from .predicates import agent_enabled, resolve_persona_id
-from .state import ModelLane, TurnState, _PipelineConfig
+from .state import LorebookTurn, ModelLane, TurnState, _PipelineConfig
 
 __all__ = [
     # entrypoints — turn entry points
@@ -36,6 +36,7 @@ __all__ = [
     "agent_enabled",
     "resolve_persona_id",
     # state — per-turn contracts
+    "LorebookTurn",
     "ModelLane",
     "TurnState",
     "_PipelineConfig",

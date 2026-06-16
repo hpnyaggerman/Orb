@@ -39,6 +39,7 @@ from ...database import (
     user_attachment_payloads,
 )
 from ...database.models import ConversationRow
+from ...features import lorebook
 from ...features.summarization import ConversationSummarizer
 from ...inference import AbortToken, LLMClient, prompt_builder
 from ...pipeline import agent_enabled, resolve_persona_id
@@ -402,9 +403,9 @@ async def api_get_context_size(cid: str):
     )
 
     # Lorebook injection
-    scan_depth = prompt_builder.LOREBOOK_SCAN_DEPTH
+    scan_depth = lorebook.LOREBOOK_SCAN_DEPTH
     recent_messages = messages[-scan_depth:] if len(messages) >= scan_depth else messages
-    lorebook_block = prompt_builder.compute_lorebook_injection_block(recent_messages, lorebook_entries, macros)
+    lorebook_block = lorebook.compute_lorebook_injection_block(recent_messages, lorebook_entries, macros)
 
     breakdown = {}
     for label, chars in [

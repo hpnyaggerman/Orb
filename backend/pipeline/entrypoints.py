@@ -22,6 +22,7 @@ from typing import Any, AsyncIterator, List, Mapping, Optional, Sequence
 
 from .. import database as db
 from ..core import Macros, extract_hyperparams
+from ..features.lorebook import agentic_lorebook_active
 from ..inference import AbortToken, _KVCacheTracker, reasoning_cfg
 from .config import _build_writer_tools_blob, _resolve_pipeline_config
 from .context import (
@@ -32,7 +33,7 @@ from .context import (
     _TurnSetup,
 )
 from .orchestrator import _run_pipeline
-from .passes.director import _agentic_lorebook_active, progressive
+from .passes.director import progressive
 from .passes.director.prompt_rewrite import disable_rewrite
 from .persistence import _consume_pipeline, _conversation_log_writer
 from .predicates import agent_enabled
@@ -137,10 +138,7 @@ async def _generate_reply(
         user_message,
         attachments=attachments,
         phrase_bank=ctx.phrase_bank,
-        lorebook_block=setup.lorebook_block,
-        lorebook_catalog=setup.lorebook_catalog,
-        agentic_lorebook=setup.agentic_lorebook_active,
-        lorebook_entries=ctx.lorebook_entries,
+        lorebook=setup.lorebook,
         editor_audit_msgs=editor_audit_msgs,
         agent_client=ctx.agent_client,
         agent_prefix=setup.agent_prefix,
@@ -154,7 +152,6 @@ async def _generate_reply(
         kv_tracker=setup.kv_tracker,
         schema_overrides=setup.schema_overrides,
         history=history,
-        lorebook_messages=lorebook_messages,
     )
     async for event in _consume_pipeline(
         pipeline,
@@ -494,7 +491,7 @@ async def handle_magic_rewrite(
         macros = Macros.from_settings(settings, ctx.conv["character_name"], ctx.active_persona)
         enabled_tools_setting = settings.get("enabled_tools") or {}
         enabled_tools = dict(enabled_tools_setting) if agent_enabled(settings) else {k: False for k in enabled_tools_setting}
-        agentic_active = _agentic_lorebook_active(
+        agentic_active = agentic_lorebook_active(
             settings, enabled_tools, ctx.lorebook_entries, agent_on=agent_enabled(settings)
         )
         schema_overrides = _build_writer_tools_blob(

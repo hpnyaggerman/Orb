@@ -22,7 +22,7 @@ from .config import _resolve_pipeline_config, _split_interactive_fragments
 from .passes.director import director_stage
 from .passes.editor import editor_stage
 from .passes.writer import writer_stage
-from .state import TurnState
+from .state import LorebookTurn, TurnState
 from .workflow_bridge import _PostPipelineResult, _run_post_pipeline
 
 logger = logging.getLogger(__name__)
@@ -52,10 +52,6 @@ async def _run_pipeline(
     user_message: str,
     attachments: Optional[Sequence[Mapping[str, Any]]] = None,
     phrase_bank: list[PhraseGroup] | None = None,
-    lorebook_block: str = "",
-    lorebook_catalog: str = "",
-    agentic_lorebook: bool = False,
-    lorebook_entries: Sequence[Mapping[str, Any]] | None = None,
     editor_audit_msgs: list[str] | None = None,
     agent_client: LLMClient | None = None,
     agent_prefix: list[ChatMessage] | None = None,
@@ -70,7 +66,7 @@ async def _run_pipeline(
     kv_tracker: _KVCacheTracker,
     schema_overrides: Mapping[str, dict],
     history: Sequence[Mapping[str, Any]] | None = None,
-    lorebook_messages: Sequence[Mapping[str, Any]] | None = None,
+    lorebook: LorebookTurn | None = None,
 ) -> AsyncIterator[dict]:
     """Run the director → writer → editor passes for one turn.
 
@@ -86,6 +82,8 @@ async def _run_pipeline(
         macros = Macros("User", "")
     if attachments is None:
         attachments = []
+    if lorebook is None:
+        lorebook = LorebookTurn(entries=(), messages=(), agentic=False)
 
     user_message = macros.resolve_message(user_message)
 
@@ -122,11 +120,7 @@ async def _run_pipeline(
         writer_fragments=writer_fragments,
         attachments=attachments,
         kv_tracker=kv_tracker,
-        lorebook_block=lorebook_block,
-        lorebook_catalog=lorebook_catalog,
-        lorebook_entries=lorebook_entries,
-        lorebook_messages=lorebook_messages,
-        agentic_lorebook=agentic_lorebook,
+        lorebook=lorebook,
         macros=macros,
     ):
         yield ev

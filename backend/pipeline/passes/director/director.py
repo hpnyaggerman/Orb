@@ -20,7 +20,6 @@ from ....inference import (
     _KVCacheTracker,
     build_direct_scene_tool,
     build_director_tool_prompt,
-    compute_agentic_lorebook_block,
     compute_style_injection_block,
     parse_tool_calls,
     reasoning_cfg,
@@ -35,37 +34,12 @@ from .prompt_rewrite import (
 
 if TYPE_CHECKING:
     from ....core import Macros
-    from ...state import TurnState, _PipelineConfig
+    from ...state import LorebookTurn, TurnState, _PipelineConfig
 
 logger = logging.getLogger(__name__)
 
 
-# ── Agentic-lorebook gating + tool override ───────────────────────────────────
-
-
-def _agentic_lorebook_active(
-    settings: Mapping[str, Any],
-    enabled_tools: Mapping[str, bool],
-    lorebook_entries: Sequence[Mapping[str, Any]],
-    *,
-    agent_on: bool,
-) -> bool:
-    """Return True when the director should pick lorebook entries this turn.
-
-    Requires the feature flag, ``direct_scene`` enabled, and at least one
-    non-constant entry. Constant entries are always injected and never managed
-    by the director, so a pool of only constants does not enable agentic mode.
-
-    *agent_on* is passed in (rather than recomputed) so ``agent_enabled`` stays
-    the single source of truth — mirroring ``resolve_length_guard``.
-    """
-    if not bool(settings.get("agentic_lorebook_enabled", 0)):
-        return False
-    if not agent_on:
-        return False
-    if not bool(enabled_tools.get("direct_scene", False)):
-        return False
-    return any(not e.get("constant") for e in lorebook_entries)
+# ── direct_scene tool override ────────────────────────────────────────────────
 
 
 def build_direct_scene_override(
@@ -274,11 +248,7 @@ async def director_stage(
     writer_fragments: Sequence[Mapping[str, Any]],
     attachments: Sequence[Mapping[str, Any]],
     kv_tracker: _KVCacheTracker,
-    lorebook_block: str,
-    lorebook_catalog: str,
-    lorebook_entries: Sequence[Mapping[str, Any]] | None,
-    lorebook_messages: Sequence[Mapping[str, Any]] | None,
-    agentic_lorebook: bool,
+    lorebook: "LorebookTurn",
     macros: "Macros",
 ) -> AsyncIterator[dict]:
     """Input-prep + director pass + all post-processing for the director stage.
@@ -312,8 +282,8 @@ async def director_stage(
             attachments=attachments,
             kv_tracker=kv_tracker,
             reasoning_on=cfg.director_reasoning_on,
-            lorebook_block=lorebook_block,
-            lorebook_catalog=lorebook_catalog,
+            lorebook_block=lorebook.block,
+            lorebook_catalog=lorebook.catalog,
             progressive_state=prior_progressive,
         ):
             if event["type"] == "reasoning":
@@ -369,13 +339,8 @@ async def director_stage(
         },
     }
 
-    # In agentic mode the writer's lorebook block is computed *after* the director
-    # pass, from its selection (constants ∪ Director-named entries) — the keyword
-    # scan was bypassed up front (lorebook_block is ""), and the catalog only fed
-    # the director. Otherwise the keyword-scanned lorebook_block is used as-is.
-    if agentic_lorebook:
-        state.writer_lorebook_block = compute_agentic_lorebook_block(
-            lorebook_entries or [], state.selected_lorebook_entries, macros, lorebook_messages
-        )
-    else:
-        state.writer_lorebook_block = lorebook_block
+    # The writer's lorebook block, computed once from the per-turn bundle. In
+    # substring mode this reuses the keyword-scanned block already built up front;
+    # in agentic mode it is the union of constants, the current-turn keyword scan,
+    # and the Director's selection (computed now that the selection is known).
+    state.writer_lorebook_block = lorebook.writer_block(state.selected_lorebook_entries, macros)

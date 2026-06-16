@@ -44,7 +44,7 @@ flowchart LR
     load["_load_pipeline_context()"] --> prefixes["_build_prefixes()"]
     prefixes --> writer_prefix["Writer prefix via _build_prefix_from_ctx()"]
     prefixes --> agent_prefix["Agent prefix (separate endpoint/config)"]
-    lorebook["Lorebook injection via _compute_lorebook()<br/>computed separately from prefixes"]
+    lorebook["LorebookTurn built in _prepare_turn()<br/>(Director-facing block/catalog via the pure lorebook slice in features/)"]
     writer_prefix --> pipeline["_run_pipeline()"]
     agent_prefix --> pipeline
     lorebook --> pipeline
@@ -90,7 +90,8 @@ Orb/
 │   │   │                    # editor + POST_PIPELINE hooks) + _make_result (TurnState → _result)
 │   │   ├── context.py       # Inbound: PipelineContext + _load_pipeline_context (builds the
 │   │   │                    # LLM clients — tests patch context.LLMClient), _build_prefix(es),
-│   │   │                    # _compute_lorebook, _TurnSetup + _prepare_turn (pre-pipeline setup)
+│   │   │                    # the LorebookTurn (via the pure lorebook slice in features/), _TurnSetup +
+│   │   │                    # _prepare_turn (pre-pipeline setup)
 │   │   ├── config.py        # Per-turn resolution: _resolve_pipeline_config (lanes + flags),
 │   │   │                    # _build_writer_tools_blob, _split_interactive_fragments
 │   │   ├── persistence.py   # Outbound: _consume_pipeline + _persist_*/_fallback_*/_shielded_*
@@ -101,7 +102,9 @@ Orb/
 │   │   │                    # is_dual_model, resolve_persona_id
 │   │   ├── state.py         # Per-turn contract dataclasses (was pipeline_state.py):
 │   │   │                    # ModelLane, _PipelineConfig, TurnState (mutable per-turn bag
-│   │   │                    # threaded through stages), _PipelineResult. Passes import here.
+│   │   │                    # threaded through stages), LorebookTurn (lorebook inputs threaded
+│   │   │                    # _prepare_turn → director_stage; wraps the lorebook slice (features/lorebook/)).
+│   │   │                    # Passes import here.
 │   │   └── passes/
 │   │       ├── director/    # Director pass package
 │   │       │   ├── __init__.py  # Re-exports: DirectorResult, director_pass, director_stage,
@@ -124,9 +127,14 @@ Orb/
 │   │   ├── cards/           # parsing.py (was tavern_cards.py — PNG tEXt/V2 parse) +
 │   │   │                    # downloader.py (was card_downloader.py — external card fetch)
 │   │   ├── summarization/   # summarizer.py — narrative summary + compress flow
-│   │   └── presets/         # engine.py (was presets.py): selective export, merge-import,
-│   │                        # full snapshots/restore (ATTACH + VACUUM INTO). Schema-driven;
-│   │                        # policy declared in database/preset_schema.py
+│   │   ├── presets/         # engine.py (was presets.py): selective export, merge-import,
+│   │   │                    # full snapshots/restore (ATTACH + VACUUM INTO). Schema-driven;
+│   │   │                    # policy declared in database/preset_schema.py
+│   │   └── lorebook/        # PURE world-info activation (was backend/lorebook/) — a slice
+│   │                        # importing only core: selection (constant / keyword scan /
+│   │                        # Director pick) + render. Consumed by the director stage (via
+│   │                        # LorebookTurn in pipeline/state.py) and the context-size route,
+│   │                        # both above it. __init__.py facade; activation.py the pipeline.
 │   ├── analysis/            # ANALYSIS LAYER (shared, pure) — prose-quality detection;
 │   │   │                    # deps: database.models + stdlib only. Shared by editor pass + workflows.
 │   │   ├── __init__.py      # Facade: run_audit, format_report, AuditReport, AUDIT_TYPES + result types
@@ -141,7 +149,8 @@ Orb/
 │   │   ├── cached_call.py   # Core cached-call path: CachedBase (byte-identical
 │   │   │                    # prefix+tools+model base every pass extends) + cached_complete
 │   │   ├── kv_tracker.py    # Debug KV-cache tracker: logs messages/tools to JSON for inspection
-│   │   ├── prompt_builder.py # System prompt assembly, style injection, lorebook injection
+│   │   ├── prompt_builder.py # System prompt assembly, style injection (positions the
+│   │   │                    # lorebook catalog string; block computation lives in features/lorebook/)
 │   │   └── tool_registry.py # Tool schemas (direct_scene, rewrite, editor tools), constants
 │   ├── core/               # SHARED KERNEL (bottom) — dependency-free leaves; imports nothing upward
 │   │   ├── __init__.py      # Re-exports the kernel surface
@@ -259,7 +268,7 @@ api  →  {pipeline, features}  →  workflows  →  {inference, analysis}  → 
 - **`analysis/`** — pure prose-quality detection; depends only on `database.models` (+ stdlib). Sits below `workflows` and `pipeline`, parallel to `inference`. It exists so the auditor can be shared by both the editor pass *and* `workflows/toolkit` without a `workflows → pipeline` back-edge.
 - **`workflows/`** — the plugin-registry gold standard; sits *below* `pipeline/` and *above* `inference`/`analysis`. `pipeline/workflow_bridge.py` imports it (the single pipeline↔workflows seam); it imports only `inference`, `analysis`, `core`, `database` — all downward.
 - **`pipeline/`** — the Director→Writer→Editor turn engine + its per-turn contracts (`state.py`) + its passes.
-- **`features/`** — vertical slices (`cards`, `summarization`, `presets`), each self-contained.
+- **`features/`** — vertical slices (`cards`, `summarization`, `presets`, `lorebook`), each self-contained. Most reach down into `inference`/`database`; **`lorebook/`** is the pure one — world-info activation (selection: constant / keyword scan / Director pick; + rendering) that imports only `core`, consumed by the director stage (via the `LorebookTurn` bundle in `pipeline/state.py`) and the context-size route, both above it. It was a root-level shared layer beside `analysis/` until the only `workflows → lorebook` edge — a `workflows/toolkit` re-export that no workflow consumed — was dropped, which freed it to move down into a slice.
 - **`api/`** — the HTTP layer at the top; the only layer that wires everything together.
 
 **The one-way rule:** a layer may import *downward* but never *up* or *sideways into a peer slice*. `database/` already enforced this; the reorg generalized it to every layer. When a lower layer genuinely needs higher-layer *behavior* at a fixed seam, use **dependency inversion** (the lower layer declares a registration hook; the higher layer registers an impl at import) — see `database/queries/messages.py`'s `register_workflow_attachment_persister`, registered by `workflows/attachment_cache.py`. Don't dodge the rule with a lazy `import backend.<higher layer>` inside a lower-layer function; that hides the inversion from the import graph without removing it. (The sanctioned lazy-import exception — `database/bootstrap.py`'s `from ..features import presets` — is documented and explicit.)
@@ -674,6 +683,6 @@ See [docs/architecture/secondary-workflow.md](docs/architecture/secondary-workfl
 
 8. **Phrase bank format** — `phrase_bank.variants` is a JSON array of strings. The editor audit matches these against response text using case-insensitive regex.
 
-9. **Lorebook scan depth** — Hard-coded to 6 messages (`LOREBOOK_SCAN_DEPTH` in `inference/prompt_builder.py`). Only the last 6 messages are scanned for lorebook keyword matches.
+9. **Lorebook scan depth** — Hard-coded to 6 messages (`LOREBOOK_SCAN_DEPTH` in `backend/features/lorebook/activation.py`). Only the last 6 messages are scanned for lorebook keyword matches.
 
 10. **Macros resolve at different levels** — `resolve_message()` expands everything ({{user}}, {{char}}, inline macros like {{roll}}). `resolve_prompt()` only does {{user}}/{{char}} substitution. Use `resolve_prompt()` for historical messages where inline macros shouldn't fire. `core/macros.py` is a **dependency-free leaf** (it imports nothing else in the codebase — like `database/models.py` and `core/llm_types.py`): it transforms strings and message dicts, and knows nothing about the LLM client. The transport-boundary catch-all that scrubs `{{user}}`/`{{char}}` from *every* outgoing message (the director's tool prompt embeds user-authored fragment text that can carry `{{char}}`) is `Macros.resolve_prompt_messages`. It is **bound** as the `CachedBase.resolve` hook in `_resolve_pipeline_config()` (`pipeline/config.py`) (`resolve=macros.resolve_prompt_messages`, where `macros` is a local `Macros` instance) and **applied** inside `inference/cached_call.py` — to `[*prefix, *trailing]` right before the call, so the KV tracker snapshots the exact resolved bytes sent. There is **no** macro-resolving `LLMClient` subclass/wrapper; don't reintroduce one.

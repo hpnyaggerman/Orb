@@ -10,11 +10,6 @@ from typing import Any, Mapping, Sequence
 from ..core import ChatMessage, ContentPart, Macros
 from .tool_registry import TOOLS
 
-LOREBOOK_SCAN_DEPTH = 6
-# The agentic fallback scan only looks at the current turn (previous assistant
-# message + current user message), since the Director already saw the history.
-AGENTIC_LOREBOOK_SCAN_DEPTH = 2
-
 
 def format_message_with_attachments(message: Mapping[str, Any], macros: Macros | None) -> ChatMessage:
     """Convert a message dict to OpenAI chat format, embedding attachments.
@@ -144,34 +139,6 @@ def _tool_call_instruction(
         f"Call ONLY this tool, ensuring parameters follow the schema order: "
         f"{tool_name} - {desc}\nParameter order: ({param_order})"
     )
-
-
-def build_lorebook_catalog(entries: Sequence[Mapping[str, Any]]) -> str:
-    """Build the Director's lorebook catalog for the agentic activation path.
-
-    Lists each non-``constant`` entry (name + up to 5 keywords), grouped by
-    world. Constant entries are always injected and excluded here. Returns
-    ``""`` when there are no non-constant candidates.
-    """
-    candidates = [e for e in entries if not e.get("constant")]
-    if not candidates:
-        return ""
-
-    groups: dict[str, list[Mapping[str, Any]]] = {}
-    for e in candidates:
-        groups.setdefault(e.get("world_name") or "", []).append(e)
-
-    parts = [
-        "**Available Lorebook Entries** — activate the ones relevant to the scene via `selected_lorebook_entries`. Possible values are wrapped in square brackets."
-    ]
-    for world, items in groups.items():
-        if world:
-            parts.append(f"### {world}")
-        for e in items:
-            name = e.get("name", "")
-            kws = ", ".join((e.get("keywords", []) or [])[:5])
-            parts.append(f"- [{name}] — {kws}" if kws else f"- [{name}]")
-    return "\n".join(parts)
 
 
 # ── Instruction templates
@@ -421,120 +388,3 @@ def build_style_injection(
             parts.append(neg)
 
     return "\n\n".join(parts)
-
-
-# ── Lorebook injection block
-
-
-def compute_lorebook_injection_block(
-    messages: Sequence[Mapping[str, Any]],
-    entries: Sequence[Mapping[str, Any]],
-    macros: Macros | None = None,
-) -> str:
-    """Build the lorebook block using keyword scanning.
-
-    Constant entries are always included. Others are included when a keyword
-    matches within the 6 most recent messages. Sorted by priority DESC.
-    Returns ``""`` when nothing matches.
-    """
-    if not entries:
-        return ""
-
-    return render_lorebook_block(select_keyword_entries(messages, entries), macros)
-
-
-def select_keyword_entries(
-    messages: Sequence[Mapping[str, Any]],
-    entries: Sequence[Mapping[str, Any]],
-    scan_depth: int = LOREBOOK_SCAN_DEPTH,
-) -> list[Mapping[str, Any]]:
-    """Select lorebook entries by keyword/substring scan.
-
-    Constant entries are always selected. Others are selected when any keyword
-    appears (substring match) in the ``scan_depth`` most recent messages.
-    Returns matched entries in input order.
-    """
-    scan_parts = [m.get("content") or "" for m in messages[-scan_depth:] if m.get("content")]
-    scan_text = " ".join(scan_parts)
-    matched: list[Mapping[str, Any]] = []
-
-    for entry in entries:
-        if entry.get("constant"):
-            matched.append(entry)
-            continue
-
-        keywords = entry.get("keywords", [])
-        if not keywords or not scan_text:
-            continue
-
-        case_insensitive = entry.get("case_insensitive", True)
-        text = scan_text.lower() if case_insensitive else scan_text
-
-        found = False
-        for kw in keywords:
-            kw_text = kw.lower() if case_insensitive else kw
-            if kw_text in text:
-                found = True
-                break
-
-        if found:
-            matched.append(entry)
-
-    return matched
-
-
-def render_lorebook_block(
-    entries: Sequence[Mapping[str, Any]],
-    macros: Macros | None = None,
-) -> str:
-    """Render already-selected lorebook entries into the ``**Lorebook**`` block.
-
-    Shared by the keyword scan (:func:`compute_lorebook_injection_block`) and
-    the agentic director (:func:`compute_agentic_lorebook_block`). Entries
-    are sorted by priority DESC; names and content are macro-resolved.
-    Returns ``""`` when *entries* is empty.
-    """
-    if not entries:
-        return ""
-
-    matched = sorted(entries, key=lambda e: e.get("priority", 100), reverse=True)
-
-    resolve = macros.resolve_message if macros else (lambda t: t)
-    parts = ["**Lorebook**"]
-    for entry in matched:
-        name = resolve(entry.get("name", ""))
-        content = resolve(entry.get("content", ""))
-        if name and content:
-            parts.append(f"{name}: {content}")
-        elif content:
-            parts.append(content)
-
-    return "\n\n".join(parts)
-
-
-def compute_agentic_lorebook_block(
-    entries: Sequence[Mapping[str, Any]],
-    selected_names: Sequence[str],
-    macros: Macros | None = None,
-    messages: Sequence[Mapping[str, Any]] | None = None,
-) -> str:
-    """Build the lorebook block from the Director's agentic selection.
-
-    Includes: ``constant`` entries (always injected) + entries whose ``name``
-    matches *selected_names* (case-insensitive, trimmed) + entries triggered by
-    a keyword scan over the current turn (``AGENTIC_LOREBOOK_SCAN_DEPTH``), so
-    keywords the Director overlooks still activate their entries.
-    Renders via :func:`render_lorebook_block`. Returns ``""`` when nothing matches.
-    """
-    if not entries:
-        return ""
-
-    director_named = {(n or "").strip().casefold() for n in (selected_names or [])}
-    keyword_hit = {id(e) for e in select_keyword_entries(messages or [], entries, AGENTIC_LOREBOOK_SCAN_DEPTH)}
-
-    def is_active(entry: Mapping[str, Any]) -> bool:
-        name = (entry.get("name", "") or "").strip().casefold()
-        return bool(entry.get("constant")) or name in director_named or id(entry) in keyword_hit
-
-    selected = [e for e in entries if is_active(e)]
-    return render_lorebook_block(selected, macros)

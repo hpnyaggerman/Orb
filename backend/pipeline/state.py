@@ -15,9 +15,14 @@ that dict to drive the saves.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Mapping
+from typing import Any, Mapping, Sequence
 
-from ..core import ContentPart
+from ..core import ContentPart, Macros
+from ..features.lorebook import (
+    AGENTIC_LOREBOOK_SCAN_DEPTH,
+    LOREBOOK_SCAN_DEPTH,
+    compute_lorebook_block,
+)
 from ..inference import CachedBase, LLMClient
 from .passes.editor.length_guard import LengthGuard
 
@@ -161,3 +166,47 @@ class TurnState:
         a field rename surfaces here instead of silently drifting.
         """
         return {name: getattr(self, name) for name in _DIRECTOR_OUTPUT_FIELDS}
+
+
+@dataclass(frozen=True)
+class LorebookTurn:
+    """The lorebook inputs for one main-pipeline turn.
+
+    Bundles what was previously five loose parameters threaded through the
+    pipeline. ``block`` and ``catalog`` are the Director-facing context and are
+    mutually exclusive by mode (kept separate because they inject at different
+    positions in the Director prompt). ``writer_block`` derives the final block
+    shown to the writer.
+
+    The selection/rendering it delegates to lives in the pure ``lorebook`` layer
+    (``backend/features/lorebook/activation.py``); this bundle is the pipeline-turn view
+    that threads those inputs from ``_prepare_turn`` to ``director_stage``.
+    """
+
+    entries: Sequence[Mapping[str, Any]]
+    messages: Sequence[Mapping[str, Any]]
+    agentic: bool
+    block: str = ""  # Director-facing lore context (substring mode; "" when agentic)
+    catalog: str = ""  # Director-facing pick catalog (agentic mode; "" otherwise)
+
+    @property
+    def scan_depth(self) -> int:
+        return AGENTIC_LOREBOOK_SCAN_DEPTH if self.agentic else LOREBOOK_SCAN_DEPTH
+
+    def writer_block(self, director_selected: Sequence[str], macros: Macros | None = None) -> str:
+        """The lorebook block injected into the writer prompt.
+
+        In substring mode this equals the Director-facing ``block`` already
+        computed up front (same entries/messages/depth), so it is reused rather
+        than recomputed. In agentic mode it is the union of constants, the
+        current-turn keyword scan, and the Director's *director_selected* picks.
+        """
+        if not self.agentic:
+            return self.block
+        return compute_lorebook_block(
+            self.entries,
+            self.messages,
+            scan_depth=self.scan_depth,
+            director_selected=director_selected,
+            macros=macros,
+        )

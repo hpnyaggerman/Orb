@@ -34,16 +34,20 @@ from ..database.models import (
     SettingsRow,
     UserPersonaRow,
 )
+from ..features.lorebook import (
+    agentic_lorebook_active,
+    build_lorebook_catalog,
+    compute_lorebook_injection_block,
+)
 from ..inference import (
     AbortToken,
     LLMClient,
     _KVCacheTracker,
     build_prefix,
-    compute_lorebook_injection_block,
 )
 from .config import _build_writer_tools_blob
-from .passes.director import _agentic_lorebook_active, build_lorebook_catalog
 from .predicates import agent_enabled, resolve_persona_id
+from .state import LorebookTurn
 from .workflow_bridge import _iterate_pre_pipeline_hooks
 
 
@@ -210,18 +214,6 @@ def _build_prefixes(
     return prefix, agent_prefix
 
 
-def _compute_lorebook(macros: Macros, ctx: PipelineContext, messages: Sequence[Mapping[str, Any]]) -> str:
-    """Scan *messages* for lorebook keyword matches and return the injection block.
-
-    Used when agentic lorebook mode is off and the director doesn't pick entries.
-    """
-    return compute_lorebook_injection_block(
-        messages,
-        ctx.lorebook_entries,
-        macros,
-    )
-
-
 @dataclass
 class _TurnSetup:
     """Per-turn inputs produced by :func:`_prepare_turn`, ready for ``_run_pipeline``.
@@ -235,16 +227,10 @@ class _TurnSetup:
     agent_prefix: list[ChatMessage] | None
     merged_enabled_tools: dict[str, bool]
     macros: Macros
-    lorebook_block: str
+    lorebook: LorebookTurn
     turn_scratch: dict
     kv_tracker: _KVCacheTracker
     schema_overrides: Mapping[str, dict]
-    # Agentic-lorebook activation: when active, ``lorebook_block`` is "" (the
-    # keyword scan is bypassed), ``lorebook_catalog`` carries the Director's
-    # candidate catalog, and the writer block is computed post-director from the
-    # selection. When inactive both are inert (catalog "", flag False).
-    lorebook_catalog: str = ""
-    agentic_lorebook_active: bool = False
 
 
 async def _prepare_turn(
@@ -287,15 +273,18 @@ async def _prepare_turn(
 
     # When agentic lorebook is active the keyword scan is skipped; the Director
     # picks entries from a catalog instead and the writer block is built post-director.
-    agentic_active = _agentic_lorebook_active(
+    agentic_active = agentic_lorebook_active(
         settings, enabled_tools_pre_merge, ctx.lorebook_entries, agent_on=agent_enabled(settings)
     )
-    if agentic_active:
-        lorebook_block = ""
-        lorebook_catalog = build_lorebook_catalog(ctx.lorebook_entries)
-    else:
-        lorebook_block = _compute_lorebook(macros, ctx, lorebook_messages)
-        lorebook_catalog = ""
+    lorebook = LorebookTurn(
+        entries=ctx.lorebook_entries,
+        messages=lorebook_messages,
+        agentic=agentic_active,
+        # Director-facing context: the agentic catalog, or the keyword-scanned block
+        # (which the writer block reuses verbatim in substring mode).
+        catalog=build_lorebook_catalog(ctx.lorebook_entries) if agentic_active else "",
+        block="" if agentic_active else compute_lorebook_injection_block(lorebook_messages, ctx.lorebook_entries, macros),
+    )
 
     # Builds direct_scene + optionally give_feedback; must be called once so all
     # passes get byte-identical tool blobs (KV cache Invariants 3 & 5).
@@ -337,10 +326,8 @@ async def _prepare_turn(
         agent_prefix=agent_prefix,
         merged_enabled_tools=accumulators["merged_enabled_tools"],
         macros=macros,
-        lorebook_block=lorebook_block,
+        lorebook=lorebook,
         turn_scratch=turn_scratch,
         kv_tracker=kv_tracker,
         schema_overrides=schema_overrides,
-        lorebook_catalog=lorebook_catalog,
-        agentic_lorebook_active=agentic_active,
     )
