@@ -23,8 +23,9 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 
-from ..database import DB_PATH, init_db, schema_safety_problems
+from ..database import DB_PATH, init_db
 from ..database.migrations import run_pending
+from ..features.presets import schema_safety_problems as preset_schema_safety_problems
 from .deps import FRONTEND_DIR
 from .routes import ROUTERS
 
@@ -55,7 +56,11 @@ async def lifespan(app: FastAPI):
     # left the live schema uncovered or unlike a fresh install must warn loudly
     # (naming the constant/migration to fix) rather than block boot. The preset ops
     # themselves still call assert_schema_safe and fail hard on the same problems.
-    problems = schema_safety_problems()
+    conn = sqlite3.connect(DB_PATH)
+    try:
+        problems = preset_schema_safety_problems(conn)
+    finally:
+        conn.close()
     if problems:
         logger.error(
             "Preset/backup schema safety check failed; exports, snapshots and restores "
