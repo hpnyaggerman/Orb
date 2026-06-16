@@ -14,6 +14,7 @@ private helpers are reached via ``analysis.detectors.<module>`` directly.
 from __future__ import annotations
 
 from .audit import AUDIT_TYPES, AuditReport, format_report, run_audit
+from .detectors.anti_echo import EchoResult
 from .detectors.opening_monotony import FlaggedOpener, MonotonyResult
 from .detectors.phrase_repetition import PhraseResult
 from .detectors.slop_detector import DetectionResult
@@ -35,6 +36,7 @@ __all__ = [
     "FlaggedTemplate",
     "StructuralResult",
     "PhraseResult",
+    "EchoResult",
     # shared segmentation helper
     "split_narration_sentences",
 ]

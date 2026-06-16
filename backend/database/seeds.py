@@ -193,6 +193,7 @@ DEFAULT_SETTINGS = {
         "contrastive_negation": True,
         "phrase_repetition": True,
         "structural_repetition": True,
+        "anti_echo": True,
     },
     "hide_streaming_until_baked": 0,
     "prevent_prompt_overrides": 0,
