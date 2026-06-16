@@ -550,13 +550,16 @@
   cursor: zoom-in;
 }
 
-/* Render as large as possible, but never wider than the message column has when
-   the inspector is expanded. We cap to a fixed width derived from the viewport
-   minus the sidebar + inspector panels, so collapsing/expanding the sidepanel
-   doesn't resize the image. min(100%, …) keeps it within the message box. */
+/* Render at the image's natural size, but never wider than the message column
+   has when the inspector is expanded. width:auto (not 100%) keeps the rendered
+   width at min(naturalWidth, cap), so small images are never upscaled past 100%
+   of their original size (which would blur them). The cap is a fixed width
+   derived from the viewport minus the sidebar + inspector panels, so
+   collapsing/expanding the sidepanel doesn't resize the image; min(100%, …)
+   keeps it within the message box. */
 .msg-image {
   display: block;
-  width: 100%;
+  width: auto;
   max-width: min(
     100%,
     calc(100vw - var(--sidebar-width) - var(--inspector-width) - 88px)
