@@ -1,25 +1,23 @@
 """
-lexical.py — Shared word-level helpers for the repetition/echo audit passes.
+lexical.py — Shared word-level helpers used by the repetition and echo detectors.
 
-``anti_echo`` and ``phrase_repetition`` both reduce text to lowercase word
-tokens and then apply a *content-word floor*: an overlap (a copied run, or a
-repeated n-gram) is only worth flagging if it carries enough non-stopword words.
-Both used to carry their own byte-identical ``_TOKEN_RE``/``_tokenize`` plus a
-hand-maintained ``_STOPWORDS`` set, and the two stopword sets had drifted apart.
-This module is the single source of truth so the two passes tokenize and judge
-"content" the same way.
+Both anti_echo and phrase_repetition reduce text to lowercase word tokens and
+then apply a content-word floor: a match (a copied run or a repeated n-gram) is
+only worth flagging if it carries enough non-stopword words. Both detectors used
+to carry their own copies of the tokenizer regex and stopword list, and the two
+lists had silently drifted apart. This module is the single source of truth so
+both detectors tokenize and judge "content" the same way.
 
-Scope note: this is deliberately *not* used by ``slop_detector`` or
-``contrastive_negation`` — those tokenize differently on purpose (slop keeps
-phrase casing/punctuation boundaries; contrastive_negation needs punctuation
-tokens for clause grammar), so forcing them onto this tokenizer would change
-their behavior.
+Note: slop_detector and contrastive_negation intentionally don't use this.
+slop_detector needs phrase casing and punctuation boundaries; contrastive_negation
+needs punctuation tokens for clause grammar. Switching them to this tokenizer
+would change their behavior.
 
 Public API:
-    TOKEN_RE                — the word pattern (``[a-z0-9']+``)
+    TOKEN_RE                — the word pattern ([a-z0-9']+)
     tokenize(text)          — lowercase word tokens
-    STOPWORDS               — function/filler words excluded from the content floor
-    count_content_words(ts) — number of tokens in *ts* that are not stopwords
+    STOPWORDS               — function/filler words excluded from the content-word floor
+    count_content_words(ts) — number of tokens in ts that are not stopwords
 """
 
 from __future__ import annotations
@@ -37,23 +35,22 @@ __all__ = [
 
 # ---------- tokenization ----------
 
-# Lowercase word runs; the apostrophe is kept so contractions survive as single
-# tokens (``don't``, ``it's``) and line up with the contraction entries in
-# STOPWORDS below.
+# Lowercase word runs; the apostrophe is kept so contractions stay as single
+# tokens (don't, it's) and line up with the contraction entries in STOPWORDS.
 TOKEN_RE = re.compile(r"[a-z0-9']+")
 
 
 def tokenize(text: str) -> list[str]:
-    """Lowercase *text* and return its word tokens."""
+    """Lowercase text and return its word tokens."""
     return TOKEN_RE.findall(text.lower())
 
 
 # ---------- stopwords / content filter ----------
 #
-# Function and filler words that don't count toward the content-word floor, so a
-# bare-function-word overlap ("You?", "What?", "in the air", "I don't know")
-# can't trigger a flag on its own. Shared verbatim by anti_echo (copied-run
-# floor) and phrase_repetition (n-gram floor).
+# Function words and fillers that don't count toward the content-word floor.
+# Without this, bare-function-word matches like "You?", "What?", "in the air",
+# or "I don't know" could trigger a flag on their own. Shared by anti_echo
+# (copied-run floor) and phrase_repetition (n-gram floor).
 STOPWORDS = frozenset(
     {
         # Articles / determiners / demonstratives / quantifiers
@@ -363,5 +360,5 @@ STOPWORDS = frozenset(
 
 
 def count_content_words(tokens: Iterable[str]) -> int:
-    """Number of *tokens* that are not stopwords (the content-word floor)."""
+    """Count how many tokens are content words (i.e. not stopwords)."""
     return sum(1 for t in tokens if t not in STOPWORDS)

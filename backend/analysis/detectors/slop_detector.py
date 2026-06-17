@@ -1,19 +1,18 @@
 """
-slop_detector.py — Detect overused LLM phrases via literal matching or regex.
+slop_detector.py — Detect overused LLM phrases against a user-defined phrase bank.
 
-A phrase bank is a list of *groups*. Each group is one of two kinds:
+A phrase bank is a list of groups. Each group is one of two kinds:
 
-* **literal** — a set of equivalent variant phrases. Short variants (≤3 tokens)
-  match by exact (comma-insensitive) substring; longer variants (4+ tokens)
+- literal — a set of equivalent variant phrases. Short variants (up to 3 tokens)
+  match by exact substring (comma-insensitive); longer variants (4+ tokens)
   match by trigram containment scoring.
-* **regex** — a single regular expression evaluated against each sentence
-  (case-insensitive). The matched text is reported verbatim. A pattern is only
-  ever run against one sentence at a time, and a match that would span a
-  sentence boundary (e.g. a greedy ``.*`` bridging two clauses across a ``.``)
-  is rejected — so the phrase handed to the LLM is always contained to a single
-  sentence.
+- regex — a single regular expression checked against each sentence
+  (case-insensitive). The matched text is reported verbatim. A match is always
+  scoped to a single sentence — if a greedy pattern would bridge a sentence
+  boundary (e.g. via .*), it's rejected, so the reported phrase is never
+  multi-sentence.
 
-Groups are accepted in two shapes for backwards compatibility:
+Groups are accepted in two shapes for backward compatibility:
 
     [                                     # phrase bank
         ["a mix of", "a mixture of"],     # legacy literal group (list of str)
@@ -78,7 +77,7 @@ def _ngrams(tokens: list[str], n: int) -> set[tuple[str, ...]]:
 
 
 def _containment(phrase_grams: set, window_grams: set) -> float:
-    """Fraction of phrase n-grams present in the window."""
+    """Fraction of the phrase's n-grams that appear in the window."""
     if not phrase_grams:
         return 0.0
     return len(phrase_grams & window_grams) / len(phrase_grams)
@@ -111,11 +110,11 @@ def _group_pattern(group: PhraseGroup) -> str:
 
 
 def _compile_phrase_bank(phrase_bank: list[PhraseGroup]) -> list[tuple]:
-    """Normalise + pre-compile groups.
+    """Normalize and pre-compile all phrase bank groups.
 
-    Returns a list of ('literal', variants) or ('regex', compiled_pattern).
-    Invalid regexes are skipped defensively so a single bad pattern can never
-    abort the whole audit — the UI validates patterns before they are saved.
+    Returns a list of ('literal', variants) or ('regex', compiled_pattern) tuples.
+    Invalid regex patterns are silently skipped so a single bad entry can never
+    abort the whole audit — the UI validates patterns before saving them.
     """
     compiled: list[tuple] = []
     for group in phrase_bank:
@@ -135,12 +134,12 @@ def _compile_phrase_bank(phrase_bank: list[PhraseGroup]) -> list[tuple]:
 
 
 def _match_regex_group(rx: re.Pattern, sentence: str) -> ClicheHit | None:
-    """Search a sentence with a compiled pattern; report the matched text.
+    """Search one sentence with a compiled regex; return the matched text as a hit.
 
     Matching is already scoped to a single sentence, but a greedy pattern can
-    still bridge two sentences inside a chunk the splitter under-split (e.g. an
-    abbreviation or ellipsis). Such matches are rejected so the reported phrase
-    never spans a sentence boundary.
+    still bridge two sentences if the splitter under-split at an abbreviation or
+    ellipsis. Any such match is rejected so the reported phrase never spans a
+    sentence boundary.
     """
     m = rx.search(sentence)
     if not m:
@@ -216,10 +215,10 @@ def _match_sentence(
 
 
 def _deduplicate_hits(hits: list[ClicheHit]) -> list[ClicheHit]:
-    """Drop hits whose phrase tokens substantially overlap with a higher-scored hit.
+    """Drop hits whose words substantially overlap with a higher-scored hit.
 
-    Prevents trigram-sharing phrases (e.g. "tension in the air" and
-    "hanging in the air") from both firing when only one is in the text.
+    Prevents trigram-sharing variants (e.g. "tension in the air" and "hanging
+    in the air") from both firing when only one of them is present in the text.
     """
     if len(hits) <= 1:
         return hits

@@ -2,7 +2,7 @@
 anti_echo.py — Detect when the assistant parrots the user's last message back as
 an incredulous question.
 
-Some models have a habit of repeating the user's own dialogue as a question:
+Some models have a habit of bouncing the user's own words back as a question:
 
     H: "I have absolutely no money."
     A: "Absolutely no money?" She repeats.
@@ -10,7 +10,7 @@ Some models have a habit of repeating the user's own dialogue as a question:
     H: "I got some ice cream."
     A: He blinks, "Ice cream? You're a grown man."
 
-Unlike every other scanner in this package, this is a *user→assistant* check: it
+Unlike every other detector in this package, this is a user→assistant check: it
 compares the current draft against the user's immediately-preceding message.
 
 Public API:
@@ -18,22 +18,20 @@ Public API:
                      min_content_words=1, min_coverage=0.5, short_question_words=4)
     EchoResult, FlaggedEcho  (dataclasses)
 
-Logic:
-    - Build the comparison pool from the user's *dialogue* only — the text inside
-      their quote spans — after removing ``[OOC: ...]`` asides. The echo we're
-      after is the assistant parroting what the *character* said; the user's
-      narration and their out-of-character directives ("[OOC: ... Use the phrase
-      ...]") are not in-character speech and must not seed a flag. Each spoken
-      span is kept as its own token run so a match can't bridge two utterances.
-    - Gather interrogative candidates from the draft (sentences ending in ``?``),
-      both quoted (the inner text of each quote span) and unquoted (narration).
-      Quotes are extracted first so a narration lead-in ("He blinks, ") can't glue
-      onto the quoted question.
-    - For each candidate, find the longest *contiguous* token run it shares with
-      any of the user's spoken spans (an exact copy). Flag it when the run carries
-      enough content (non-stopword) words and either the whole question is short or
-      the run covers most of it — so bare-stopword questions ("You?", "What?") and
-      questions that merely reuse one of the user's nouns don't trigger.
+How it works:
+    - Only the user's spoken dialogue (text inside quote marks, with [OOC: ...]
+      asides stripped) feeds the comparison pool. The user's narration and their
+      out-of-character instructions are not in-character speech and shouldn't
+      trigger a flag. Each quoted span is kept as its own token list so a match
+      can't bridge two separate utterances.
+    - Question candidates are gathered from the draft (sentences ending in ?),
+      both from inside quote spans and from narration. Quotes are split out first
+      so a lead-in like "He blinks, " can't fuse onto the quoted question.
+    - For each candidate, find the longest contiguous word run it shares with any
+      of the user's spoken spans. Flag it when that run carries enough content
+      words (non-stopwords) and either the whole question is short or the shared
+      run covers most of it — so bare-stopword questions ("You?", "What?") and
+      questions that just happen to reuse one of the user's nouns don't fire.
 """
 
 from __future__ import annotations
@@ -87,8 +85,8 @@ _TRAILING_TERMINALS = "!.…"
 
 
 def _strip_ooc(text: str) -> str:
-    """Remove ``[...]`` out-of-character asides, replacing each with a space so the
-    words flanking a removed aside don't fuse into one token."""
+    """Remove [OOC: ...] out-of-character asides, replacing each with a space
+    so the words on either side don't fuse into one token."""
     prev = None
     while prev != text:
         prev = text
@@ -97,15 +95,15 @@ def _strip_ooc(text: str) -> str:
 
 
 def _ends_with_question(sentence: str) -> bool:
-    """True when *sentence* terminates in a question mark, tolerating trailing
-    closing markers (quotes, markdown emphasis) and adjacent terminals ("?!")."""
+    """True when the sentence ends with a question mark, allowing for trailing
+    closing markers (quotes, markdown emphasis) and adjacent terminals like "?!"."""
     trimmed = sentence.rstrip(_TRAILING_MARKERS).rstrip(_TRAILING_TERMINALS)
     return trimmed.endswith("?")
 
 
 def _longest_common_run(candidate: list[str], user_tokens: list[str]) -> list[str]:
-    """Return the longest contiguous sublist of *candidate* that also appears
-    contiguously in *user_tokens* (token-level longest common substring)."""
+    """Return the longest word sequence from candidate that also appears
+    contiguously in user_tokens (token-level longest common substring)."""
     if not candidate or not user_tokens:
         return []
     best_len = 0
@@ -125,13 +123,13 @@ def _longest_common_run(candidate: list[str], user_tokens: list[str]) -> list[st
 
 
 def _user_dialogue_runs(user_message: str) -> list[list[str]]:
-    """The user's spoken dialogue, as one token run per quoted span.
+    """The user's spoken dialogue, tokenized as one list per quoted span.
 
-    ``[OOC: ...]`` asides are stripped first (their contents — inner quotes
-    included — are directives, not speech), then each remaining quote span
-    becomes its own token list so a shared run can't span two separate
-    utterances. A message with no quoted dialogue yields no runs, so anti-echo
-    has nothing to compare against."""
+    [OOC: ...] asides are stripped first — their contents, including any inner
+    quotes, are directives not speech. Each remaining quoted span becomes its
+    own token list so a shared run can't bridge two separate utterances. A
+    message with no quoted dialogue returns an empty list, leaving nothing to
+    compare against."""
     cleaned = _strip_ooc(user_message)
     runs: list[list[str]] = []
     for start, end in find_quote_spans(cleaned):
@@ -142,7 +140,7 @@ def _user_dialogue_runs(user_message: str) -> list[list[str]]:
 
 
 def _longest_run_against_any(candidate: list[str], user_runs: list[list[str]]) -> list[str]:
-    """Longest contiguous run *candidate* shares with any single user spoken span."""
+    """Longest contiguous word sequence candidate shares with any single user spoken span."""
     best: list[str] = []
     for toks in user_runs:
         run = _longest_common_run(candidate, toks)
@@ -152,9 +150,10 @@ def _longest_run_against_any(candidate: list[str], user_runs: list[list[str]]) -
 
 
 def _interrogative_candidates(draft: str) -> list[str]:
-    """All ``?``-ending sentences in *draft*, from both quoted dialogue and
-    narration. Quote spans are split apart from their surrounding narration so a
-    lead-in clause can't merge into the quoted question."""
+    """All question-mark-ending sentences from the draft, covering both quoted
+    dialogue and narration. Quote spans are separated from their surrounding
+    narration so a lead-in clause like "He blinks, " can't merge into the
+    quoted question."""
     candidates: list[str] = []
 
     # Quoted dialogue: split each quote's inner text into its own sentences.
@@ -180,24 +179,27 @@ def detect_anti_echo(
     min_coverage: float = 0.5,
     short_question_words: int = 4,
 ) -> EchoResult:
-    """Flag questions in *draft* that copy a contiguous run of the user's dialogue.
+    """Flag questions in the draft that copy a contiguous run of the user's spoken dialogue.
 
-    Only the user's spoken dialogue (text inside quote spans, with ``[OOC: ...]``
-    asides removed) is compared: their narration and out-of-character directives
-    are not in-character speech, so the assistant reusing words from them is not
-    parroting. A *user_message* with no quoted dialogue produces no flags.
+    Only the user's spoken dialogue (text inside quote marks, with [OOC: ...]
+    asides stripped) is used for comparison. The user's narration and
+    out-of-character instructions are not in-character speech, so the assistant
+    reusing words from them is not parroting. A user_message with no quoted
+    dialogue produces no flags.
 
     Args:
         draft: The assistant's current response.
         user_message: The user's immediately-preceding message.
-        max_question_words: Skip candidate questions longer than this (the
-            parroting pattern is characteristically short).
-        min_content_words: Minimum non-stopword tokens the copied run must carry.
+        max_question_words: Skip candidate questions longer than this — the
+            parroting pattern is characteristically short.
+        min_content_words: Minimum number of content words (non-stopwords) the
+            copied run must carry to be worth flagging.
         min_coverage: For longer questions, the copied run must cover at least
-            this fraction of the question's tokens.
-        short_question_words: Questions at or below this token length bypass the
-            coverage guard (a short question that copies the user is an echo
-            regardless of fraction).
+            this fraction of the question's words. Prevents questions that merely
+            reuse one of the user's nouns from firing.
+        short_question_words: Questions at or below this word count bypass the
+            coverage check — a short question that copies the user is an echo
+            regardless of how much of it was copied.
     """
     if not draft or not user_message:
         return EchoResult()

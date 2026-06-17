@@ -1,7 +1,8 @@
 """
-Contrastive-negation ("AI slop") detector.
+contrastive_negation.py — Detect the "not X, but Y" rhetorical pattern that
+marks a lot of AI-generated prose.
 
-Catches rhetorical patterns like:
+Catches patterns like:
     "It's not a bug, but a feature."
     "This isn't a setback, it is an opportunity."
     "He doesn't just give up; he breaks down."
@@ -9,10 +10,10 @@ Catches rhetorical patterns like:
 Avoids common false positives:
     - "not only … but (also)"
     - infinitive negation ("told him not to go, but …")
-    - regular clause contrast ("I'm not sure, but I think …")
-    - unrelated be-verb reappearance ("isn't done, but the deadline is …")
+    - ordinary clause contrast ("I'm not sure, but I think …")
+    - unrelated be-verb in the second clause ("isn't done, but the deadline is …")
     - questions ("Isn't that odd? Where is …")
-    - different-subject switches ("He isn't X, she is Y")
+    - subject switches ("He isn't X, she is Y")
 """
 
 from __future__ import annotations
@@ -130,7 +131,7 @@ _PERSONAL_PRONOUNS = frozenset("i me he him she her we us they them you".split()
 
 
 def _strip_trailing_punct(tokens: list[str], tags: list[str]):
-    """Remove sentence-final punctuation from token/tag lists (in-place)."""
+    """Strip sentence-ending punctuation from the token and tag lists in-place."""
     while tokens and tokens[-1] in ".!?,;:":
         tokens.pop()
         tags.pop()
@@ -145,8 +146,8 @@ def _is_infinitive_not(lowers: list[str], not_idx: int) -> bool:
 
 
 def _x_looks_like_clause(x_tokens: list[str]) -> bool:
-    """True if the span between 'not' and 'but' looks like a full clause
-    rather than a short noun/adj complement."""
+    """True if the span between 'not' and 'but' reads like a full clause
+    rather than a short noun or adjective complement."""
     x_lower = {t.lower() for t in x_tokens}
     if x_lower & _CLAUSE_SIGNALS:
         return True
@@ -155,9 +156,9 @@ def _x_looks_like_clause(x_tokens: list[str]) -> bool:
 
 
 def _y_looks_like_clause(y_tokens: list[str], exclude_it: bool = False) -> bool:
-    """True if Y opens with its own subject, making it an independent clause
-    rather than a bare complement.  Pass exclude_it=True when Y is a verb
-    complement (do-support context), where 'it' is unambiguously an object."""
+    """True if the Y span opens with its own subject, making it an independent
+    clause rather than a bare complement. Pass exclude_it=True in do-support
+    contexts where 'it' is unambiguously an object, not a subject."""
     if not y_tokens:
         return False
     first = y_tokens[0].lower()
@@ -169,8 +170,9 @@ def _y_looks_like_clause(y_tokens: list[str], exclude_it: bool = False) -> bool:
 
 
 def _find_negated_be_pattern(tokens: list[str], tags: list[str]) -> dict | None:
-    """Match 'isn't X, ... is Y' but only when the affirmative clause
-    shares the same (or anaphoric) subject."""
+    """Match the 'isn't X, ... is Y' pattern, but only when the affirmative
+    clause shares the same subject (or refers back to it with 'it', 'this',
+    'that')."""
 
     neg_idx = None
     neg_width = 1
@@ -239,8 +241,8 @@ def _find_negated_be_pattern(tokens: list[str], tags: list[str]) -> dict | None:
 
 
 def _find_do_support_pattern(tokens: list[str], tags: list[str], lowers: list[str]) -> dict | None:
-    """Match 'doesn't/hasn't X, ... [it] Ys' but only when the affirmative clause
-    shares the same subject and opens with a verb."""
+    """Match the "doesn't/hasn't X, ... [it] Ys" pattern, but only when the
+    affirmative clause shares the same subject and opens with a verb."""
 
     neg_idx = None
     neg_width = 1
@@ -420,10 +422,13 @@ def _split_contractions(tokens: list[str]) -> list[str]:
 
 
 def detect_contrastive_negation(text: str) -> list[dict]:
-    """Find 'Not X, but Y', 'isn't X, it is Y', and 'doesn't X, it Ys' rhetorical patterns.
+    """Find "not X, but Y", "isn't X, it is Y", and "doesn't X, it Ys" rhetorical patterns.
 
-    Returns a list of dicts with keys:
-        sentence, x_template, y_template, is_parallel
+    Returns a list of dicts, one per matched sentence, with keys:
+        sentence      — the full sentence that matched
+        x_template    — POS tag sequence for the negated span (X)
+        y_template    — POS tag sequence for the affirmed span (Y)
+        is_parallel   — True when X and Y share the same tag sequence
     """
     sentences = _split_sentences(text)
     results = []

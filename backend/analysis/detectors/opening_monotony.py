@@ -1,15 +1,17 @@
 """
-opening_monotony.py — Detect repetitive sentence openings in LLM output.
+opening_monotony.py — Detect repetitive sentence openings in the assistant's response.
 
-Public API (unchanged from the original):
+Flags cases like a run of four narration sentences all starting with "He" or
+"She", which produces a drumbeat effect that reads as formulaic.
+
+Public API:
     detect_opening_monotony(text, n_words=1, min_consecutive=4) -> MonotonyResult
     MonotonyResult, FlaggedOpener  (dataclasses)
 
-Internals rewritten:
-    - Dialogue stripping is now paragraph-first with a stateful quote scanner.
-    - Sentence splitting happens per-paragraph, after stripping.
-    This fixes paragraph-spanning dialogue, unclosed/truncated quotes, and
-    the `...` + quote boundary case that broke the previous regex approach.
+Only narration sentences are checked — dialogue is stripped first so a
+character repeatedly saying "I..." inside quotes doesn't trigger the detector.
+Sentence splitting is paragraph-aware: a paragraph whose final sentence has no
+terminator won't bleed into the next paragraph.
 """
 
 from __future__ import annotations
@@ -42,8 +44,8 @@ class MonotonyResult:
 
 
 # ---------- narration extraction ----------
-# Paragraph/sentence/dialogue segmentation lives in text_segmentation so every
-# audit pass splits text identically. `_split_sentences` strips dialogue.
+# Segmentation lives in text_segmentation so every detector splits text the
+# same way. _split_sentences strips dialogue before splitting into sentences.
 
 _split_sentences = split_narration_sentences
 

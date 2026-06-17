@@ -1,16 +1,20 @@
 """
-template_repetition.py — Detect repetitive sentence templates across many paragraphs.
+template_repetition.py — Detect repetitive sentence-opening templates spread
+across many paragraphs.
+
+Similar to opening_monotony, but looser: instead of requiring a strict
+consecutive run, it clusters narration sentences by similar openings across the
+whole response. Useful for catching recurring openers that aren't adjacent.
 
 Public API:
     detect_template_repetition(text, max_words=3, flag_threshold=3, similarity_threshold=0.5)
     TemplateResult, FlaggedTemplate  (dataclasses)
 
-Logic:
-    - Splits text into paragraphs and extracts sentences (similar to opening_monotony).
-    - Strips dialogue to focus on narration only.
-    - Extracts the first `max_words` words of each sentence as its "template".
-    - Clusters templates by similarity (word overlap).
-    - Flags templates that appear `flag_threshold` or more times.
+How it works:
+    - Strip dialogue and split the remaining narration into sentences.
+    - Take the first max_words words of each sentence as its "template".
+    - Cluster templates by word-overlap similarity (Jaccard) or shared prefix.
+    - Flag any cluster that reaches flag_threshold or more sentences.
 
 Example target pattern:
     "The question hangs in the air..."
@@ -57,8 +61,8 @@ class TemplateResult:
 
 
 # ---------- text processing ----------
-# Paragraph/sentence/dialogue segmentation lives in text_segmentation so every
-# audit pass splits text identically. `_split_sentences` strips dialogue.
+# Segmentation lives in text_segmentation so every detector splits text the
+# same way. _split_sentences strips dialogue before splitting into sentences.
 
 _split_sentences = split_narration_sentences
 
@@ -67,7 +71,8 @@ _split_sentences = split_narration_sentences
 
 
 def _get_template(sentence: str, max_words: int) -> str | None:
-    """Extract the template (first N words) from a sentence."""
+    """Return the first N normalized words of a sentence as its template, or
+    None if the sentence is too short to produce a meaningful template."""
     words = sentence.split()
     if len(words) < 3:
         return None
@@ -82,7 +87,7 @@ def _get_template(sentence: str, max_words: int) -> str | None:
 
 
 def _word_overlap_similarity(t1: str, t2: str) -> float:
-    """Calculate word overlap (Jaccard) similarity between two templates."""
+    """Jaccard similarity between two template strings (word-level intersection over union)."""
     words1 = set(t1.split())
     words2 = set(t2.split())
 
@@ -99,7 +104,11 @@ def _word_overlap_similarity(t1: str, t2: str) -> float:
 
 
 def _templates_similar(t1: str, t2: str, threshold: float, max_words: int) -> bool:
-    """Check if two templates are similar based on word overlap or prefix match."""
+    """True if two templates are similar enough to cluster together.
+
+    Two templates match if they share a common prefix of at least (max_words - 1)
+    words, or if their Jaccard word-overlap meets the threshold.
+    """
     if t1 == t2:
         return True
 
@@ -124,10 +133,14 @@ def _cluster_templates(
     similarity_threshold: float,
     max_words: int,
 ) -> dict[str, list[tuple[str, str]]]:
-    """Cluster sentences by similar templates.
+    """Group sentences into clusters of similar templates.
+
+    Uses greedy clustering: each sentence joins the first existing cluster whose
+    canonical template is similar enough; otherwise it starts a new cluster.
+    After clustering, the most frequent template in each cluster becomes the
+    canonical form.
 
     Returns a dict mapping canonical template -> list of (sentence, template) pairs.
-    Uses the most frequent template in each cluster as the canonical form.
     """
     # Greedy clustering first
     clusters: list[list[tuple[str, str]]] = []
@@ -171,13 +184,14 @@ def detect_template_repetition(
     flag_threshold: int = 3,
     similarity_threshold: float = 0.5,
 ) -> TemplateResult:
-    """Detect repetitive sentence templates across many paragraphs.
+    """Detect narration sentences whose openings follow the same template too often.
 
     Args:
         text: The text to analyze.
-        max_words: Maximum number of words to use as a template.
-        flag_threshold: Minimum count of similar templates to flag.
-        similarity_threshold: Minimum similarity (0-1) for templates to be considered similar.
+        max_words: How many words to take from the start of each sentence as its template.
+        flag_threshold: Minimum number of sentences sharing a template before it's flagged.
+        similarity_threshold: Minimum Jaccard word-overlap for two templates to be
+            considered the same (0–1).
 
     Returns:
         TemplateResult with flagged templates and statistics.
