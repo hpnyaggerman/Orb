@@ -29,6 +29,7 @@ import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from .lexical import ngrams
 from .text_segmentation import split_sentences
 
 if TYPE_CHECKING:
@@ -66,14 +67,15 @@ class DetectionResult:
     flagged_count: int
 
 
+# slop_detector keeps its own tokenizer (case- and punctuation-sensitive phrase
+# matching), but n-gram extraction is a pure sequence op shared via lexical.
 def _tokenize(text: str) -> list[str]:
     return re.findall(r"[a-z0-9]+(?:'[a-z]+)?", text.lower())
 
 
-def _ngrams(tokens: list[str], n: int) -> set[tuple[str, ...]]:
-    if len(tokens) < n:
-        return set()
-    return {tuple(tokens[i : i + n]) for i in range(len(tokens) - n + 1)}
+def _gram_set(tokens: list[str], n: int) -> set[tuple[str, ...]]:
+    """Distinct n-grams of tokens, for set-containment scoring."""
+    return set(ngrams(tokens, n))
 
 
 def _containment(phrase_grams: set, window_grams: set) -> float:
@@ -192,7 +194,7 @@ def _match_sentence(
                 continue
 
             # --- Longer phrases: trigram containment ---
-            var_grams = _ngrams(var_tokens, _N)
+            var_grams = _gram_set(var_tokens, _N)
             if not var_grams:
                 continue
 
@@ -200,7 +202,7 @@ def _match_sentence(
 
             for start in range(len(sent_tokens) - window_len + 1):
                 window = sent_tokens[start : start + window_len]
-                win_grams = _ngrams(window, _N)
+                win_grams = _gram_set(window, _N)
                 score = _containment(var_grams, win_grams)
 
                 if score >= threshold and score > best_score:

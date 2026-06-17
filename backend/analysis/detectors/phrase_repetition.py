@@ -36,7 +36,7 @@ import os
 import sys
 from dataclasses import dataclass, field
 
-from .lexical import count_content_words, tokenize
+from .lexical import count_content_words, ngrams, tokenize
 from .text_segmentation import split_narration_sentences
 
 DEBUG = "DEBUG_PHRASE_REPETITION" in os.environ
@@ -72,12 +72,8 @@ class PhraseResult:
 _split_sentences = split_narration_sentences
 
 
-# ---------- n-gram extraction & suppression ----------
-
-
-def _ngrams(tokens: list[str], n: int):
-    for i in range(len(tokens) - n + 1):
-        yield tuple(tokens[i : i + n])
+# ---------- n-gram suppression ----------
+# n-gram extraction itself lives in lexical (shared, was duplicated here).
 
 
 def _is_contiguous_sub(short: tuple[str, ...], long: tuple[str, ...]) -> bool:
@@ -157,7 +153,7 @@ def detect_phrase_repetition(
             for n in range(min_n, max_n + 1):
                 if len(tokens) < n:
                     break
-                for gram in _ngrams(tokens, n):
+                for gram in ngrams(tokens, n):
                     if gram in seen_in_this_msg:
                         continue
                     seen_in_this_msg.add(gram)

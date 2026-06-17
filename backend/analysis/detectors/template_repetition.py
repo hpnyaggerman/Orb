@@ -30,7 +30,8 @@ import sys
 from collections import defaultdict
 from dataclasses import dataclass, field
 
-from .text_segmentation import normalize_word, split_narration_sentences
+from .lexical import normalize_word
+from .text_segmentation import split_narration_sentences
 
 DEBUG = "DEBUG_TEMPLATE_REPETITION" in os.environ
 

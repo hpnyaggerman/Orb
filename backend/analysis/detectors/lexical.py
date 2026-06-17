@@ -1,21 +1,25 @@
 """
-lexical.py — Shared word-level helpers used by the repetition and echo detectors.
+lexical.py — Shared word-level helpers used across the prose-quality detectors.
 
-Both anti_echo and phrase_repetition reduce text to lowercase word tokens and
-then apply a content-word floor: a match (a copied run or a repeated n-gram) is
-only worth flagging if it carries enough non-stopword words. Both detectors used
-to carry their own copies of the tokenizer regex and stopword list, and the two
-lists had silently drifted apart. This module is the single source of truth so
-both detectors tokenize and judge "content" the same way.
+These are the operations that work on individual words and token lists:
+tokenizing text, normalizing a single word, sliding an n-gram window, and the
+content-word floor (a match is only worth flagging if it carries enough
+non-stopword words). Detectors used to carry their own copies of these — the
+tokenizer regex, the stopword list, the n-gram helper — and the copies had
+silently drifted apart. This module is the single source of truth so every
+detector tokenizes, normalizes, and judges "content" the same way.
 
-Note: slop_detector and contrastive_negation intentionally don't use this.
-slop_detector needs phrase casing and punctuation boundaries; contrastive_negation
-needs punctuation tokens for clause grammar. Switching them to this tokenizer
-would change their behavior.
+Note on tokenizers: slop_detector and contrastive_negation deliberately keep
+their own tokenizers — slop_detector needs phrase casing and punctuation
+boundaries, contrastive_negation needs punctuation tokens for clause grammar —
+so they don't use tokenize()/STOPWORDS here. They do share ngrams(), which is a
+pure sequence operation independent of how the tokens were produced.
 
 Public API:
     TOKEN_RE                — the word pattern ([a-z0-9']+)
     tokenize(text)          — lowercase word tokens
+    normalize_word(word)    — lowercase a word, stripped to [a-z0-9']
+    ngrams(tokens, n)       — sliding window of n-word tuples over a token list
     STOPWORDS               — function/filler words excluded from the content-word floor
     count_content_words(ts) — number of tokens in ts that are not stopwords
 """
@@ -23,11 +27,13 @@ Public API:
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 
 __all__ = [
     "TOKEN_RE",
     "tokenize",
+    "normalize_word",
+    "ngrams",
     "STOPWORDS",
     "count_content_words",
 ]
@@ -43,6 +49,31 @@ TOKEN_RE = re.compile(r"[a-z0-9']+")
 def tokenize(text: str) -> list[str]:
     """Lowercase text and return its word tokens."""
     return TOKEN_RE.findall(text.lower())
+
+
+def normalize_word(word: str) -> str:
+    """Lowercase a single word and strip everything except a-z, 0-9, and
+    apostrophes — the same alphabet TOKEN_RE matches.
+
+    Shared by the opener and template detectors, which key on individual
+    space-split words rather than re-running the tokenizer, so they need the
+    same normalized token form.
+    """
+    return re.sub(r"[^a-z0-9']", "", word.lower())
+
+
+# ---------- n-grams ----------
+
+
+def ngrams(tokens: list[str], n: int) -> Iterator[tuple[str, ...]]:
+    """Yield every contiguous n-word window of tokens as a tuple.
+
+    Yields nothing when there are fewer than n tokens. Callers that need a set
+    of distinct n-grams can wrap the result in set(); callers that need every
+    occurrence (including repeats) can iterate directly.
+    """
+    for i in range(len(tokens) - n + 1):
+        yield tuple(tokens[i : i + n])
 
 
 # ---------- stopwords / content filter ----------

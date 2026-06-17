@@ -1,8 +1,10 @@
 """Prose-quality detectors — pure functions that take text (and sometimes
 database model shapes) and return structured findings.
 
-Each detector is independently testable. The only shared dependency is
-``text_segmentation`` (a sibling) and ``database.models`` (a layer below).
+Each detector is independently testable. The only shared dependencies are the
+sibling helper modules ``lexical`` (word-level: tokenizing, normalizing,
+n-grams, stopwords) and ``text_segmentation`` (paragraph/sentence/dialogue
+splitting), plus ``database.models`` (a layer below).
 The consolidated runner that calls all detectors lives one level up in
 ``analysis.audit``; public result types are re-exported through the
 ``analysis`` facade.
