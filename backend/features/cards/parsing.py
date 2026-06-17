@@ -10,19 +10,19 @@ import binascii
 import io
 import json
 import logging
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Literal, Optional, Type, Union, cast
+from typing import Any, Dict, List, Literal, Optional, Union
 
-import dacite
-from dataclasses_json import Undefined, dataclass_json
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 from PIL import Image, PngImagePlugin
 
 logger = logging.getLogger(__name__)
 
 
-@dataclass_json
-@dataclass
-class TavernCardV1:
+# extra="ignore" mirrors the old dataclasses_json Undefined.EXCLUDE on the two
+# card-data entry points; nested models inherit pydantic's default (also ignore).
+class TavernCardV1(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     name: str = ""
     description: str = ""
     personality: str = ""
@@ -40,12 +40,10 @@ class TavernCardV1:
 PositionType = Optional[Literal["before_char", "after_char"]]
 
 
-@dataclass_json
-@dataclass
-class CharacterBookEntry:
-    keys: List[str] = field(default_factory=lambda: [])
+class CharacterBookEntry(BaseModel):
+    keys: List[str] = Field(default_factory=list)
     content: str = ""
-    extensions: Dict[str, Any] = field(default_factory=lambda: dict())
+    extensions: Dict[str, Any] = Field(default_factory=dict)
     enabled: bool = True
     insertion_order: Union[int, float] = 0
     case_sensitive: Optional[bool] = None
@@ -58,22 +56,27 @@ class CharacterBookEntry:
     constant: Optional[bool] = None
     position: PositionType = None
 
+    # Runs before Literal validation so numeric/string world-info positions are
+    # mapped into the spec's two values (or dropped). See position_converter.
+    @field_validator("position", mode="before")
+    @classmethod
+    def _coerce_position(cls, v: Any) -> Any:
+        return position_converter(v)
 
-@dataclass_json
-@dataclass
-class CharacterBook:
+
+class CharacterBook(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
     scan_depth: Optional[int] = None
     token_budget: Optional[Union[int, float]] = None
     recursive_scanning: Optional[bool] = None
-    extensions: Dict[str, Any] = field(default_factory=lambda: dict())
-    entries: List[CharacterBookEntry] = field(default_factory=lambda: [])
+    extensions: Dict[str, Any] = Field(default_factory=dict)
+    entries: List[CharacterBookEntry] = Field(default_factory=list)
 
 
-@dataclass_json(undefined=Undefined.EXCLUDE)
-@dataclass
-class TavernCardV2Data:
+class TavernCardV2Data(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     name: str = ""
     description: str = ""
     personality: str = ""
@@ -83,12 +86,12 @@ class TavernCardV2Data:
     creator_notes: str = ""
     system_prompt: str = ""
     post_history_instructions: str = ""
-    alternate_greetings: List[str] = field(default_factory=lambda: [])
+    alternate_greetings: List[str] = Field(default_factory=list)
     character_book: Optional[CharacterBook] = None
-    tags: List[str] = field(default_factory=lambda: [])
+    tags: List[str] = Field(default_factory=list)
     creator: str = ""
     character_version: str = ""
-    extensions: Dict[str, Any] = field(default_factory=lambda: dict())
+    extensions: Dict[str, Any] = Field(default_factory=dict)
     fav: Optional[bool] = None
     chat: Optional[str] = None
     creatorcomment: Optional[str] = None
@@ -97,14 +100,10 @@ class TavernCardV2Data:
     talkativeness: Optional[float] = None
 
 
-@dataclass_json(undefined=Undefined.EXCLUDE)
-@dataclass
-class TavernCardV2:
+class TavernCardV2(BaseModel):
     spec: Literal["chara_card_v2"] = "chara_card_v2"
     spec_version: Literal["2.0"] = "2.0"
-    data: TavernCardV2Data = field(
-        default_factory=lambda: TavernCardV2Data(),
-    )
+    data: TavernCardV2Data = Field(default_factory=TavernCardV2Data)
 
 
 def extract_exif_data(image_path: str) -> Dict[str, Any]:
@@ -130,12 +129,6 @@ def position_converter(data: Any) -> Any:
     if data in (1, "1"):
         return "after_char"
     return None
-
-
-def float_converter(value: Any) -> float:
-    if isinstance(value, str):
-        return float(value)
-    return value
 
 
 def parse(image_path: str) -> Union[TavernCardV2, TavernCardV1]:
@@ -181,18 +174,8 @@ def from_json_obj(jobj: Dict[str, Any]) -> Union[TavernCardV2, TavernCardV1]:
     logger.info(f"Detected card version: {'V2' if is_v2 else 'V1'}")
 
     if is_v2:
-        config = dacite.Config(
-            type_hooks=cast(
-                Dict[Type[Any], Any],
-                {
-                    PositionType: position_converter,
-                    float: float_converter,
-                },
-            ),
-            strict=False,
-        )
         try:
-            card = dacite.from_dict(data_class=TavernCardV2, data=jobj, config=config)
+            card = TavernCardV2.model_validate(jobj)
             logger.info(f"Successfully parsed V2 card: {card.data.name}")
             logger.info(f"V2 card has {len(card.data.alternate_greetings)} alternate greetings")
             if card.data.character_book is not None:
@@ -201,23 +184,16 @@ def from_json_obj(jobj: Dict[str, Any]) -> Union[TavernCardV2, TavernCardV1]:
                 logger.info("V2 card has no character_book")
             logger.info(f"V2 card fields: name={card.data.name}, first_mes={len(card.data.first_mes)} chars")
             return card
-        except dacite.DaciteError as error:
+        except ValidationError as error:
             logger.warning(f"Error parsing as TavernCardV2, attempting V1 format: {error}")
 
     try:
-        config = dacite.Config(
-            strict=False,
-            type_hooks={float: float_converter},
-        )
-        card = dacite.from_dict(data_class=TavernCardV1, data=jobj, config=config)
+        card = TavernCardV1.model_validate(jobj)
         logger.info(f"Successfully parsed V1 card: {card.name}")
         logger.info(f"V1 card fields: name={card.name}, first_mes={len(card.first_mes)} chars")
         return card
-    except dacite.DaciteError as error:
+    except ValidationError as error:
         logger.error(f"Error parsing TavernCardV1 data: {error}")
-        raise
-    except Exception as error:
-        logger.error(f"An unexpected error occurred while parsing card JSON: {error}")
         raise
 
 
@@ -281,55 +257,6 @@ def to_png(card_dict: dict, avatar_bytes: bytes | None = None) -> bytes:
     return buf.getvalue()
 
 
-def _character_book_entry_to_dict(entry: CharacterBookEntry) -> dict:
-    """Serialize a CharacterBookEntry to a spec-compliant dictionary."""
-    d: Dict[str, Any] = {
-        "keys": entry.keys,
-        "content": entry.content,
-        "extensions": entry.extensions if entry.extensions else {},
-        "enabled": entry.enabled,
-        "insertion_order": entry.insertion_order,
-    }
-    if entry.case_sensitive is not None:
-        d["case_sensitive"] = entry.case_sensitive
-    if entry.name is not None:
-        d["name"] = entry.name
-    if entry.priority is not None:
-        d["priority"] = entry.priority
-    if entry.id is not None:
-        d["id"] = entry.id
-    if entry.comment is not None:
-        d["comment"] = entry.comment
-    if entry.selective is not None:
-        d["selective"] = entry.selective
-    if entry.secondary_keys is not None:
-        d["secondary_keys"] = entry.secondary_keys
-    if entry.constant is not None:
-        d["constant"] = entry.constant
-    if entry.position is not None:
-        d["position"] = entry.position
-    return d
-
-
-def _character_book_to_dict(book: CharacterBook) -> dict:
-    """Serialize a CharacterBook to a spec-compliant dictionary."""
-    d: Dict[str, Any] = {
-        "extensions": book.extensions if book.extensions else {},
-        "entries": [_character_book_entry_to_dict(e) for e in book.entries],
-    }
-    if book.name is not None:
-        d["name"] = book.name
-    if book.description is not None:
-        d["description"] = book.description
-    if book.scan_depth is not None:
-        d["scan_depth"] = book.scan_depth
-    if book.token_budget is not None:
-        d["token_budget"] = book.token_budget
-    if book.recursive_scanning is not None:
-        d["recursive_scanning"] = book.recursive_scanning
-    return d
-
-
 def card_to_dict(card: Union[TavernCardV2, TavernCardV1]) -> dict:
     """Normalize a parsed card (V1 or V2) into a flat dictionary for storage."""
     if isinstance(card, TavernCardV2):
@@ -359,7 +286,9 @@ def card_to_dict(card: Union[TavernCardV2, TavernCardV1]) -> dict:
             "source_format": "tavern_v2",
         }
         if d.character_book is not None:
-            result["character_book"] = _character_book_to_dict(d.character_book)
+            # exclude_none reproduces the spec-compliant projection: required
+            # fields always present, optional fields only when set.
+            result["character_book"] = d.character_book.model_dump(exclude_none=True)
         return result
     else:
         logger.info(f"Converting V1 card to dict: name={card.name}, no alternate greetings")
