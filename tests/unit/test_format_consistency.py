@@ -171,6 +171,98 @@ def test_asterisk_inside_quotes_is_not_narration():
     assert style.dialogue == Dialogue.QUOTED
 
 
+# ---------- 3+ asterisk runs (markdown bold-italic / scene dividers) ----------
+# `***x***` and `****` are not single-* RP markup, and the parser can't represent
+# them. They are protected runs: excluded from classification and carried through the
+# rewrite verbatim, so they neither corrupt the read nor get dropped -- a `***` the
+# author typed is still there afterwards, while the surrounding prose still normalizes.
+
+
+def test_bold_italic_run_preserved_while_prose_normalizes():
+    # The reported breakage: a `***…***` block beside real markup used to come back
+    # mangled. Now the run is carried through untouched and the rest normalizes.
+    base = ['She smiles. "Hello there," she says warmly.', 'He nods. "Welcome back," he replies.']
+    draft = '*He leans in close.* "You came back." ***He could not believe it.***'
+    new, rep = normalize_to_baseline(draft, base, enabled=True)
+    assert rep.changed
+    # The `***…***` run survives verbatim; only the prose narration asterisks go.
+    assert new == 'He leans in close. "You came back." ***He could not believe it.***'
+
+
+def test_bold_italic_run_left_byte_identical_when_prose_is_consistent():
+    base = ['She smiles. "Hello there," she says warmly.', 'He nods. "Welcome back," he replies.']
+    draft = '***She steps closer, watching him.*** "Are you sure?"'
+    new, rep = normalize_to_baseline(draft, base, enabled=True)
+    # The `***…***` is protected and the quoted dialogue already matches: no-op.
+    assert not rep.changed
+    assert new == draft
+
+
+def test_four_asterisk_run_preserved():
+    base = ['She smiles. "Hello there," she says warmly.', 'He nods. "Welcome back," he replies.']
+    draft = "He was ****really**** angry."
+    new, rep = normalize_to_baseline(draft, base, enabled=True)
+    assert not rep.changed
+    assert new == draft  # ****really**** carried through intact
+
+
+def test_scene_divider_run_preserved_with_surrounding_text():
+    base = ['She smiles. "Hello there," she says warmly.', 'He nods. "Welcome back," he replies.']
+    draft = "She turns away.\n\n***\n\nThe room falls silent."
+    new, rep = normalize_to_baseline(draft, base, enabled=True)
+    assert not rep.changed
+    assert new == draft  # divider and its blank-line spacing untouched
+
+
+def test_no_asterisk_run_stays_byte_identical():
+    # A draft with no 3+ run is unaffected: single-* emphasis and already-consistent
+    # text still come back untouched.
+    base = ['She smiles. "Hello there," she says warmly.']
+    draft = 'He frowns. "Do you think I am *stupid*?"'
+    new, rep = normalize_to_baseline(draft, base, enabled=True)
+    assert not rep.changed
+    assert new == draft
+
+
+# ---------- fenced code blocks (literal content, never reformatted) ----------
+# Markup inside ```...``` is literal text, not RP prose: it must not sway the axes
+# and must survive the rewrite byte-for-byte (including 3+ asterisk runs).
+
+
+def test_code_block_markup_does_not_sway_classification():
+    # The `*...*` / `***...***` live inside a fence, so the narration axis is read
+    # only from the surrounding bare prose, not flipped to ASTERISK.
+    text = "She nods.\n\n```\n*this is code* and ***bold*** stuff\n```\n\nShe leaves."
+    style = classify_axes(text)
+    assert style.narration != Narration.ASTERISK
+
+
+def test_code_block_passes_through_rewrite_verbatim():
+    base = ['She smiles. "Hello there," she says warmly.', 'He nods. "Welcome back," he replies.']
+    draft = '*He leans in.* "You came back."\n\n```python\nx = a ***b*** c  # not RP markup\n```'
+    new, rep = normalize_to_baseline(draft, base, enabled=True)
+    assert rep.changed  # the prose narration asterisks were stripped
+    assert new == 'He leans in. "You came back."\n\n```python\nx = a ***b*** c  # not RP markup\n```'
+
+
+def test_asterisk_runs_preserved_in_both_prose_and_code():
+    # A `***…***` run is protected whether it sits in prose or inside a fence; both
+    # survive verbatim and the bare narration around them is already consistent.
+    base = ['She smiles. "Hello there," she says warmly.', 'He nods. "Welcome back," he replies.']
+    draft = "She turns. ***Important.***\n\n```\nkeep ***this***\n```"
+    new, rep = normalize_to_baseline(draft, base, enabled=True)
+    assert not rep.changed
+    assert new == draft
+
+
+def test_code_only_draft_is_byte_identical():
+    base = ['She smiles. "Hello there," she says warmly.']
+    draft = "```\n*not* RP markup, ***at all***\n```"
+    new, rep = normalize_to_baseline(draft, base, enabled=True)
+    assert not rep.changed
+    assert new == draft
+
+
 # ---------- *emphasis* inside dialogue (LLMs do this constantly) ----------
 
 

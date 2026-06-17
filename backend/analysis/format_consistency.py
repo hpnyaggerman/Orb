@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import re
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 
@@ -133,11 +134,66 @@ def _is_inline_emphasis(spans: list[tuple[str, int, int]], i: int, para: str) ->
     return left[-1] not in _SENTENCE_END
 
 
+# ---------- protected spans (passed through, not reformatted) ----------
+# Some runs are verbatim content the normalizer must neither read as RP markup nor
+# rewrite — it just carries them through unchanged so they reappear in the output as
+# the author wrote them:
+#   - ```code``` fences — any ``*`` or quote inside is literal;
+#   - runs of 3+ asterisks (``***`` / ``****`` scene rules, and ``***bold***``
+#     markdown) — not single-``*`` RP action markup. The single-``*`` parser can't
+#     represent them; left in the prose stream the inner ``*…*`` is misread as an
+#     emphasis span with a stray ``**`` fragment beside it, which both skews
+#     classification and survives the rewrite mangled. Carving them out instead
+#     keeps them intact (a ``***`` the author typed is still there afterwards).
+# Protected spans are handled here, above the paragraph split, because a fence can
+# itself contain the blank lines that split would otherwise break it on.
+
+_PROTECTED = re.compile(
+    r"```.*?```"  # fenced code (may span lines)
+    r"|\*{3,}[^\n]*?\*{3,}"  # ***bold*** / ****word**** paired run (one line)
+    r"|\*{3,}",  # lone *** / **** (e.g. a scene divider)
+    re.DOTALL,
+)
+
+
+def _split_protected_segments(text: str) -> list[tuple[bool, str]]:
+    """Split *text* into ordered ``(protected, chunk)`` parts that rejoin to *text*
+    exactly, each protected run (see ``_PROTECTED``) flagged ``protected=True``."""
+    parts: list[tuple[bool, str]] = []
+    idx = 0
+    for m in _PROTECTED.finditer(text):
+        if m.start() > idx:
+            parts.append((False, text[idx : m.start()]))
+        parts.append((True, m.group(0)))
+        idx = m.end()
+    if idx < len(text):
+        parts.append((False, text[idx:]))
+    return parts
+
+
+def _map_prose(text: str, fn: Callable[[str], str]) -> str:
+    """Apply *fn* to each non-protected chunk of *text*, passing protected runs
+    through verbatim. The rewrite goes through this so it can never reach inside a
+    code block or a 3+-asterisk run."""
+    return "".join(chunk if prot else fn(chunk) for prot, chunk in _split_protected_segments(text))
+
+
+def _strip_protected(text: str) -> str:
+    """Replace protected runs with a single space so their literal markup never sways
+    classification (the space keeps the surrounding words from fusing)."""
+    return _PROTECTED.sub(" ", text)
+
+
 # ---------- classification ----------
 
 
 def classify_axes(text: str) -> AxisStyle:
-    """Classify *text* on the dialogue and narration axes by coverage fraction."""
+    """Classify *text* on the dialogue and narration axes by coverage fraction.
+
+    Protected runs (fenced code, 3+-asterisk markdown) are dropped first: their
+    contents are literal, so a ``*`` or quote inside one must not register as RP
+    markup."""
+    text = _strip_protected(text)
     speech_chars = 0
     block_emph_chars = 0
     bare_chars = 0
@@ -356,9 +412,16 @@ def _rewrite(draft: str, src: AxisStyle, target: AxisStyle) -> str:
     td = target.dialogue if change_dialogue else None
     tn = target.narration if change_narration else None
 
-    # Split on paragraph breaks while keeping the original separators, so blank-line
-    # spacing survives intact (quote/emphasis state already resets per paragraph).
-    pieces = re.split(r"(\n\s*\n)", draft)
+    # Rewrite prose only; fenced code blocks pass through verbatim.
+    return _map_prose(draft, lambda seg: _rewrite_segment(seg, src, td, tn))
+
+
+def _rewrite_segment(text: str, src: AxisStyle, td: Dialogue | None, tn: Narration | None) -> str:
+    """Rewrite one non-code text segment, paragraph by paragraph.
+
+    Split on paragraph breaks while keeping the original separators, so blank-line
+    spacing survives intact (quote/emphasis state already resets per paragraph)."""
+    pieces = re.split(r"(\n\s*\n)", text)
     rebuilt = [
         piece if (idx % 2 == 1 or not piece.strip()) else _rewrite_paragraph(piece, src, td, tn)
         for idx, piece in enumerate(pieces)
@@ -386,6 +449,10 @@ def normalize_to_baseline(
     if target.dialogue == Dialogue.UNKNOWN and target.narration == Narration.UNKNOWN:
         return draft, FormatDriftReport(None, target, False, "baseline unstable")
 
+    # Protected runs (fenced code, 3+-asterisk markdown) are excluded from the
+    # classification and carried through the rewrite verbatim, so a stray
+    # ``***``/``****`` neither corrupts the read nor gets dropped — it reappears in
+    # the output exactly as the author typed it.
     source = classify_axes(draft)
     new_text = _rewrite(draft, source, target)
     changed = new_text != draft
