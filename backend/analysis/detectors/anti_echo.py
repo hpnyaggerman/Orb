@@ -175,7 +175,7 @@ def detect_anti_echo(
     user_message: str,
     *,
     max_question_words: int = 10,
-    min_content_words: int = 2,
+    min_content_words: int = 1,
     min_coverage: float = 0.5,
     short_question_words: int = 4,
 ) -> EchoResult:

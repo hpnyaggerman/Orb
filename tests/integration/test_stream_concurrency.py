@@ -174,8 +174,19 @@ async def test_disconnect_releases_lock(streaming_client, llm_mock):
 
     # The disconnect-driven cleanup path is async and runs after the
     # client-side ``async with`` exits, so the lock release races the
-    # next /send. Sleep to let it land before retrying.
-    await asyncio.sleep(0.05)
+    # next /send. Poll the actual lock until cleanup releases it instead
+    # of guessing a fixed sleep, which flakes under load.
+    from backend.api import deps
+
+    async def _lock_released() -> bool:
+        lock = deps._conversation_stream_locks.get(cid)
+        return lock is None or not lock.locked()
+
+    for _ in range(200):  # up to ~2s, far longer than cleanup needs
+        if await _lock_released():
+            break
+        await asyncio.sleep(0.01)
+    assert await _lock_released(), "disconnect cleanup never released the lock"
 
     llm_mock.enqueue_writer("recovered")
     llm_mock.enqueue_editor(None)
