@@ -17,7 +17,6 @@ Public API:
 from __future__ import annotations
 
 import difflib
-import re
 from dataclasses import dataclass, field
 
 from .text_segmentation import (
@@ -27,7 +26,7 @@ from .text_segmentation import (
     count_sentences as _count_sentences,
 )
 from .text_segmentation import (
-    find_quote_spans as _find_quote_spans,
+    extract_blocks as _extract_blocks,
 )
 
 __all__ = ["detect_structural_repetition", "StructuralResult", "MessageStructure"]
@@ -51,67 +50,10 @@ class StructuralResult:
     messages: list[MessageStructure]
 
 
-# ---------- block extraction ----------
-# Sentence counting and quote-span finding come from text_segmentation so this
-# detector uses the same definitions as the rest of the audit passes.
-
-
-_EMPHASIS_RE = re.compile(
-    r"(?<!\w)\*(?!\s)([^*\n]+?)\*(?!\w)"  # *thought*  (not bullet)
-    r"|"
-    r"(?<!\w)_(?!\s)([^_\n]+?)_(?!\w)",  # _thought_
-)
-
-
-def _find_emphasis_spans(text: str) -> list[tuple[int, int]]:
-    spans = []
-    for m in _EMPHASIS_RE.finditer(text):
-        # Bullet guard: if this * is first non-space on its line and followed by space, skip
-        if m.group(0).startswith("*"):
-            line_start = text.rfind("\n", 0, m.start()) + 1
-            prefix = text[line_start : m.start()]
-            after_star = m.start() + 1
-            if prefix.strip() == "" and after_star < len(text) and text[after_star] in " \t":
-                continue
-        spans.append((m.start(), m.end()))
-    return spans
-
-
-def _extract_blocks(para: str) -> list[tuple[str, str]]:
-    """Break a single paragraph into ordered (block_type, text) pairs.
-
-    Block types are SPEECH (quoted dialogue), EMPHASIS (*thought* or _thought_),
-    and NARRATION (everything else).
-    """
-    quote_spans = _find_quote_spans(para)
-    # Emphasis only outside quotes
-    emphasis_spans = []
-    prev_end = 0
-    for qs, qe in sorted(quote_spans):
-        emphasis_spans.extend((s, e) for s, e in _find_emphasis_spans(para[prev_end:qs]))
-        prev_end = qe
-    emphasis_spans.extend((s, e) for s, e in _find_emphasis_spans(para[prev_end:]))
-
-    # Merge and tag
-    typed = [(s, e, "SPEECH") for s, e in quote_spans] + [(s, e, "EMPHASIS") for s, e in emphasis_spans]
-    typed.sort()
-
-    blocks: list[tuple[str, str]] = []
-    idx = 0
-    for s, e, typ in typed:
-        if idx < s:
-            t = para[idx:s].strip()
-            if t:
-                blocks.append(("NARRATION", t))
-        t = para[s:e].strip()
-        if t:
-            blocks.append((typ, t))
-        idx = max(idx, e)
-    if idx < len(para):
-        t = para[idx:].strip()
-        if t:
-            blocks.append(("NARRATION", t))
-    return blocks
+# ---------- signature building ----------
+# Block extraction, sentence counting and quote-span finding all come from
+# text_segmentation so this detector uses the same definitions as the rest of
+# the audit passes.
 
 
 def _collapse_signature(blocks: list[tuple[str, str]]) -> list[str]:

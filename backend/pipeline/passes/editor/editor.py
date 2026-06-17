@@ -10,7 +10,13 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any, AsyncIterator, Mapping, Sequence
 
-from ....analysis import AuditReport, DetectionResult, format_report, run_audit
+from ....analysis import (
+    AuditReport,
+    DetectionResult,
+    format_report,
+    normalize_to_baseline,
+    run_audit,
+)
 from .feedback import FeedbackResult, feedback_step
 
 if TYPE_CHECKING:
@@ -462,71 +468,86 @@ async def editor_stage(
     # there. Mirrors director_start/director_done.
     yield {"event": "writer_done", "data": {"editor_will_run": editor_will_run}}
 
-    if not editor_will_run:
+    if editor_will_run:
+        logger.info(
+            "Editor pass starting (draft=%d chars, phrase_bank=%d groups, edit=%s, feedback=%s)",
+            len(state.resp_text),
+            len(phrase_bank) if phrase_bank else 0,
+            cfg.do_edit,
+            feedback_needed,
+        )
+        # Errors are not caught here: an editor failure propagates and aborts the
+        # turn, like the director/writer passes. _consume_pipeline's finally still
+        # fallback-persists whatever the writer already streamed.
+        async for event in editor_pass(
+            cfg.agent_lane.client,
+            cfg.agent_lane.base,
+            state.effective_msg,
+            state.resp_text,
+            settings,
+            phrase_bank or [],
+            # do_edit == (audit_enabled or length_guard is not None), so in the
+            # feedback-only path (do_edit False) both are already inert — pass them
+            # straight through and let the edit loop no-op.
+            cfg.audit_enabled,
+            cfg.length_guard,
+            kv_tracker=kv_tracker,
+            reasoning_on=cfg.editor_reasoning_on,
+            audit_context_msgs=editor_audit_msgs,
+            writer_user_msg=state.writer_content,
+            feedback_fragments=feedback_fragments if feedback_needed else None,
+        ):
+            if event["type"] == "reasoning":
+                # Feedback reasoning is folded into the editor channel (it is an
+                # editor sub-step, so it shares the Editor reasoning toggle and box).
+                state.reasoning_editor += event["delta"]
+                yield {
+                    "event": "reasoning",
+                    "data": {"pass": "editor", "delta": event["delta"]},
+                }
+            elif event["type"] == "done":
+                state.latency += int(event.get("elapsed", 0) or 0)
+                refined_draft = event["draft"]
+                if refined_draft and refined_draft != state.resp_text:
+                    state.resp_text = refined_draft
+                    yield {
+                        "event": "writer_rewrite",
+                        "data": {"refined_text": state.resp_text},
+                    }
+                if event.get("tool_calls"):
+                    yield {
+                        "event": "editor_done",
+                        "data": {"tool_calls": event["tool_calls"]},
+                    }
+                state.feedback_values = event.get("feedback", {}) or {}
+                if state.feedback_values:
+                    yield {
+                        "event": "feedback",
+                        "data": {"values": state.feedback_values},
+                    }
+    else:
         logger.info(
             "Editor pass skipped (do_edit=%s, feedback=%s, draft=%d chars)",
             cfg.do_edit,
             feedback_needed,
             len(state.resp_text),
         )
-        return
 
-    logger.info(
-        "Editor pass starting (draft=%d chars, phrase_bank=%d groups, edit=%s, feedback=%s)",
-        len(state.resp_text),
-        len(phrase_bank) if phrase_bank else 0,
-        cfg.do_edit,
-        feedback_needed,
-    )
-    # Errors are not caught here: an editor failure propagates and aborts the
-    # turn, like the director/writer passes. _consume_pipeline's finally still
-    # fallback-persists whatever the writer already streamed.
-    async for event in editor_pass(
-        cfg.agent_lane.client,
-        cfg.agent_lane.base,
-        state.effective_msg,
-        state.resp_text,
-        settings,
-        phrase_bank or [],
-        # do_edit == (audit_enabled or length_guard is not None), so in the
-        # feedback-only path (do_edit False) both are already inert — pass them
-        # straight through and let the edit loop no-op.
-        cfg.audit_enabled,
-        cfg.length_guard,
-        kv_tracker=kv_tracker,
-        reasoning_on=cfg.editor_reasoning_on,
-        audit_context_msgs=editor_audit_msgs,
-        writer_user_msg=state.writer_content,
-        feedback_fragments=feedback_fragments if feedback_needed else None,
-    ):
-        if event["type"] == "reasoning":
-            # Feedback reasoning is folded into the editor channel (it is an
-            # editor sub-step, so it shares the Editor reasoning toggle and box).
-            state.reasoning_editor += event["delta"]
-            yield {
-                "event": "reasoning",
-                "data": {"pass": "editor", "delta": event["delta"]},
-            }
-        elif event["type"] == "done":
-            state.latency += int(event.get("elapsed", 0) or 0)
-            refined_draft = event["draft"]
-            if refined_draft and refined_draft != state.resp_text:
-                state.resp_text = refined_draft
-                yield {
-                    "event": "writer_rewrite",
-                    "data": {"refined_text": state.resp_text},
-                }
-            if event.get("tool_calls"):
-                yield {
-                    "event": "editor_done",
-                    "data": {"tool_calls": event["tool_calls"]},
-                }
-            state.feedback_values = event.get("feedback", {}) or {}
-            if state.feedback_values:
-                yield {
-                    "event": "feedback",
-                    "data": {"values": state.feedback_values},
-                }
+    # Deterministic RP format-consistency normalization. This is *not* part of the
+    # LLM edit loop — it runs whenever the format_consistency toggle is on and a
+    # baseline window exists, even if the editor pass itself was skipped. It holds
+    # the final draft's markup convention to that of the recent assistant messages.
+    audit_toggles = settings.get("editor_audit_toggles") or {}
+    if state.resp_text and bool(audit_toggles.get("format_consistency", False)):
+        new_text, drift = normalize_to_baseline(state.resp_text, editor_audit_msgs, enabled=True)
+        if drift.changed:
+            logger.info(
+                "Format-consistency: normalized draft (%s -> %s)",
+                drift.source.label() if drift.source else "?",
+                drift.target.label() if drift.target else "?",
+            )
+            state.resp_text = new_text
+            yield {"event": "writer_rewrite", "data": {"refined_text": state.resp_text}}
 
 
 async def _run_edit_loop(
