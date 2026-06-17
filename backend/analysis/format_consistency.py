@@ -390,20 +390,52 @@ def normalize_format(draft: str, target: AxisStyle) -> str:
     return _rewrite(draft, classify_axes(draft), target)
 
 
+def _governing_dialogue(src: AxisStyle, target: AxisStyle) -> Dialogue:
+    """Which dialogue convention to read the draft's *bare* spans under — are they
+    narration (quoted convention) or spoken lines (asterisk convention)?
+
+    A real quoted span in the draft is hard evidence of the quoted convention, so it
+    wins outright. With no quotes the draft is ambiguous on its own — a bare run could
+    be un-asterisked narration or bare dialogue — and ``classify_axes`` falls back to
+    BARE (asterisk convention) whenever there is asterisk narration beside bare text.
+    That guess misreads a *full-markup* draft (quoted dialogue + asterisk narration)
+    that simply has no dialogue this turn: its bare runs are narration that lost its
+    asterisks, not dialogue. So when the baseline establishes full markup and the
+    draft already shows the asterisk-narration half, read it as full markup too. The
+    narration axis is unaffected; only the bare-span role flips from dialogue to
+    narration, which is what lets a stray bare paragraph be re-wrapped in asterisks
+    rather than mistakenly wrapped in quotes."""
+    if src.dialogue == Dialogue.QUOTED:
+        return Dialogue.QUOTED
+    if target.dialogue == Dialogue.QUOTED and target.narration == Narration.ASTERISK and src.narration == Narration.ASTERISK:
+        return Dialogue.QUOTED
+    return src.dialogue
+
+
 def _rewrite(draft: str, src: AxisStyle, target: AxisStyle) -> str:
     """Core rewrite, given *draft* already classified as *src*. Split out so the
     ``normalize_to_baseline`` entry point reuses the source it computed for the
     report instead of classifying the same draft twice."""
-    change_dialogue = (
-        target.dialogue != Dialogue.UNKNOWN and src.dialogue != Dialogue.UNKNOWN and target.dialogue != src.dialogue
-    )
-    change_narration = (
-        target.narration != Narration.UNKNOWN and src.narration != Narration.UNKNOWN and target.narration != src.narration
-    )
+    # Read the draft's bare spans under the convention the baseline establishes, not
+    # the draft's possibly-misleading self-read (see _governing_dialogue).
+    eff_dialogue = _governing_dialogue(src, target)
+    eff_src = AxisStyle(dialogue=eff_dialogue, narration=src.narration)
 
-    # Wrapping bare prose in asterisks means re-reading which bare text is
-    # narration — only safe when the dialogue axis tells us (quoted convention).
-    if change_narration and target.narration == Narration.ASTERISK and src.dialogue != Dialogue.QUOTED:
+    change_dialogue = (
+        target.dialogue != Dialogue.UNKNOWN and eff_dialogue != Dialogue.UNKNOWN and target.dialogue != eff_dialogue
+    )
+    # Enforce a confidently-classified target on *every* span, not only when the
+    # draft's dominant style differs. A draft can be dominantly asterisk narration yet
+    # still hide a stray bare beat ('"…," she whispered.') or a whole bare paragraph
+    # that forgot its asterisks; the dominant-style match used to short-circuit those
+    # to a no-op. The rewrite is span-selective and idempotent on already-correct
+    # spans, so running it normalizes that within-message drift and leaves the rest
+    # byte-identical. The UNKNOWN guard still spares genuinely mixed drafts.
+    change_narration = target.narration != Narration.UNKNOWN and src.narration != Narration.UNKNOWN
+
+    # Wrapping bare prose in asterisks means deciding which bare text is narration —
+    # only safe when the governing convention says dialogue is quoted.
+    if change_narration and target.narration == Narration.ASTERISK and eff_dialogue != Dialogue.QUOTED:
         change_narration = False
 
     if not (change_dialogue or change_narration):
@@ -413,7 +445,7 @@ def _rewrite(draft: str, src: AxisStyle, target: AxisStyle) -> str:
     tn = target.narration if change_narration else None
 
     # Rewrite prose only; fenced code blocks pass through verbatim.
-    return _map_prose(draft, lambda seg: _rewrite_segment(seg, src, td, tn))
+    return _map_prose(draft, lambda seg: _rewrite_segment(seg, eff_src, td, tn))
 
 
 def _rewrite_segment(text: str, src: AxisStyle, td: Dialogue | None, tn: Narration | None) -> str:
