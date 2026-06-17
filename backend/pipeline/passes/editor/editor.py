@@ -14,7 +14,6 @@ from ....analysis import (
     AuditReport,
     DetectionResult,
     format_report,
-    normalize_to_baseline,
     run_audit,
 )
 from .feedback import FeedbackResult, feedback_step
@@ -191,14 +190,12 @@ def _build_audit_text(draft: str, previous_assistant_msgs: list[str]) -> str:
 
 
 def _baseline_window(base: CachedBase, audit_context_msgs: list[str] | None) -> list[str]:
-    """The recent assistant-message window (newest first, up to 3) used both by
-    the repetition scanners and by the format-consistency normalizer.
+    """The recent assistant-message window (newest first, up to 3) the
+    repetition scanners compare the draft against.
 
     Callers may pass an explicit list via *audit_context_msgs* (e.g.
     super-regenerate, which excludes the message being replaced); when None the
-    window is derived from the cached prefix. Deriving it here — rather than only
-    inside the edit loop — is what lets the format normalizer run in normal usage,
-    where ``editor_audit_msgs`` is None.
+    window is derived from the cached prefix.
     """
     if audit_context_msgs is not None:
         return audit_context_msgs[:3]
@@ -558,41 +555,6 @@ async def editor_stage(
             feedback_needed,
             len(state.resp_text),
         )
-
-    # Deterministic RP format-consistency normalization — a separate stage that
-    # always runs, even when the editor pass above was skipped. See below.
-    async for event in _format_consistency_stage(state, cfg.agent_lane.base, editor_audit_msgs):
-        yield event
-
-
-async def _format_consistency_stage(
-    state: "TurnState",
-    base: CachedBase,
-    editor_audit_msgs: list[str] | None,
-) -> AsyncIterator[dict]:
-    """Hold the final draft's markup convention to that of the recent assistant
-    messages, emitting a ``writer_rewrite`` event (mirroring the edit loop) on an
-    actual rewrite.
-
-    This is *not* part of the LLM edit loop and is *not* user-toggleable — it
-    always runs and is therefore intentionally absent from ``AUDIT_TYPES``.
-    Running it unconditionally is safe because ``normalize_to_baseline`` is a
-    conservative no-op: it rewrites only when the baseline window agrees on a
-    convention AND the draft drifts from it, otherwise returning the text
-    byte-for-byte.
-    """
-    if not state.resp_text:
-        return
-    # Same baseline window the edit loop uses: an explicit override when given
-    # (super-regenerate), otherwise the recent assistant turns from the cached
-    # prefix. Without the fallback the normalizer no-ops in normal usage, where
-    # editor_audit_msgs is None.
-    baseline_msgs = _baseline_window(base, editor_audit_msgs)
-    new_text, drift = normalize_to_baseline(state.resp_text, baseline_msgs, enabled=True)
-    if drift.changed:
-        logger.info("Format-consistency: normalized draft (%s)", drift.transition())
-        state.resp_text = new_text
-        yield {"event": "writer_rewrite", "data": {"refined_text": state.resp_text}}
 
 
 async def _run_edit_loop(

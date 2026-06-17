@@ -15,13 +15,13 @@ from __future__ import annotations
 
 from .audit import AUDIT_TYPES, AuditReport, format_report, run_audit
 from .detectors.anti_echo import EchoResult
-from .detectors.format_consistency import FormatDriftReport, normalize_to_baseline
 from .detectors.opening_monotony import FlaggedOpener, MonotonyResult
 from .detectors.phrase_repetition import PhraseResult
 from .detectors.slop_detector import DetectionResult
 from .detectors.structural_repetition import StructuralResult
 from .detectors.template_repetition import FlaggedTemplate, TemplateResult
 from .detectors.text_segmentation import split_narration_sentences
+from .format_consistency import FormatDriftReport, normalize_to_baseline
 
 __all__ = [
     # audit — consolidated runner + report

@@ -31,7 +31,7 @@ from collections import Counter
 from dataclasses import dataclass
 from enum import Enum
 
-from .text_segmentation import extract_block_spans, split_paragraphs
+from .detectors.text_segmentation import extract_block_spans, split_paragraphs
 
 __all__ = [
     "Dialogue",

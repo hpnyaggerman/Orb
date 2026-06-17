@@ -14,7 +14,7 @@ A workflow is a Python record in the process-local registry -- one record per wo
 - Carry state across four DB-backed tiers (conversation, message, character, config) plus one in-memory per-turn scratch tier.
 - Ship a frontend module that registers renderers (message buttons, attachment widgets, inspector/tools-panel cards -- a config panel is just a tools-panel renderer), click/text-effect/SSE handlers.
 
-Built-in registered workflow: `tts` (`backend/workflows/tts/`, `frontend/workflows/tts/`). It binds four of the five hook types (post-pipeline, on-demand, regenerate, reroll-gen -- not pre-pipeline). For persistent state it uses the character and config tiers only. Cross-reference it as the worked example.
+Built-in registered workflows: `tts` (`backend/workflows/tts/`, `frontend/workflows/tts/`) and `format_consistency` (`backend/workflows/format_consistency/`, `frontend/workflows/format_consistency/`). `tts` binds four of the five hook types (post-pipeline, on-demand, regenerate, reroll-gen -- not pre-pipeline) and uses the character and config state tiers; cross-reference it as the full worked example. `format_consistency` is the minimal example: a single post-pipeline hook (priority `-10`, so it runs before any artifact hook like TTS and they synthesize from the normalized text) that calls the deterministic RP-markup normalizer in `backend/analysis/format_consistency.py` via the toolkit, produces no artifacts and no tools, and gates on an `enabled` flag in its config tier (default on, preserving its prior always-run behaviour). Its frontend module is a single Tools-panel toggle.
 
 ---
 
@@ -113,11 +113,13 @@ Single-dispatch hooks fire from their own HTTP routes, never from the turn pipel
 
 ### 3.4 Registration sequence
 
-The package `__init__.py` imports each workflow's instance plus its hook callables and runs the three registration calls against them. Hooks are aliased on import (`_tts_*`) so that when a second workflow lands, its identically-named hooks (`post_pipeline`, etc.) will not shadow TTS's in the shared package namespace.
+The package `__init__.py` imports each workflow's instance plus its hook callables and runs the three registration calls against them. Hooks are aliased on import (`_tts_*`, `_fc_*`) because both shipped workflows define an identically-named `post_pipeline` hook -- without the alias the second import would shadow the first in the shared package namespace.
 
-Live shape -- imports and registration calls in `backend/workflows/__init__.py`:
+Live shape -- imports and registration calls in `backend/workflows/__init__.py` (two workflows; `format_consistency` binds only `POST_PIPELINE`, at a negative priority so it runs first):
 
 ```
+from .format_consistency import format_consistency_workflow           # the Workflow(...) instance
+from .format_consistency.hooks import post_pipeline as _fc_post_pipeline
 from .tts import tts_workflow                                          # the Workflow(...) instance
 from .tts.hooks import (
     on_demand as _tts_on_demand,
@@ -131,6 +133,9 @@ subscribe(tts_workflow.id, HookType.POST_PIPELINE, _tts_post_pipeline)      # st
 subscribe(tts_workflow.id, HookType.ON_DEMAND,    _tts_on_demand)
 subscribe(tts_workflow.id, HookType.REGENERATE,   _tts_regenerate)
 subscribe(tts_workflow.id, HookType.REROLL_GEN,   _tts_reroll_gen)
+
+register_workflow(format_consistency_workflow)                         # a second workflow
+subscribe(format_consistency_workflow.id, HookType.POST_PIPELINE, _fc_post_pipeline, priority=-10)
 finalize_registry()                                                    # step 3 (keep at file bottom)
 ```
 

@@ -5,7 +5,7 @@ full inversion the user reported), and the conservative no-op behaviour that
 keeps the feature safe (ambiguous input, unstable baseline, disabled).
 """
 
-from backend.analysis.detectors.format_consistency import (
+from backend.analysis.format_consistency import (
     AxisStyle,
     Dialogue,
     Narration,

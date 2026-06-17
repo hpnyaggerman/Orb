@@ -45,6 +45,10 @@ from .contracts import (
     ToolSpec,
     _readonly,
 )
+from .format_consistency import format_consistency_workflow
+from .format_consistency.hooks import (
+    post_pipeline as _fc_post_pipeline,
+)
 from .registry import (
     Subscription,
     ToolNameCollision,
@@ -125,6 +129,12 @@ subscribe(tts_workflow.id, HookType.POST_PIPELINE, _tts_post_pipeline)
 subscribe(tts_workflow.id, HookType.ON_DEMAND, _tts_on_demand)
 subscribe(tts_workflow.id, HookType.REGENERATE, _tts_regenerate)
 subscribe(tts_workflow.id, HookType.REROLL_GEN, _tts_reroll_gen)
+
+# Negative priority makes the deterministic markup normalizer run before TTS's
+# post hook (priority 0), so TTS — and any future artifact hook — synthesizes
+# from the normalized text rather than the raw draft.
+register_workflow(format_consistency_workflow)
+subscribe(format_consistency_workflow.id, HookType.POST_PIPELINE, _fc_post_pipeline, priority=-10)
 
 
 finalize_registry()

@@ -20,7 +20,12 @@ through one chokepoint.
 
 from __future__ import annotations
 
-from ..analysis import format_report, run_audit
+from ..analysis import (
+    FormatDriftReport,
+    format_report,
+    normalize_to_baseline,
+    run_audit,
+)
 from ..core import (
     Macros,
     workflow_character_state_lock,
@@ -63,6 +68,7 @@ from .registry import (
 )
 
 __all__ = [
+    "FormatDriftReport",
     "LLMClient",
     "Macros",
     "STANDALONE_TOOLS",
@@ -86,6 +92,7 @@ __all__ = [
     "get_workflow_message_state",
     "get_workflow_state",
     "insert_workflow_attachment",
+    "normalize_to_baseline",
     "overlay_enable_tools",
     "parse_tool_calls",
     "reasoning_cfg",
