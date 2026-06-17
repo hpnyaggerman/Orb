@@ -41,6 +41,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 
+from .lexical import count_content_words, tokenize
 from .text_segmentation import (
     find_quote_spans,
     split_narration_sentences,
@@ -71,8 +72,6 @@ class EchoResult:
 
 # ---------- text processing ----------
 
-_TOKEN_RE = re.compile(r"[a-z0-9']+")
-
 # Out-of-character asides are wrapped in square brackets in this app (the system
 # itself emits ``[OOC: ...]`` directives, and users follow the same convention).
 # They are instructions *to* the model, not in-character speech — including any
@@ -85,10 +84,6 @@ _OOC_BRACKET_RE = re.compile(r"\[[^\[\]]*\]")
 # other terminal punctuation that can ride alongside a ``?`` (e.g. "?!", "??").
 _TRAILING_MARKERS = " \t\n\"”’'*_)]}>"
 _TRAILING_TERMINALS = "!.…"
-
-
-def _tokenize(text: str) -> list[str]:
-    return _TOKEN_RE.findall(text.lower())
 
 
 def _strip_ooc(text: str) -> str:
@@ -106,129 +101,6 @@ def _ends_with_question(sentence: str) -> bool:
     closing markers (quotes, markdown emphasis) and adjacent terminals ("?!")."""
     trimmed = sentence.rstrip(_TRAILING_MARKERS).rstrip(_TRAILING_TERMINALS)
     return trimmed.endswith("?")
-
-
-# ---------- stopwords / content filter ----------
-#
-# A small local set — enough for the content-word floor that suppresses
-# bare-function-word echoes ("You?", "What?", "Really?"). phrase_repetition keeps
-# its own (private) list tuned to n-gram suppression; we don't share it.
-_STOPWORDS = frozenset(
-    {
-        # Articles / determiners / demonstratives
-        "a",
-        "an",
-        "the",
-        "this",
-        "that",
-        "these",
-        "those",
-        # Conjunctions
-        "and",
-        "or",
-        "but",
-        "nor",
-        "yet",
-        "so",
-        "if",
-        "then",
-        "than",
-        "as",
-        "while",
-        # Prepositions
-        "of",
-        "to",
-        "in",
-        "on",
-        "at",
-        "by",
-        "for",
-        "with",
-        "from",
-        "into",
-        "about",
-        # Be / auxiliaries / modals
-        "is",
-        "are",
-        "was",
-        "were",
-        "be",
-        "been",
-        "being",
-        "am",
-        "do",
-        "does",
-        "did",
-        "has",
-        "have",
-        "had",
-        "will",
-        "would",
-        "shall",
-        "should",
-        "can",
-        "could",
-        "may",
-        "might",
-        "must",
-        # Pronouns / possessives
-        "i",
-        "you",
-        "he",
-        "she",
-        "it",
-        "we",
-        "they",
-        "his",
-        "her",
-        "its",
-        "their",
-        "our",
-        "your",
-        "my",
-        "mine",
-        "him",
-        "them",
-        "us",
-        "me",
-        # Wh-words
-        "what",
-        "which",
-        "who",
-        "whom",
-        "whose",
-        "when",
-        "where",
-        "why",
-        "how",
-        # Misc fillers
-        "not",
-        "no",
-        "just",
-        "only",
-        "even",
-        "also",
-        "very",
-        "still",
-        "now",
-        "there",
-        "here",
-        "really",
-        "right",
-        # Common contractions kept whole by _TOKEN_RE
-        "i'm",
-        "you're",
-        "he's",
-        "she's",
-        "it's",
-        "we're",
-        "they're",
-        "don't",
-        "doesn't",
-        "didn't",
-        "won't",
-    }
-)
 
 
 def _longest_common_run(candidate: list[str], user_tokens: list[str]) -> list[str]:
@@ -263,7 +135,7 @@ def _user_dialogue_runs(user_message: str) -> list[list[str]]:
     cleaned = _strip_ooc(user_message)
     runs: list[list[str]] = []
     for start, end in find_quote_spans(cleaned):
-        toks = _tokenize(cleaned[start + 1 : end - 1])
+        toks = tokenize(cleaned[start + 1 : end - 1])
         if toks:
             runs.append(toks)
     return runs
@@ -342,14 +214,14 @@ def detect_anti_echo(
             continue
         seen.add(key)
 
-        c_tokens = _tokenize(sentence)
+        c_tokens = tokenize(sentence)
         if not c_tokens or len(c_tokens) > max_question_words:
             continue
 
         run = _longest_run_against_any(c_tokens, user_runs)
         if not run:
             continue
-        if sum(1 for t in run if t not in _STOPWORDS) < min_content_words:
+        if count_content_words(run) < min_content_words:
             continue
         if len(c_tokens) > short_question_words and len(run) / len(c_tokens) < min_coverage:
             continue

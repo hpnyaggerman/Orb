@@ -31,10 +31,10 @@ Example target pattern:
 from __future__ import annotations
 
 import os
-import re
 import sys
 from dataclasses import dataclass, field
 
+from .lexical import count_content_words, tokenize
 from .text_segmentation import split_narration_sentences
 
 DEBUG = "DEBUG_PHRASE_REPETITION" in os.environ
@@ -68,161 +68,6 @@ class PhraseResult:
 # audit pass splits text identically. `_split_sentences` strips dialogue.
 
 _split_sentences = split_narration_sentences
-
-_TOKEN_RE = re.compile(r"[a-z0-9']+")
-
-
-def _tokenize(sentence: str) -> list[str]:
-    return _TOKEN_RE.findall(sentence.lower())
-
-
-# ---------- stopwords / content filter ----------
-
-_STOPWORDS = frozenset(
-    {
-        # Articles
-        "a",
-        "an",
-        "the",
-        # Conjunctions
-        "and",
-        "or",
-        "but",
-        "nor",
-        "yet",
-        "so",
-        # Prepositions
-        "of",
-        "to",
-        "in",
-        "on",
-        "at",
-        "by",
-        "for",
-        "with",
-        "from",
-        "into",
-        "onto",
-        "over",
-        "under",
-        "about",
-        "across",
-        "after",
-        "before",
-        # Be / aux
-        "is",
-        "are",
-        "was",
-        "were",
-        "be",
-        "been",
-        "being",
-        "am",
-        "do",
-        "does",
-        "did",
-        "has",
-        "have",
-        "had",
-        "will",
-        "would",
-        "shall",
-        "should",
-        "can",
-        "could",
-        "may",
-        "might",
-        "must",
-        # Pronouns / possessives
-        "i",
-        "you",
-        "he",
-        "she",
-        "it",
-        "we",
-        "they",
-        "his",
-        "her",
-        "its",
-        "their",
-        "our",
-        "your",
-        "my",
-        "mine",
-        "him",
-        "them",
-        "us",
-        "me",
-        # Determiners / demonstratives
-        "this",
-        "that",
-        "these",
-        "those",
-        # Wh-words
-        "what",
-        "which",
-        "who",
-        "whom",
-        "whose",
-        "when",
-        "where",
-        "why",
-        "how",
-        # Misc fillers
-        "if",
-        "then",
-        "than",
-        "while",
-        "as",
-        "not",
-        "no",
-        "just",
-        "only",
-        "even",
-        "also",
-        "very",
-        "still",
-        "now",
-        "there",
-        "here",
-        # Common contractions (kept as single tokens by _TOKEN_RE)
-        "i'm",
-        "you're",
-        "he's",
-        "she's",
-        "it's",
-        "we're",
-        "they're",
-        "don't",
-        "doesn't",
-        "didn't",
-        "won't",
-        "wouldn't",
-        "can't",
-        "couldn't",
-        "isn't",
-        "aren't",
-        "wasn't",
-        "weren't",
-        "hasn't",
-        "haven't",
-        "hadn't",
-        "i've",
-        "you've",
-        "we've",
-        "they've",
-        "i'll",
-        "you'll",
-        "he'll",
-        "she'll",
-        "we'll",
-        "they'll",
-    }
-)
-
-
-def _count_content_words(gram: tuple[str, ...]) -> int:
-    return sum(1 for w in gram if w not in _STOPWORDS)
 
 
 # ---------- n-gram extraction & suppression ----------
@@ -306,7 +151,7 @@ def detect_phrase_repetition(
     for i, msg in enumerate(messages):
         seen_in_this_msg: set[tuple[str, ...]] = set()
         for sent in _split_sentences(msg):
-            tokens = _tokenize(sent)
+            tokens = tokenize(sent)
             if len(tokens) < min_n:
                 continue
             for n in range(min_n, max_n + 1):
@@ -325,7 +170,7 @@ def detect_phrase_repetition(
     for gram, docs in ngram_docs.items():
         if len(docs) < min_messages:
             continue
-        if _count_content_words(gram) < min_content_words:
+        if count_content_words(gram) < min_content_words:
             continue
         if require_last_message and last_idx not in docs:
             continue
