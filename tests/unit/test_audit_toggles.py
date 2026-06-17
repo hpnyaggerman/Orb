@@ -15,6 +15,10 @@ _BANNED_TEXT = "The tension in the air was palpable. The tension in the air grew
 _PREV_MSGS = ["She walked to the door and opened it slowly."]
 _REPEAT_DRAFT = "She walked to the door and opened it slowly."
 
+# A draft that parrots the user's spoken dialogue back as a question.
+_ECHO_USER = '"I have absolutely no money."'
+_ECHO_DRAFT = '"Absolutely no money?" she repeats.'
+
 
 def test_default_runs_all_scanners():
     report = run_audit(_BANNED_TEXT, _PHRASE_BANK)
@@ -51,3 +55,21 @@ def test_cross_message_toggles_off_skips_scanners():
     )
     assert off.phrase_result is None
     assert off.structural_repetition_result is None
+
+
+def test_anti_echo_runs_with_user_message():
+    report = run_audit(_ECHO_DRAFT, [], user_message=_ECHO_USER)
+    assert report.echo_result is not None
+    assert len(report.echo_result.flagged_echoes) > 0
+
+
+def test_anti_echo_toggle_off_skips_scanner():
+    toggles = {t: True for t in AUDIT_TYPES}
+    toggles["anti_echo"] = False
+    report = run_audit(_ECHO_DRAFT, [], user_message=_ECHO_USER, audit_toggles=toggles)
+    assert report.echo_result is None
+
+
+def test_anti_echo_skipped_without_user_message():
+    # No user message → nothing to compare against, scanner is a no-op.
+    assert run_audit(_ECHO_DRAFT, []).echo_result is None

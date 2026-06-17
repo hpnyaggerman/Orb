@@ -10,6 +10,7 @@ from .detectors.slop_detector import DetectionResult, detect_cliches
 
 if TYPE_CHECKING:
     from ..database.models import PhraseGroup
+from .detectors.anti_echo import EchoResult, detect_anti_echo
 from .detectors.contrastive_negation import detect_contrastive_negation
 from .detectors.opening_monotony import MonotonyResult, detect_opening_monotony
 from .detectors.phrase_repetition import PhraseResult, detect_phrase_repetition
@@ -32,6 +33,7 @@ AUDIT_TYPES = (
     "contrastive_negation",
     "phrase_repetition",
     "structural_repetition",
+    "anti_echo",
 )
 
 
@@ -52,6 +54,7 @@ class AuditReport:
         "not_but_result",
         "phrase_result",
         "structural_repetition_result",
+        "echo_result",
     )
 
     def __init__(
@@ -62,6 +65,7 @@ class AuditReport:
         not_but_result: list[dict] | None = None,
         phrase_result: PhraseResult | None = None,
         structural_repetition_result: StructuralResult | None = None,
+        echo_result: EchoResult | None = None,
     ):
         self.cliche_result = cliche_result
         self.monotony_result = monotony_result
@@ -69,6 +73,7 @@ class AuditReport:
         self.not_but_result = not_but_result or []
         self.phrase_result = phrase_result
         self.structural_repetition_result = structural_repetition_result
+        self.echo_result = echo_result
 
     @classmethod
     def clean(cls) -> "AuditReport":
@@ -80,12 +85,14 @@ class AuditReport:
             not_but_result=[],
             phrase_result=None,
             structural_repetition_result=None,
+            echo_result=None,
         )
 
     @property
     def is_clean(self) -> bool:
         is_structural_clean = self.structural_repetition_result is None or not self.structural_repetition_result.is_repetitive
         is_phrase_clean = self.phrase_result is None or len(self.phrase_result.flagged_phrases) == 0
+        is_echo_clean = self.echo_result is None or len(self.echo_result.flagged_echoes) == 0
         return (
             self.cliche_result.flagged_count == 0
             and len(self.monotony_result.flagged_openers) == 0
@@ -93,12 +100,14 @@ class AuditReport:
             and len(self.not_but_result) == 0
             and is_phrase_clean
             and is_structural_clean
+            and is_echo_clean
         )
 
     @property
     def total_issues(self) -> int:
         structural_issues = 1 if self.structural_repetition_result and self.structural_repetition_result.is_repetitive else 0
         phrase_issues = len(self.phrase_result.flagged_phrases) if self.phrase_result else 0
+        echo_issues = len(self.echo_result.flagged_echoes) if self.echo_result else 0
         return (
             self.cliche_result.flagged_count
             + len(self.monotony_result.flagged_openers)
@@ -106,6 +115,7 @@ class AuditReport:
             + len(self.not_but_result)
             + phrase_issues
             + structural_issues
+            + echo_issues
         )
 
 
@@ -128,6 +138,7 @@ def run_audit(
     phrase_min_content_words: int = 2,
     assistant_messages: list[str] | None = None,
     structural_text: str | None = None,
+    user_message: str | None = None,
     audit_toggles: dict | None = None,
 ) -> AuditReport:
     """Run the enabled audit scanners on the text.
@@ -142,16 +153,22 @@ def run_audit(
             When provided, used instead of `text` so that callers that pass a
             concatenated context blob as `text` still get correct per-message
             comparison.  Defaults to `text` when omitted.
+        user_message: The user's immediately-preceding message, used by the
+            anti-echo scanner to detect the draft parroting it as a question.
+            Anti-echo is skipped when this is omitted.
         audit_toggles: Optional per-scanner on/off map keyed by AUDIT_TYPES.
             Disabled scanners are skipped and return an empty result. None (the
             default) runs every scanner.
     """
+    current_msg = structural_text if structural_text is not None else text
+    echo_result = None
+    if user_message and _on(audit_toggles, "anti_echo"):
+        echo_result = detect_anti_echo(current_msg, user_message)
     # Structural repetition and exact phrase repetition are cross-message checks
     # that need the draft as a standalone message plus the previous ones.
     structural_result = None
     phrase_result = None
     if assistant_messages:
-        current_msg = structural_text if structural_text is not None else text
         if _on(audit_toggles, "structural_repetition"):
             structural_result = detect_structural_repetition(
                 assistant_messages + [current_msg],
@@ -188,6 +205,7 @@ def run_audit(
         not_but_result=(detect_contrastive_negation(text) if _on(audit_toggles, "contrastive_negation") else []),
         phrase_result=phrase_result,
         structural_repetition_result=structural_result,
+        echo_result=echo_result,
     )
 
 
@@ -263,6 +281,15 @@ def format_report(report: AuditReport) -> str:
         if sr.shared_skeleton:
             skeleton_str = " → ".join(_strip_asterisks(part) for part in sr.shared_skeleton)
             lines.append(f'   - Shared skeleton: "{skeleton_str}"')
+        sections.append("\n".join(lines))
+
+    # 7. Anti-echo (parroting the user's last message back as a question)
+    if report.echo_result and report.echo_result.flagged_echoes:
+        lines = ["Interrogative Dialogue (parroting the user's dialogue back as a question)"]
+        for fe in report.echo_result.flagged_echoes:
+            lines.append(
+                f'   - "{_strip_asterisks(fe.echo)}" repeats the user\'s words: "{_strip_asterisks(fe.matched_phrase)}"'
+            )
         sections.append("\n".join(lines))
 
     sections.append("\n*** END OF REPORT ***")

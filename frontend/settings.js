@@ -214,6 +214,11 @@ const AUDIT_TYPE_DEFS = [
     label: "Structural repetition",
     title: "Flag messages that share a similar block structure.",
   },
+  {
+    key: "anti_echo",
+    label: "Anti-echo",
+    title: 'Flag questions that parrot the user\'s last message back (e.g. "Ice cream?").',
+  },
 ];
 
 async function persistSettings(payload) {

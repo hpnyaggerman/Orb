@@ -1,25 +1,27 @@
 """
-phrase_repetition.py — Detect exact (n-gram) phrase repetition across messages.
+phrase_repetition.py — Detect exact phrase repetition (n-gram level) across messages.
+
+Catches stock phrases the model keeps reaching for across multiple turns, like
+a description that reappears word-for-word in three different messages.
 
 Public API:
     detect_phrase_repetition(messages, min_n=3, max_n=5, min_messages=2,
                              min_content_words=2, require_last_message=True)
     PhraseResult, FlaggedPhrase  (dataclasses)
 
-Logic:
+How it works:
     - For each message: strip dialogue, split into sentences, tokenize.
-    - Extract every n-gram (n in [min_n, max_n]) and record the set of
-      *distinct* message indices it appears in (in-message duplicates do
-      not inflate the count).
-    - Filter out n-grams whose content-word count (non-stopword tokens) is
-      below `min_content_words` — kills "in the air", "I don't know", etc.
-    - Filter out n-grams appearing in fewer than `min_messages` messages.
-    - Suppress sub-n-grams: when a shorter n-gram is contained in a longer
-      one *and they appear in exactly the same set of messages*, drop the
-      shorter one — it adds no information.
-    - When `require_last_message` is True, only keep n-grams that appear in
-      the final message (the current draft). This makes the report
-      actionable for the message currently being audited.
+    - Extract every n-gram (n in [min_n, max_n]) and track the set of distinct
+      message indices where it appears. Repeated occurrences within one message
+      don't inflate the count.
+    - Drop n-grams with fewer than min_content_words non-stopword tokens — this
+      filters out glue phrases like "in the air" or "I don't know".
+    - Drop n-grams that appear in fewer than min_messages messages.
+    - Drop sub-n-grams: if a shorter phrase is fully contained in a longer one
+      that appears in exactly the same messages, the shorter one is redundant.
+    - When require_last_message is True, only keep phrases that also appear in
+      the final message (the current draft), making the report immediately
+      actionable.
 
 Example target pattern:
     Message 1: "His shadowed red eyes flickered in the firelight."
@@ -31,10 +33,10 @@ Example target pattern:
 from __future__ import annotations
 
 import os
-import re
 import sys
 from dataclasses import dataclass, field
 
+from .lexical import count_content_words, ngrams, tokenize
 from .text_segmentation import split_narration_sentences
 
 DEBUG = "DEBUG_PHRASE_REPETITION" in os.environ
@@ -64,173 +66,14 @@ class PhraseResult:
 
 
 # ---------- text processing ----------
-# Paragraph/sentence/dialogue segmentation lives in text_segmentation so every
-# audit pass splits text identically. `_split_sentences` strips dialogue.
+# Segmentation lives in text_segmentation so every detector splits text the
+# same way. _split_sentences strips dialogue before splitting into sentences.
 
 _split_sentences = split_narration_sentences
 
-_TOKEN_RE = re.compile(r"[a-z0-9']+")
 
-
-def _tokenize(sentence: str) -> list[str]:
-    return _TOKEN_RE.findall(sentence.lower())
-
-
-# ---------- stopwords / content filter ----------
-
-_STOPWORDS = frozenset(
-    {
-        # Articles
-        "a",
-        "an",
-        "the",
-        # Conjunctions
-        "and",
-        "or",
-        "but",
-        "nor",
-        "yet",
-        "so",
-        # Prepositions
-        "of",
-        "to",
-        "in",
-        "on",
-        "at",
-        "by",
-        "for",
-        "with",
-        "from",
-        "into",
-        "onto",
-        "over",
-        "under",
-        "about",
-        "across",
-        "after",
-        "before",
-        # Be / aux
-        "is",
-        "are",
-        "was",
-        "were",
-        "be",
-        "been",
-        "being",
-        "am",
-        "do",
-        "does",
-        "did",
-        "has",
-        "have",
-        "had",
-        "will",
-        "would",
-        "shall",
-        "should",
-        "can",
-        "could",
-        "may",
-        "might",
-        "must",
-        # Pronouns / possessives
-        "i",
-        "you",
-        "he",
-        "she",
-        "it",
-        "we",
-        "they",
-        "his",
-        "her",
-        "its",
-        "their",
-        "our",
-        "your",
-        "my",
-        "mine",
-        "him",
-        "them",
-        "us",
-        "me",
-        # Determiners / demonstratives
-        "this",
-        "that",
-        "these",
-        "those",
-        # Wh-words
-        "what",
-        "which",
-        "who",
-        "whom",
-        "whose",
-        "when",
-        "where",
-        "why",
-        "how",
-        # Misc fillers
-        "if",
-        "then",
-        "than",
-        "while",
-        "as",
-        "not",
-        "no",
-        "just",
-        "only",
-        "even",
-        "also",
-        "very",
-        "still",
-        "now",
-        "there",
-        "here",
-        # Common contractions (kept as single tokens by _TOKEN_RE)
-        "i'm",
-        "you're",
-        "he's",
-        "she's",
-        "it's",
-        "we're",
-        "they're",
-        "don't",
-        "doesn't",
-        "didn't",
-        "won't",
-        "wouldn't",
-        "can't",
-        "couldn't",
-        "isn't",
-        "aren't",
-        "wasn't",
-        "weren't",
-        "hasn't",
-        "haven't",
-        "hadn't",
-        "i've",
-        "you've",
-        "we've",
-        "they've",
-        "i'll",
-        "you'll",
-        "he'll",
-        "she'll",
-        "we'll",
-        "they'll",
-    }
-)
-
-
-def _count_content_words(gram: tuple[str, ...]) -> int:
-    return sum(1 for w in gram if w not in _STOPWORDS)
-
-
-# ---------- n-gram extraction & suppression ----------
-
-
-def _ngrams(tokens: list[str], n: int):
-    for i in range(len(tokens) - n + 1):
-        yield tuple(tokens[i : i + n])
+# ---------- n-gram suppression ----------
+# n-gram extraction itself lives in lexical (shared, was duplicated here).
 
 
 def _is_contiguous_sub(short: tuple[str, ...], long: tuple[str, ...]) -> bool:
@@ -245,7 +88,7 @@ def _is_contiguous_sub(short: tuple[str, ...], long: tuple[str, ...]) -> bool:
 def _suppress_subgrams(
     candidates: dict[tuple[str, ...], dict[int, str]],
 ) -> dict[tuple[str, ...], dict[int, str]]:
-    """Drop n-grams that are contained in a longer n-gram with the same doc-set."""
+    """Drop shorter n-grams that are fully contained in a longer n-gram appearing in the same set of messages."""
     by_fingerprint: dict[frozenset[int], list[tuple[tuple[str, ...], dict[int, str]]]] = {}
     for gram, docs in candidates.items():
         fp = frozenset(docs.keys())
@@ -275,24 +118,22 @@ def detect_phrase_repetition(
     min_content_words: int = 2,
     require_last_message: bool = True,
 ) -> PhraseResult:
-    """Detect distinctive phrases repeated across multiple messages.
+    """Detect phrases that recur word-for-word across multiple messages.
 
     Args:
-        messages: list of assistant messages. When `require_last_message` is
-            True the final entry is treated as the current draft.
-        min_n: minimum n-gram length (in tokens) to consider.
-        max_n: maximum n-gram length (in tokens) to consider.
-        min_messages: minimum number of *distinct* messages a phrase must
-            appear in to be flagged.
-        min_content_words: minimum non-stopword tokens in an n-gram. Filters
-            out things like "in the air" / "I don't know" that are dense in
-            grammatical glue.
-        require_last_message: when True, only flag phrases that also appear
-            in the last message — i.e. echoes in the current draft. Set to
-            False to flag any repeated phrase across the whole list.
+        messages: list of assistant messages. When require_last_message is True,
+            the final entry is treated as the current draft.
+        min_n: minimum phrase length in words.
+        max_n: maximum phrase length in words.
+        min_messages: how many distinct messages a phrase must appear in to be flagged.
+        min_content_words: minimum content words (non-stopwords) in a phrase.
+            Filters out grammatical glue like "in the air" or "I don't know".
+        require_last_message: when True, only flag phrases that also appear in
+            the last message. Set to False to flag any repeated phrase across the
+            full list.
 
     Returns:
-        PhraseResult sorted by (message_count desc, phrase length desc).
+        PhraseResult sorted by (message count descending, phrase length descending).
     """
     total = len(messages)
     if total < min_messages or min_n < 1 or max_n < min_n:
@@ -306,13 +147,13 @@ def detect_phrase_repetition(
     for i, msg in enumerate(messages):
         seen_in_this_msg: set[tuple[str, ...]] = set()
         for sent in _split_sentences(msg):
-            tokens = _tokenize(sent)
+            tokens = tokenize(sent)
             if len(tokens) < min_n:
                 continue
             for n in range(min_n, max_n + 1):
                 if len(tokens) < n:
                     break
-                for gram in _ngrams(tokens, n):
+                for gram in ngrams(tokens, n):
                     if gram in seen_in_this_msg:
                         continue
                     seen_in_this_msg.add(gram)
@@ -325,7 +166,7 @@ def detect_phrase_repetition(
     for gram, docs in ngram_docs.items():
         if len(docs) < min_messages:
             continue
-        if _count_content_words(gram) < min_content_words:
+        if count_content_words(gram) < min_content_words:
             continue
         if require_last_message and last_idx not in docs:
             continue

@@ -1,8 +1,17 @@
 """
-structural_repetition.py — Detect repetitive message-level block structures.
+structural_repetition.py — Detect when multiple messages share the same
+block-level layout.
+
+Catches the pattern where the assistant always writes responses in the same
+structural shape — e.g. every message is one speech block, two narration
+sentences, another speech block. Each message is reduced to a signature
+(a sequence of block-type tokens like SPEECH:1, NARRATION:2) and the
+signatures are compared pairwise. If they're all above a similarity threshold
+and complex enough to be meaningful, the window is flagged as repetitive.
 
 Public API:
     detect_structural_repetition(messages, similarity_threshold=0.75, min_complexity=2)
+    StructuralResult, MessageStructure  (dataclasses)
 """
 
 from __future__ import annotations
@@ -43,8 +52,8 @@ class StructuralResult:
 
 
 # ---------- block extraction ----------
-# Sentence counting (_count_sentences) and quote-span finding (_find_quote_spans)
-# are shared with the other audit passes via text_segmentation.
+# Sentence counting and quote-span finding come from text_segmentation so this
+# detector uses the same definitions as the rest of the audit passes.
 
 
 _EMPHASIS_RE = re.compile(
@@ -69,7 +78,11 @@ def _find_emphasis_spans(text: str) -> list[tuple[int, int]]:
 
 
 def _extract_blocks(para: str) -> list[tuple[str, str]]:
-    """Return ordered (type, text) blocks for a single paragraph."""
+    """Break a single paragraph into ordered (block_type, text) pairs.
+
+    Block types are SPEECH (quoted dialogue), EMPHASIS (*thought* or _thought_),
+    and NARRATION (everything else).
+    """
     quote_spans = _find_quote_spans(para)
     # Emphasis only outside quotes
     emphasis_spans = []
@@ -102,12 +115,12 @@ def _extract_blocks(para: str) -> list[tuple[str, str]]:
 
 
 def _collapse_signature(blocks: list[tuple[str, str]]) -> list[str]:
-    """Collapse consecutive same-type blocks into counted signature tokens.
+    """Convert a block list into a compact signature for comparison.
 
-    Each token encodes ``TYPE:sentence_count`` so that, e.g., two narration
-    sentences between speech blocks (``NARRATION:2``) are distinguished from
-    one (``NARRATION:1``).  Sentence counts apply to *all* block types
-    (SPEECH, NARRATION, EMPHASIS).
+    Consecutive blocks of the same type are merged. Each token in the signature
+    encodes TYPE:sentence_count, e.g. NARRATION:2 (two narration sentences in a
+    row) vs NARRATION:1 (one). Sentence counts apply to all block types:
+    SPEECH, NARRATION, and EMPHASIS.
     """
     if not blocks:
         return []

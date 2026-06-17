@@ -28,7 +28,7 @@ graph TD
 
         dir["Director Pass (pipeline/passes/director/) — pre-writer phase (optional)<br/>Runs the enabled PRE_WRITER_TOOLS, each as its own LLM call:<br/>1. rewrite_user_prompt (optional) → rewrites vague user messages<br/>2. direct_scene → fills fragments<br/>Fragments are user-defined (interactive_fragments table),<br/>except moods (mood_fragments table).<br/>Returns: moods, plot_summary, keywords, next_event,<br/>writing_direction, detected_repetitions, etc."]
         writer["Writer Pass (pipeline/passes/writer.py)<br/>Main generation pass. System prompt + history +<br/>Lorebook entries + Scene Direction injection block + user message.<br/>Streams response tokens via SSE."]
-        editor["[Post-Writer] Editor Pass (pipeline/passes/editor/) (optional)<br/>Checks (via analysis/): slop/contrastive negation, banned phrases,<br/>repetitive openers, templates, phrase repetition,<br/>structural repetition, length guard.<br/>Tools: editor_apply_patch or editor_rewrite.<br/>Up to 3 iterations."]
+        editor["[Post-Writer] Editor Pass (pipeline/passes/editor/) (optional)<br/>Checks (via analysis/): slop/contrastive negation, banned phrases,<br/>repetitive openers, templates, phrase repetition,<br/>structural repetition, anti-echo, length guard.<br/>Tools: editor_apply_patch or editor_rewrite.<br/>Up to 3 iterations."]
         summarizer["Summarizer (features/summarization/summarizer.py)<br/>Narrative summary + compress flow<br/>Not part of the pipeline — triggered manually"]
 
         orch --> dir --> writer --> editor
@@ -141,7 +141,7 @@ Orb/
 │   │   ├── audit.py         # Phrase bank matching, opener/template detection
 │   │   └── detectors/       # slop_detector, text_segmentation, contrastive_negation,
 │   │                        # opening_monotony, phrase_repetition, structural_repetition,
-│   │                        # template_repetition
+│   │                        # template_repetition, anti_echo (user→assistant echo)
 │   ├── inference/           # INFERENCE LAYER — LLM transport + prompt/tool assembly; deps: core
 │   │   ├── __init__.py      # Facade re-export
 │   │   ├── client.py        # LLM API client: OpenAI-compatible, streaming, reasoning
