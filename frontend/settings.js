@@ -219,6 +219,12 @@ const AUDIT_TYPE_DEFS = [
     label: "Anti-echo",
     title: 'Flag questions that parrot the user\'s last message back (e.g. "Ice cream?").',
   },
+  {
+    key: "format_consistency",
+    label: "Format consistency",
+    title:
+      "Deterministically rewrite the draft's RP markup (quoted/bare speech, *asterisk*/bare narration) to match the convention of recent messages.",
+  },
 ];
 
 async function persistSettings(payload) {
