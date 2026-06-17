@@ -181,7 +181,10 @@ def test_asterisk_inside_quotes_is_not_narration():
 def test_bold_italic_run_preserved_while_prose_normalizes():
     # The reported breakage: a `***…***` block beside real markup used to come back
     # mangled. Now the run is carried through untouched and the rest normalizes.
-    base = ['She smiles. "Hello there," she says warmly.', 'He nods. "Welcome back," he replies.']
+    base = [
+        'She smiles. "Hello there," she says warmly.',
+        'He nods. "Welcome back," he replies.',
+    ]
     draft = '*He leans in close.* "You came back." ***He could not believe it.***'
     new, rep = normalize_to_baseline(draft, base, enabled=True)
     assert rep.changed
@@ -190,7 +193,10 @@ def test_bold_italic_run_preserved_while_prose_normalizes():
 
 
 def test_bold_italic_run_left_byte_identical_when_prose_is_consistent():
-    base = ['She smiles. "Hello there," she says warmly.', 'He nods. "Welcome back," he replies.']
+    base = [
+        'She smiles. "Hello there," she says warmly.',
+        'He nods. "Welcome back," he replies.',
+    ]
     draft = '***She steps closer, watching him.*** "Are you sure?"'
     new, rep = normalize_to_baseline(draft, base, enabled=True)
     # The `***…***` is protected and the quoted dialogue already matches: no-op.
@@ -199,7 +205,10 @@ def test_bold_italic_run_left_byte_identical_when_prose_is_consistent():
 
 
 def test_four_asterisk_run_preserved():
-    base = ['She smiles. "Hello there," she says warmly.', 'He nods. "Welcome back," he replies.']
+    base = [
+        'She smiles. "Hello there," she says warmly.',
+        'He nods. "Welcome back," he replies.',
+    ]
     draft = "He was ****really**** angry."
     new, rep = normalize_to_baseline(draft, base, enabled=True)
     assert not rep.changed
@@ -207,7 +216,10 @@ def test_four_asterisk_run_preserved():
 
 
 def test_scene_divider_run_preserved_with_surrounding_text():
-    base = ['She smiles. "Hello there," she says warmly.', 'He nods. "Welcome back," he replies.']
+    base = [
+        'She smiles. "Hello there," she says warmly.',
+        'He nods. "Welcome back," he replies.',
+    ]
     draft = "She turns away.\n\n***\n\nThe room falls silent."
     new, rep = normalize_to_baseline(draft, base, enabled=True)
     assert not rep.changed
@@ -238,7 +250,10 @@ def test_code_block_markup_does_not_sway_classification():
 
 
 def test_code_block_passes_through_rewrite_verbatim():
-    base = ['She smiles. "Hello there," she says warmly.', 'He nods. "Welcome back," he replies.']
+    base = [
+        'She smiles. "Hello there," she says warmly.',
+        'He nods. "Welcome back," he replies.',
+    ]
     draft = '*He leans in.* "You came back."\n\n```python\nx = a ***b*** c  # not RP markup\n```'
     new, rep = normalize_to_baseline(draft, base, enabled=True)
     assert rep.changed  # the prose narration asterisks were stripped
@@ -248,7 +263,10 @@ def test_code_block_passes_through_rewrite_verbatim():
 def test_asterisk_runs_preserved_in_both_prose_and_code():
     # A `***…***` run is protected whether it sits in prose or inside a fence; both
     # survive verbatim and the bare narration around them is already consistent.
-    base = ['She smiles. "Hello there," she says warmly.', 'He nods. "Welcome back," he replies.']
+    base = [
+        'She smiles. "Hello there," she says warmly.',
+        'He nods. "Welcome back," he replies.',
+    ]
     draft = "She turns. ***Important.***\n\n```\nkeep ***this***\n```"
     new, rep = normalize_to_baseline(draft, base, enabled=True)
     assert not rep.changed
@@ -388,6 +406,65 @@ def test_drift_in_only_the_latest_turn_does_not_change_a_consistent_draft():
     new, rep = normalize_to_baseline(draft, base, enabled=True)
     assert not rep.changed
     assert new == draft
+
+
+# ---------- within-message drift (dominant style matches, a few spans do not) ----------
+# A draft whose *dominant* style already matches the baseline used to short-circuit to
+# a no-op, leaving a stray bare narration beat or paragraph un-normalized. The rewrite
+# now enforces the convention span-by-span while keeping already-correct spans intact.
+
+FULL_MARKUP_BASELINE = [
+    '*He leaned against the bookshelf, watching her.* "You came back," *he murmured.*',
+    '*She set down the book, fingers trembling.* "I told you I would," *she said softly.*',
+    '*He crossed the room in three steps.* "Then prove it," *he whispered.*',
+]
+
+
+def test_stray_bare_dialogue_tag_is_wrapped_when_dominant_style_matches():
+    # Dominantly full-markup (quoted dialogue + asterisk narration) -- matching the
+    # baseline -- but the dialogue tag `she replied.` was left bare. It must be
+    # wrapped, while the surrounding asterisk narration stays byte-for-byte.
+    draft = (
+        "*She pulled the curtain aside and glanced out at the street.*\n\n"
+        '"It looks like it might rain," she replied.\n\n'
+        "*She let the fabric fall back and turned to the window latch.*"
+    )
+    new, rep = normalize_to_baseline(draft, FULL_MARKUP_BASELINE, enabled=True)
+    assert rep.changed
+    assert '"It looks like it might rain," *she replied.*' in new
+    # Untouched paragraphs survive verbatim.
+    assert "*She pulled the curtain aside and glanced out at the street.*" in new
+    assert "*She let the fabric fall back and turned to the window latch.*" in new
+
+
+def test_quoteless_full_markup_draft_wraps_bare_paragraph_in_asterisks_not_quotes():
+    # No dialogue this turn, so the draft has no quotes and self-reads as bare-dialogue
+    # asterisk convention. Against a full-markup baseline its lone un-asterisked
+    # paragraph is narration: it must gain asterisks, never quotes.
+    draft = (
+        "*Jane traced a finger along the spines of the books on the shelf.*\n\n"
+        "The librarian tilted her head, her blue eyes scanning the titles.\n\n"
+        "*She slid one volume free and weighed it in her hands.*"
+    )
+    new, rep = normalize_to_baseline(draft, FULL_MARKUP_BASELINE, enabled=True)
+    assert rep.changed
+    assert '"' not in new  # the narration paragraph was NOT mistaken for dialogue
+    assert "*The librarian tilted her head, her blue eyes scanning the titles.*" in new
+
+
+def test_genuine_asterisk_convention_draft_is_not_misread_as_full_markup():
+    # The mirror safety case: against a *bare-dialogue* asterisk baseline, a quoteless
+    # draft's bare runs are spoken lines, not narration -- they must stay bare, never
+    # get wrapped in asterisks.
+    base = [
+        "*She smiles, stepping back.* Hello there.",
+        "*He follows her in.* Good to see you.",
+        "*She turns to face him.* It has been too long.",
+    ]
+    draft = "*He shifts his weight.*\n\nAre you sure about this?\n\n*She waits.*"
+    new, rep = normalize_to_baseline(draft, base, enabled=True)
+    assert not rep.changed
+    assert new == draft  # "Are you sure about this?" stays bare dialogue
 
 
 # ---------- punctuation / glyph preservation across a rewrite ----------
