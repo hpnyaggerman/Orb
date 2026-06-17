@@ -8,8 +8,8 @@
   "scripts": {
     "prepare": "lefthook install",
     "format:frontend": "biome format frontend/ --write",
-    "format:backend": "python3 -m black backend/ tests/",
-    "lint": "python3 -m flake8 backend/ tests/ && biome check frontend/",
+    "format:backend": "bash scripts/format_backend.sh",
+    "lint": "bash scripts/lint.sh && biome check frontend/",
     "test": "python3 -m pytest tests/"
   }
 }

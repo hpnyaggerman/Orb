@@ -424,15 +424,6 @@ function _segmentRenderedMessages(renderedMsgs) {
   }
 }
 
-// Unused by current callers but retained as a surgical single-toolbar repaint
-// primitive for future use.
-function refreshMessageToolbar(msgId) {
-  if (!msgId) return;
-  const msg = S.messages.find((m) => m.id === msgId);
-  const toolbar = document.querySelector(`[data-msg-id="${msgId}"] .msg-toolbar`);
-  if (msg && toolbar) toolbar.innerHTML = buildMsgToolbar(msg);
-}
-
 export function updateContextCounter() {
   fetchContextSize();
 }
