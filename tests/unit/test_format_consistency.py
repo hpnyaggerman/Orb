@@ -171,6 +171,54 @@ def test_asterisk_inside_quotes_is_not_narration():
     assert style.dialogue == Dialogue.QUOTED
 
 
+# ---------- *emphasis* inside dialogue (LLMs do this constantly) ----------
+
+
+def test_emphasis_in_dialogue_is_noop_against_quotes_baseline():
+    # `*stupid*` is emphasis, not narration; against a quotes baseline the turn is
+    # already consistent and must come back byte-identical.
+    base = ['She smiles. "Hello there," she says warmly.']
+    draft = 'He frowns. "Do you think I am *stupid*?"'
+    new, rep = normalize_to_baseline(draft, base, enabled=True)
+    assert not rep.changed
+    assert new == draft
+
+
+def test_emphasis_in_dialogue_survives_narration_strip():
+    # The key invariant: stripping narration asterisks must remove only the asterisks
+    # *outside* the quotes, never the in-dialogue emphasis.
+    base = ['She smiles. "Hello there."']  # quotes baseline, bare narration
+    draft = '*He leans in.* "Do you think I am *stupid*?"'
+    new, rep = normalize_to_baseline(draft, base, enabled=True)
+    assert rep.changed
+    assert new == 'He leans in. "Do you think I am *stupid*?"'
+    assert "*stupid*" in new  # emphasis preserved
+    assert new.count("*") == 2  # only the emphasis pair remains
+
+
+def test_emphasis_in_dialogue_not_misread_as_narration_axis():
+    # Even with multiple emphasis spans, the narration axis must not flip to ASTERISK.
+    text = '"You are *so* dramatic," he said, "and *always* late."'
+    style = classify_axes(text)
+    assert style.dialogue == Dialogue.QUOTED
+    assert style.narration != Narration.ASTERISK
+
+
+def test_emphasis_survives_dialogue_flattening_against_asterisk_baseline():
+    # Soft corner: flattening quotes to bare in an asterisk chat keeps the emphasis
+    # (no data loss), even though it now sits beside asterisk narration. We assert
+    # content survival, not a clean separation, because none is possible here.
+    base = [
+        "*She smiles, stepping back.* Hello there.",
+        "*He follows her in.* Good to see you.",
+    ]
+    draft = 'He frowns. "Do you think I am *stupid*?"'
+    new, rep = normalize_to_baseline(draft, base, enabled=True)
+    assert rep.changed
+    assert "*stupid*" in new  # emphasis content not lost
+    assert "stupid" in new
+
+
 def test_multiparagraph_preserves_separators():
     base = ['*She nods.* "Okay."']  # full-ish / asterisk narration baseline
     draft = "She nods slowly.\n\nShe steps away from the table."
@@ -197,6 +245,163 @@ def test_pure_bare_narration_without_dialogue_is_noop():
     # dialogue in an asterisk-only chat), so the normalizer leaves it alone.
     base = ["*She paces the room nervously, glancing at the clock.* Right."]
     draft = "She was really nervous about the whole thing."
+    new, rep = normalize_to_baseline(draft, base, enabled=True)
+    assert not rep.changed
+    assert new == draft
+
+
+# ---------- multi-turn baselines (the cross-message regression) ----------
+
+
+def test_stable_multiturn_quotes_baseline_converts_asterisk_turn():
+    # Several consistent quotes-only turns establish the style; the next turn drifts
+    # to asterisk narration and must be pulled back.
+    base = [
+        'She smiles. "Hello there," she says warmly.',
+        'He nods. "Good to see you again," he replies.',
+        'She laughs softly. "It has been too long."',
+    ]
+    target = baseline_axes(base)
+    assert target.dialogue == Dialogue.QUOTED
+    assert target.narration == Narration.BARE
+    draft = "*He leans against the doorframe, studying her.* You look tired."
+    new, rep = normalize_to_baseline(draft, base, enabled=True)
+    assert rep.changed
+    assert "*" not in new
+
+
+def test_stable_multiturn_asterisk_baseline_converts_quotes_turn():
+    base = [
+        "*She smiles, stepping back toward the window.* Hello there.",
+        "*He follows, hands in his pockets.* Good to see you.",
+        "*She turns to face him fully.* It has been too long.",
+    ]
+    target = baseline_axes(base)
+    assert target.dialogue == Dialogue.BARE
+    assert target.narration == Narration.ASTERISK
+    draft = 'He leans against the doorframe. "You look tired," he says.'
+    new, rep = normalize_to_baseline(draft, base, enabled=True)
+    assert rep.changed
+    assert '"' not in new
+    assert "*" in new
+
+
+def test_drift_in_only_the_latest_turn_does_not_change_a_consistent_draft():
+    # Baseline is solidly quotes-only; a new quotes-only turn stays byte-identical.
+    base = [
+        'She smiles. "Hello there."',
+        'He nods. "Welcome back."',
+    ]
+    draft = 'She tilts her head. "What brings you here?"'
+    new, rep = normalize_to_baseline(draft, base, enabled=True)
+    assert not rep.changed
+    assert new == draft
+
+
+# ---------- punctuation / glyph preservation across a rewrite ----------
+
+
+def test_ellipsis_survives_dialogue_rewrite():
+    base = ["*She waves.* Hi there."]  # asterisk baseline, bare dialogue
+    draft = 'She hesitates. "I... I am not sure about this."'
+    new, _ = normalize_to_baseline(draft, base, enabled=True)
+    assert "..." in new
+
+
+def test_em_dash_survives_narration_rewrite():
+    base = ['She smiles. "Hello there."']  # quotes baseline, bare narration
+    draft = "*He pauses — caught off guard — then steps forward.* What now?"
+    new, _ = normalize_to_baseline(draft, base, enabled=True)
+    assert "—" in new
+
+
+def test_question_and_exclamation_preserved_through_inversion():
+    base = ["*She smiles, stepping back.* Hello there."]  # asterisk baseline
+    draft = 'She gasps. "Is that really you?! I cannot believe it!"'
+    new, _ = normalize_to_baseline(draft, base, enabled=True)
+    assert "?!" in new
+    assert new.endswith("!")
+
+
+# ---------- mixed-format draft against a single-axis baseline ----------
+
+
+def test_mixed_draft_against_quotes_baseline_strips_only_narration_asterisks():
+    base = [
+        'She smiles. "Hello there."',
+        'He nods. "Welcome back."',
+    ]
+    draft = '*He steps inside, shaking off the rain.* "Quite a storm out there," he says.'
+    new, rep = normalize_to_baseline(draft, base, enabled=True)
+    assert rep.changed
+    assert "*" not in new
+    assert '"Quite a storm out there,"' in new  # already-correct dialogue untouched
+
+
+def test_mixed_draft_against_asterisk_baseline_strips_only_dialogue_quotes():
+    base = [
+        "*She smiles, stepping back.* Hello there.",
+        "*He follows her in.* Welcome back.",
+    ]
+    draft = '*He steps inside, shaking off the rain.* "Quite a storm out there," he says.'
+    new, rep = normalize_to_baseline(draft, base, enabled=True)
+    assert rep.changed
+    assert '"' not in new
+    assert "*He steps inside, shaking off the rain.*" in new  # narration untouched
+
+
+# ---------- multiple dialogue beats in one turn ----------
+
+
+def test_multiple_quoted_beats_all_stripped_for_asterisk_baseline():
+    base = ["*She paces the room.* Right then."]  # asterisk baseline, bare dialogue
+    draft = '"Wait," he said. *He grabbed her wrist.* "Do not go."'
+    new, rep = normalize_to_baseline(draft, base, enabled=True)
+    assert rep.changed
+    assert '"' not in new
+    assert "Wait" in new and "Do not go" in new
+
+
+def test_asterisk_narration_without_quotes_is_ambiguous_noop():
+    # Asterisk narration with bare beats but no quotes at all: the bare runs could be
+    # action or unquoted dialogue, so the dialogue axis reads UNKNOWN and the
+    # normalizer leaves the whole turn alone rather than guessing.
+    base = ['She smiles. "Hello there."']  # quotes baseline
+    draft = "*She steps closer.* Are you sure? *She hesitates.* Really sure?"
+    style = classify_axes(draft)
+    assert style.dialogue == Dialogue.UNKNOWN
+    new, rep = normalize_to_baseline(draft, base, enabled=True)
+    assert not rep.changed
+    assert new == draft
+
+
+# ---------- classification edge cases ----------
+
+
+def test_smart_quotes_classified_as_quoted_dialogue():
+    text = "She smiles and steps back. “I won’t go,” she says."
+    style = classify_axes(text)
+    assert style.dialogue == Dialogue.QUOTED
+
+
+def test_single_word_message_is_ambiguous_noop():
+    base = ['She smiles. "Hello there."']
+    draft = "Okay."
+    new, rep = normalize_to_baseline(draft, base, enabled=True)
+    assert not rep.changed
+    assert new == draft
+
+
+def test_empty_draft_is_noop():
+    base = ['She smiles. "Hello there."']
+    new, rep = normalize_to_baseline("", base, enabled=True)
+    assert not rep.changed
+    assert new == ""
+
+
+def test_whitespace_only_draft_is_noop():
+    base = ['She smiles. "Hello there."']
+    draft = "   \n  "
     new, rep = normalize_to_baseline(draft, base, enabled=True)
     assert not rep.changed
     assert new == draft
