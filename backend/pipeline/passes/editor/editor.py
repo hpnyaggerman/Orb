@@ -190,6 +190,32 @@ def _build_audit_text(draft: str, previous_assistant_msgs: list[str]) -> str:
     return context + "\n\n" + draft
 
 
+def _baseline_window(base: CachedBase, audit_context_msgs: list[str] | None) -> list[str]:
+    """The recent assistant-message window (newest first, up to 3) used both by
+    the repetition scanners and by the format-consistency normalizer.
+
+    Callers may pass an explicit list via *audit_context_msgs* (e.g.
+    super-regenerate, which excludes the message being replaced); when None the
+    window is derived from the cached prefix. Deriving it here — rather than only
+    inside the edit loop — is what lets the format normalizer run in normal usage,
+    where ``editor_audit_msgs`` is None.
+    """
+    if audit_context_msgs is not None:
+        return audit_context_msgs[:3]
+    window: list[str] = []
+    for msg in reversed(base.prefix):
+        if msg.get("role") == "assistant":
+            # Assistant history is always plain text; the multimodal list form
+            # only ever rides user messages, so a non-str body has nothing to
+            # contribute to the repetition window.
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                window.append(content)
+                if len(window) >= 3:
+                    break
+    return window
+
+
 def _run_contextual_audit(
     draft: str,
     phrase_bank: list[PhraseGroup],
@@ -533,21 +559,40 @@ async def editor_stage(
             len(state.resp_text),
         )
 
-    # Deterministic RP format-consistency normalization. This is *not* part of the
-    # LLM edit loop — it runs whenever the format_consistency toggle is on and a
-    # baseline window exists, even if the editor pass itself was skipped. It holds
-    # the final draft's markup convention to that of the recent assistant messages.
-    audit_toggles = settings.get("editor_audit_toggles") or {}
-    if state.resp_text and bool(audit_toggles.get("format_consistency", False)):
-        new_text, drift = normalize_to_baseline(state.resp_text, editor_audit_msgs, enabled=True)
-        if drift.changed:
-            logger.info(
-                "Format-consistency: normalized draft (%s -> %s)",
-                drift.source.label() if drift.source else "?",
-                drift.target.label() if drift.target else "?",
-            )
-            state.resp_text = new_text
-            yield {"event": "writer_rewrite", "data": {"refined_text": state.resp_text}}
+    # Deterministic RP format-consistency normalization — a separate stage that
+    # always runs, even when the editor pass above was skipped. See below.
+    async for event in _format_consistency_stage(state, cfg.agent_lane.base, editor_audit_msgs):
+        yield event
+
+
+async def _format_consistency_stage(
+    state: "TurnState",
+    base: CachedBase,
+    editor_audit_msgs: list[str] | None,
+) -> AsyncIterator[dict]:
+    """Hold the final draft's markup convention to that of the recent assistant
+    messages, emitting a ``writer_rewrite`` event (mirroring the edit loop) on an
+    actual rewrite.
+
+    This is *not* part of the LLM edit loop and is *not* user-toggleable — it
+    always runs and is therefore intentionally absent from ``AUDIT_TYPES``.
+    Running it unconditionally is safe because ``normalize_to_baseline`` is a
+    conservative no-op: it rewrites only when the baseline window agrees on a
+    convention AND the draft drifts from it, otherwise returning the text
+    byte-for-byte.
+    """
+    if not state.resp_text:
+        return
+    # Same baseline window the edit loop uses: an explicit override when given
+    # (super-regenerate), otherwise the recent assistant turns from the cached
+    # prefix. Without the fallback the normalizer no-ops in normal usage, where
+    # editor_audit_msgs is None.
+    baseline_msgs = _baseline_window(base, editor_audit_msgs)
+    new_text, drift = normalize_to_baseline(state.resp_text, baseline_msgs, enabled=True)
+    if drift.changed:
+        logger.info("Format-consistency: normalized draft (%s)", drift.transition())
+        state.resp_text = new_text
+        yield {"event": "writer_rewrite", "data": {"refined_text": state.resp_text}}
 
 
 async def _run_edit_loop(
@@ -581,21 +626,7 @@ async def _run_edit_loop(
     # Collect previous assistant messages for cross-message context.
     # audit_context_msgs lets callers override which messages are used, so that
     # super-regenerate doesn't compare the new draft against the message it replaced.
-    assistant_messages: list[str] = []
-    if audit_enabled:
-        if audit_context_msgs is not None:
-            assistant_messages = audit_context_msgs[:3]
-        else:
-            for msg in reversed(base.prefix):
-                if msg.get("role") == "assistant":
-                    # Assistant history is always plain text; the multimodal
-                    # list form only ever rides user messages, so a non-str
-                    # body has nothing to contribute to the repetition window.
-                    content = msg.get("content", "")
-                    if isinstance(content, str):
-                        assistant_messages.append(content)
-                    if len(assistant_messages) >= 3:
-                        break
+    assistant_messages: list[str] = _baseline_window(base, audit_context_msgs) if audit_enabled else []
 
     # ── Initial audit
     if audit_enabled:

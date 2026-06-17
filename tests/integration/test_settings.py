@@ -115,7 +115,6 @@ async def test_editor_audit_toggles_default_and_roundtrip(client, db):
         "phrase_repetition": True,
         "structural_repetition": True,
         "anti_echo": True,
-        "format_consistency": False,
     }
 
     updated = {**toggles, "banned_phrases": False, "structural_repetition": False}

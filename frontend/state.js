@@ -65,9 +65,8 @@ export const S = {
     phrase_repetition: true,
     structural_repetition: true,
     anti_echo: true,
-    // Deterministic markup rewriter, not a flag-only scanner; default-OFF to
-    // match the backend gating (editor.py uses .get(..., False) for this key).
-    format_consistency: false,
+    // The deterministic RP format-consistency normalizer is not listed here — it
+    // is not user-toggleable and always runs (see backend editor.py).
   },
   hideUntilBaked: false, // when true, in-flight streaming message is kept detached from DOM until stream finalizes
   preventPromptOverrides: false, // when true, character card system_prompt and post_history_instructions are ignored

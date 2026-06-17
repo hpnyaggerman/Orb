@@ -76,6 +76,12 @@ class FormatDriftReport:
     changed: bool
     note: str
 
+    def transition(self) -> str:
+        """``source -> target`` axis labels for logging; ``?`` for an unknown end."""
+        src = self.source.label() if self.source else "?"
+        tgt = self.target.label() if self.target else "?"
+        return f"{src} -> {tgt}"
+
 
 # ---------- thresholds ----------
 # Coverage fractions for the narration axis. Between LOW and HIGH the message is
@@ -95,18 +101,36 @@ def _emphasis_inner(raw: str) -> str:
     return core.strip("*_ ").strip()
 
 
-def _is_inline_emphasis(inner: str) -> bool:
-    """A short, lowercase, or single-word emphasis span is treated as inline
-    emphasis (an emphasized word or interjection) rather than block-level action
-    narration. Such spans are always preserved and never count toward the
-    narration axis. Clause-like spans (capitalized multi-word, or carrying a
-    sentence terminator) are treated as narration markup."""
-    words = inner.split()
-    if len(words) <= 1:
-        return True
-    if inner[:1].islower():
-        return True
-    return False
+_SENTENCE_END = ".!?…"
+
+
+def _is_inline_emphasis(spans: list[tuple[str, int, int]], i: int, para: str) -> bool:
+    """Is the emphasis span at index *i* inline word-emphasis (an emphasized word,
+    ``she was *really* nervous``) rather than block-level action narration
+    (``*she tilts her head*``)? Inline emphasis is preserved and never counts
+    toward the narration axis; block narration does.
+
+    The distinction is contextual, not lexical. An earlier casing/length heuristic
+    (single word, or lowercase first letter -> inline) misread the bulk of real RP
+    action beats — ``*smirks*``, ``*leans in close*``, ``*she tilts her head*`` are
+    short and/or lowercase yet are narration, not emphasis — so it left the
+    asterisk convention undetected and unrewritten.
+
+    Instead: an emphasized word is *embedded* in a run of bare narration prose, so
+    bare prose flows into it on the same line without an intervening sentence
+    boundary. A block action beat sits at a paragraph start or just after a closing
+    quote, so its left side is a boundary, whitespace, or a finished sentence. We
+    read that off the left neighbour: inline iff the preceding span is bare
+    narration with real text that does not end on a sentence terminator."""
+    if i == 0:
+        return False
+    ptyp, ps, pe = spans[i - 1]
+    if ptyp != "NARRATION":
+        return False
+    left = para[ps:pe].rstrip()
+    if not left.strip():
+        return False  # whitespace-only gap (e.g. between a quote and the asterisks)
+    return left[-1] not in _SENTENCE_END
 
 
 # ---------- classification ----------
@@ -119,14 +143,15 @@ def classify_axes(text: str) -> AxisStyle:
     bare_chars = 0
 
     for para in split_paragraphs(text):
-        for typ, s, e in extract_block_spans(para):
+        spans = extract_block_spans(para)
+        for i, (typ, s, e) in enumerate(spans):
             length = len(para[s:e].strip())
             if length == 0:
                 continue
             if typ == "SPEECH":
                 speech_chars += length
             elif typ == "EMPHASIS":
-                if _is_inline_emphasis(_emphasis_inner(para[s:e])):
+                if _is_inline_emphasis(spans, i, para):
                     continue  # inline emphasis is orthogonal to both axes
                 block_emph_chars += length
             else:  # NARRATION (bare)
@@ -187,12 +212,14 @@ def baseline_axes(messages: list[str]) -> AxisStyle:
 _TERMINATORS = ".!?…,;:"
 
 
-def _role(typ: str, raw: str, src_dialogue: Dialogue) -> str:
-    """Map a block span to its semantic role under the source convention."""
+def _role(spans: list[tuple[str, int, int]], i: int, src_dialogue: Dialogue, para: str) -> str:
+    """Map the block span at index *i* to its semantic role under the source
+    convention."""
+    typ = spans[i][0]
     if typ == "SPEECH":
         return "DIALOGUE"
     if typ == "EMPHASIS":
-        return "EMPHASIS_INLINE" if _is_inline_emphasis(_emphasis_inner(raw)) else "NARRATION"
+        return "EMPHASIS_INLINE" if _is_inline_emphasis(spans, i, para) else "NARRATION"
     # bare NARRATION span
     if src_dialogue == Dialogue.BARE:
         return "DIALOGUE"  # asterisk convention: bare runs are spoken lines
@@ -258,7 +285,7 @@ def _rewrite_paragraph(
     while i < n:
         typ, s, e = spans[i]
         raw = para[s:e]
-        role = _role(typ, raw, src.dialogue)
+        role = _role(spans, i, src.dialogue, para)
 
         if role == "DIALOGUE" and target_dialogue is not None:
             if target_dialogue == Dialogue.BARE and typ == "SPEECH":
@@ -287,13 +314,12 @@ def _rewrite_paragraph(
     return "".join(out)
 
 
-def _group_run(spans, i, src: AxisStyle, role: str, para: str) -> int:
+def _group_run(spans: list[tuple[str, int, int]], i: int, src: AxisStyle, role: str, para: str) -> int:
     """Index of the last span in the maximal run starting at *i* that has the
     given role (inline emphasis is absorbed into the run)."""
     j = i
     while j + 1 < len(spans):
-        t2, s2, e2 = spans[j + 1]
-        r2 = _role(t2, para[s2:e2], src.dialogue)
+        r2 = _role(spans, j + 1, src.dialogue, para)
         if r2 == role or r2 == "EMPHASIS_INLINE":
             j += 1
         else:
@@ -305,8 +331,13 @@ def normalize_format(draft: str, target: AxisStyle) -> str:
     """Rewrite *draft* so its markup matches *target*, changing only the axes that
     differ and can be resolved safely. Returns *draft* unchanged when there is
     nothing confident to do."""
-    src = classify_axes(draft)
+    return _rewrite(draft, classify_axes(draft), target)
 
+
+def _rewrite(draft: str, src: AxisStyle, target: AxisStyle) -> str:
+    """Core rewrite, given *draft* already classified as *src*. Split out so the
+    ``normalize_to_baseline`` entry point reuses the source it computed for the
+    report instead of classifying the same draft twice."""
     change_dialogue = (
         target.dialogue != Dialogue.UNKNOWN and src.dialogue != Dialogue.UNKNOWN and target.dialogue != src.dialogue
     )
@@ -356,7 +387,7 @@ def normalize_to_baseline(
         return draft, FormatDriftReport(None, target, False, "baseline unstable")
 
     source = classify_axes(draft)
-    new_text = normalize_format(draft, target)
+    new_text = _rewrite(draft, source, target)
     changed = new_text != draft
     note = "normalized" if changed else "already consistent"
     return new_text, FormatDriftReport(source, target, changed, note)
