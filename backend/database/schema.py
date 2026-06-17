@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS conversations (
     post_history_instructions TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
     updated_at TEXT,
+    last_accessed_at TEXT,
     active_leaf_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
     workflow_state TEXT DEFAULT NULL,
     persona_lock_id INTEGER REFERENCES user_personas(id) ON DELETE SET NULL

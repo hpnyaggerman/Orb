@@ -9,7 +9,7 @@ import { loadConversations, resetChatUI } from "./chat.js";
 import { loadWorlds } from "./lorebooks.js";
 import { closeModal, showConfirmModal, showCropModal, showModal } from "./modal.js";
 import { S } from "./state.js";
-import { $, avatarCell, avatarUrl, CHAT_AVATAR_ICON, esc, NO_AVATAR_ICON, toast } from "./utils.js";
+import { $, avatarCell, avatarUrl, CHAT_AVATAR_ICON, convActivity, esc, NO_AVATAR_ICON, toast } from "./utils.js";
 import { validate } from "./validate.js";
 
 export {
@@ -66,7 +66,7 @@ function filterRecentCharacters(characters, conversations, limit = 5) {
   for (const conv of conversations) {
     const cardId = conv.character_card_id;
     if (!cardId) continue;
-    const ts = conv.updated_at || conv.created_at;
+    const ts = convActivity(conv);
     const existing = recentMap.get(cardId);
     if (!existing || ts > existing) {
       recentMap.set(cardId, ts);

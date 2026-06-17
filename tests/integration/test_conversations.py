@@ -96,12 +96,13 @@ async def test_conversation_with_first_mes_creates_assistant_message(client, db)
     assert row["content"] == "Hello, traveller."
 
 
-async def test_touch_conversation_updates_timestamp(client, db):
+async def test_touch_conversation_bumps_access_not_update(client, db):
     resp = await client.post("/api/conversations", json={})
     cid = resp.json()["id"]
 
-    async with db.execute("SELECT updated_at FROM conversations WHERE id = ?", (cid,)) as cur:
-        before = (await cur.fetchone())["updated_at"]
+    async with db.execute("SELECT updated_at, last_accessed_at FROM conversations WHERE id = ?", (cid,)) as cur:
+        row = await cur.fetchone()
+        updated_before, accessed_before = row["updated_at"], row["last_accessed_at"]
 
     import asyncio
 
@@ -110,13 +111,15 @@ async def test_touch_conversation_updates_timestamp(client, db):
     touch = await client.post(f"/api/conversations/{cid}/touch")
     assert touch.status_code == 200
 
-    async with db.execute("SELECT updated_at FROM conversations WHERE id = ?", (cid,)) as cur:
-        after = (await cur.fetchone())["updated_at"]
+    async with db.execute("SELECT updated_at, last_accessed_at FROM conversations WHERE id = ?", (cid,)) as cur:
+        row = await cur.fetchone()
+        updated_after, accessed_after = row["updated_at"], row["last_accessed_at"]
 
-    # Strict >: touch must move the timestamp forward, not merely leave it
-    # unchanged. updated_at is an ISO string with microsecond resolution
-    # (touch_conversation), so the 0.01s sleep guarantees a later value.
-    assert after > before
+    # Opening a conversation is an access, not an edit: touch moves
+    # last_accessed_at forward (strict >, microsecond ISO strings + the 0.01s
+    # sleep) while leaving updated_at — the "content changed" timestamp — alone.
+    assert accessed_after > (accessed_before or "")
+    assert updated_after == updated_before
 
 
 async def test_conversation_with_character_card(client, db):

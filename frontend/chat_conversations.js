@@ -69,12 +69,12 @@ export async function selectChar(id, source = "recent") {
     }
     const existing = S.conversations.find((c) => c.character_card_id === id);
     if (existing) {
-      // If selecting from library modal, bump conversation's updated_at
+      // If selecting from library modal, bump the conversation's access time so
+      // it sorts to the top — without lying about updated_at (content change).
       if (source === "library") {
         try {
           await api.post(`/conversations/${existing.id}/touch`);
-          // Update local conversation's updated_at to now
-          existing.updated_at = new Date().toISOString();
+          existing.last_accessed_at = new Date().toISOString();
         } catch (e) {
           // silently fail, not critical
           console.warn("Failed to touch conversation:", e);
@@ -258,7 +258,7 @@ export async function showConvHistoryModal() {
       const isActive = c.id === S.activeConvId;
       const preview = esc((c.last_message_preview || "").substring(0, 80));
       const title = esc(c.title || c.character_name || "Untitled");
-      const ts = c.updated_at || c.created_at;
+      const ts = c.updated_at || c.created_at; // burger menu shows last *updated*, not last accessed
       const count = c.message_count ?? 0;
       const pinnedPersona = c.persona_lock_id
         ? (S.personas || []).find((p) => p.id === c.persona_lock_id)?.name || null

@@ -154,6 +154,7 @@ class ConversationRow(TypedDict):
     post_history_instructions: str
     created_at: str
     updated_at: str | None
+    last_accessed_at: str | None
     active_leaf_id: int | None
     workflow_state: str | None
     persona_lock_id: int | None

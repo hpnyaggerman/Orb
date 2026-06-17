@@ -68,6 +68,14 @@ export function avatarUrl(charId) {
   return `/api/characters/${charId}/avatar`;
 }
 
+// A conversation's recency for list ordering: the most recent of when it was
+// last opened (last_accessed_at), last edited (updated_at), or created. ISO8601
+// sorts lexicographically, so string max is correct. Mirrors the backend's
+// ORDER BY in queries/conversations.py — keep the two in sync.
+export function convActivity(c) {
+  return [c.last_accessed_at, c.updated_at, c.created_at].reduce((a, b) => (b && b > a ? b : a), "");
+}
+
 // Placeholder glyphs shown when an avatar image is missing or fails to load.
 // Two conventions: library cards fall back to a person, the chat header to a
 // scroll. Kept as named constants so the fallback can't drift between sites.

@@ -7,7 +7,17 @@ import { api } from "./api.js";
 import { _avatarBust, showCharEditModal } from "./library.js";
 import { closeModal, setModalCloseCallback, showModal } from "./modal.js";
 import { S } from "./state.js";
-import { $, avatarCell, avatarUrl, esc, escAttr, escHandlerArg, formatRelativeDate, toast } from "./utils.js";
+import {
+  $,
+  avatarCell,
+  avatarUrl,
+  convActivity,
+  esc,
+  escAttr,
+  escHandlerArg,
+  formatRelativeDate,
+  toast,
+} from "./utils.js";
 import { validate } from "./validate.js";
 
 // Character browser modal state
@@ -172,7 +182,7 @@ function computeConversationStats() {
     if (!cardId) continue;
     const entry = map.get(cardId) || { count: 0, recentTimestamp: "" };
     entry.count += 1;
-    const ts = conv.updated_at || conv.created_at;
+    const ts = convActivity(conv);
     if (ts && (!entry.recentTimestamp || ts > entry.recentTimestamp)) {
       entry.recentTimestamp = ts;
     }

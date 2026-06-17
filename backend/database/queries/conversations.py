@@ -33,7 +33,7 @@ async def list_conversations() -> list[ConversationListRow]:
                    COALESCE(ac.cnt, 0) AS message_count
             FROM conversations c
             LEFT JOIN active_counts ac ON ac.conv_id = c.id
-            ORDER BY COALESCE(c.updated_at, c.created_at) DESC
+            ORDER BY max(COALESCE(c.last_accessed_at, ''), COALESCE(c.updated_at, ''), c.created_at) DESC
         """
             )
         )
@@ -115,10 +115,11 @@ async def delete_conversation(cid: str) -> bool:
 
 
 async def touch_conversation(cid: str) -> bool:
-    """Update conversation's updated_at to current time."""
+    """Mark a conversation accessed (opened/selected) — bumps last_accessed_at,
+    not updated_at. updated_at means content changed; opening isn't an edit."""
     async with get_db() as db:
         now = datetime.now(timezone.utc).isoformat()
-        cur = await db.execute("UPDATE conversations SET updated_at = ? WHERE id = ?", (now, cid))
+        cur = await db.execute("UPDATE conversations SET last_accessed_at = ? WHERE id = ?", (now, cid))
         await db.commit()
         return cur.rowcount > 0
 
