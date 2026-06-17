@@ -64,6 +64,7 @@ export const S = {
     contrastive_negation: true,
     phrase_repetition: true,
     structural_repetition: true,
+    anti_echo: true,
   },
   hideUntilBaked: false, // when true, in-flight streaming message is kept detached from DOM until stream finalizes
   preventPromptOverrides: false, // when true, character card system_prompt and post_history_instructions are ignored

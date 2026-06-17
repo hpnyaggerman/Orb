@@ -158,7 +158,8 @@ def filter_audit_report_to_text(report: AuditReport, target_text: str) -> AuditR
     # Structural repetition and exact phrase repetition are cross-message checks,
     # so they're always relevant when comparing the draft to previous messages.
     # Phrase repetition already focuses on the draft via require_last_message, so
-    # we keep both unfiltered.
+    # we keep both unfiltered. Anti-echo is likewise inherently draft-scoped (it
+    # only flags questions found in the draft), so it passes through unfiltered.
 
     return AuditReport(
         cliche_result=filtered_cliche,
@@ -167,6 +168,7 @@ def filter_audit_report_to_text(report: AuditReport, target_text: str) -> AuditR
         not_but_result=filtered_not_but,
         phrase_result=report.phrase_result,
         structural_repetition_result=report.structural_repetition_result,
+        echo_result=report.echo_result,
     )
 
 
@@ -187,8 +189,12 @@ def _run_contextual_audit(
     phrase_bank: list[PhraseGroup],
     previous_assistant_msgs: list[str],
     audit_toggles: dict | None = None,
+    user_message: str = "",
 ) -> tuple[AuditReport, str]:
     """Run the audit on *draft* with cross-message context, filtered to the draft.
+
+    ``user_message`` is the user's immediately-preceding message; the anti-echo
+    scanner uses it to flag the draft parroting it back as a question.
 
     Returns ``(report, report_text)``.
     """
@@ -199,6 +205,7 @@ def _run_contextual_audit(
         phrase_bank,
         assistant_messages=previous_assistant_msgs,
         structural_text=draft,
+        user_message=user_message,
         audit_toggles=audit_toggles,
     )
     filtered = filter_audit_report_to_text(raw_report, draft)
@@ -577,7 +584,7 @@ async def _run_edit_loop(
             len(assistant_messages),
             len(phrase_bank),
         )
-        report, report_text = _run_contextual_audit(draft, phrase_bank, assistant_messages, audit_toggles)
+        report, report_text = _run_contextual_audit(draft, phrase_bank, assistant_messages, audit_toggles, effective_msg)
         structural_issues = (
             1 if report.structural_repetition_result and report.structural_repetition_result.is_repetitive else 0
         )
@@ -745,7 +752,9 @@ async def _run_edit_loop(
                 debug_parts.append(f"Iteration {iteration + 1}: rewrite applied ({pre_len}→{len(current_draft)} chars)")
 
                 if audit_enabled:
-                    report, report_text = _run_contextual_audit(current_draft, phrase_bank, assistant_messages, audit_toggles)
+                    report, report_text = _run_contextual_audit(
+                        current_draft, phrase_bank, assistant_messages, audit_toggles, effective_msg
+                    )
                     debug_parts.append(f"Post-rewrite audit ({report.total_issues} issues):\n{report_text}")
                 else:
                     report = AuditReport.clean()
@@ -815,7 +824,9 @@ async def _run_edit_loop(
             for e in errors:
                 logger.warning("Editor iteration %d patch error: %s", iteration + 1, e)
 
-            report, report_text = _run_contextual_audit(current_draft, phrase_bank, assistant_messages, audit_toggles)
+            report, report_text = _run_contextual_audit(
+                current_draft, phrase_bank, assistant_messages, audit_toggles, effective_msg
+            )
             logger.info(
                 "Editor iteration %d: post-audit — %d issues",
                 iteration + 1,

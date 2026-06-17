@@ -1,6 +1,6 @@
 # AGENTS.md — Orb Codebase Guide
 
-> **This is a living document.** Keep it up to date as the codebase evolves. When architectural decisions are made — new pipeline passes, DB schema changes, API additions, shifts in conventions — update the relevant sections here. An outdated AGENTS.md is worse than no AGENTS.md.
+> **Keep this guide current.** When the architecture changes — new pipeline passes, DB schema changes, API additions, shifts in convention — update the relevant section here so it stays the single source of truth.
 
 ## Project Overview
 
@@ -28,7 +28,7 @@ graph TD
 
         dir["Director Pass (pipeline/passes/director/) — pre-writer phase (optional)<br/>Runs the enabled PRE_WRITER_TOOLS, each as its own LLM call:<br/>1. rewrite_user_prompt (optional) → rewrites vague user messages<br/>2. direct_scene → fills fragments<br/>Fragments are user-defined (interactive_fragments table),<br/>except moods (mood_fragments table).<br/>Returns: moods, plot_summary, keywords, next_event,<br/>writing_direction, detected_repetitions, etc."]
         writer["Writer Pass (pipeline/passes/writer.py)<br/>Main generation pass. System prompt + history +<br/>Lorebook entries + Scene Direction injection block + user message.<br/>Streams response tokens via SSE."]
-        editor["[Post-Writer] Editor Pass (pipeline/passes/editor/) (optional)<br/>Checks (via analysis/): slop/contrastive negation, banned phrases,<br/>repetitive openers, templates, phrase repetition,<br/>structural repetition, length guard.<br/>Tools: editor_apply_patch or editor_rewrite.<br/>Up to 3 iterations."]
+        editor["[Post-Writer] Editor Pass (pipeline/passes/editor/) (optional)<br/>Checks (via analysis/): slop/contrastive negation, banned phrases,<br/>repetitive openers, templates, phrase repetition,<br/>structural repetition, anti-echo, length guard.<br/>Tools: editor_apply_patch or editor_rewrite.<br/>Up to 3 iterations."]
         summarizer["Summarizer (features/summarization/summarizer.py)<br/>Narrative summary + compress flow<br/>Not part of the pipeline — triggered manually"]
 
         orch --> dir --> writer --> editor
@@ -59,8 +59,8 @@ flowchart LR
 Orb/
 ├── backend/
 │   ├── main.py              # THIN entry point: `from .api import build_app; app = build_app()`
-│   │                        # + uvicorn __main__ guard. `backend.main:app` stays valid.
-│   ├── api/                 # HTTP LAYER (top of the stack) — the route half of old main.py
+│   │                        # + uvicorn __main__ guard. `backend.main:app` is the ASGI app object.
+│   ├── api/                 # HTTP LAYER (top of the stack) — all HTTP routes + app wiring
 │   │   ├── __init__.py      # build_app(): FastAPI app factory — lifespan (DB init, migrations,
 │   │   │                    # schema check), no_cache middleware, auto-include routers, /static mount LAST
 │   │   ├── deps.py          # ALL cross-route shared state/helpers: _active_aborts, the
@@ -69,7 +69,7 @@ Orb/
 │   │   │                    # require_world/require_lorebook_entry Depends, validators, FRONTEND_DIR
 │   │   ├── schemas.py       # Pydantic request/response models (SettingsUpdate, etc.)
 │   │   └── routes/          # One APIRouter per domain; build_app() includes routes.ROUTERS in order
-│   │       ├── __init__.py  # ROUTERS list (include order mirrors old main.py); add a domain = drop a file
+│   │       ├── __init__.py  # ROUTERS list (defines router include order); add a domain = drop a file
 │   │       ├── settings.py  endpoints.py  conversations.py  messages.py
 │   │       ├── characters.py  fragments.py  worlds.py  phrase_bank.py
 │   │       └── personas.py  presets.py  workflows.py  stats.py  misc.py
@@ -100,7 +100,7 @@ Orb/
 │   │   │                    # _run_post_pipeline + _stage_workflow_attachment + _PostPipelineResult
 │   │   ├── predicates.py    # Dependency-free leaf (the package's core/): agent_enabled,
 │   │   │                    # is_dual_model, resolve_persona_id
-│   │   ├── state.py         # Per-turn contract dataclasses (was pipeline_state.py):
+│   │   ├── state.py         # Per-turn contract dataclasses:
 │   │   │                    # ModelLane, _PipelineConfig, TurnState (mutable per-turn bag
 │   │   │                    # threaded through stages), LorebookTurn (lorebook inputs threaded
 │   │   │                    # _prepare_turn → director_stage; wraps the lorebook slice (features/lorebook/)).
@@ -124,13 +124,13 @@ Orb/
 │   │           └── length_guard.py # length-guard feature
 │   ├── features/            # FEATURE SLICES — each feature its own self-contained folder
 │   │   │                    # (facade __init__.py; imports only downward; never another slice)
-│   │   ├── cards/           # parsing.py (was tavern_cards.py — PNG tEXt/V2 parse) +
-│   │   │                    # downloader.py (was card_downloader.py — external card fetch)
+│   │   ├── cards/           # parsing.py (PNG tEXt/V2 parse) +
+│   │   │                    # downloader.py (external card fetch)
 │   │   ├── summarization/   # summarizer.py — narrative summary + compress flow
-│   │   ├── presets/         # engine.py (was presets.py): selective export, merge-import,
+│   │   ├── presets/         # engine.py: selective export, merge-import,
 │   │   │                    # full snapshots/restore (ATTACH + VACUUM INTO). Schema-driven;
 │   │   │                    # policy declared in database/preset_schema.py
-│   │   └── lorebook/        # PURE world-info activation (was backend/lorebook/) — a slice
+│   │   └── lorebook/        # PURE lorebook activation — a slice
 │   │                        # importing only core: selection (constant / keyword scan /
 │   │                        # Director pick) + render. Consumed by the director stage (via
 │   │                        # LorebookTurn in pipeline/state.py) and the context-size route,
@@ -141,10 +141,10 @@ Orb/
 │   │   ├── audit.py         # Phrase bank matching, opener/template detection
 │   │   └── detectors/       # slop_detector, text_segmentation, contrastive_negation,
 │   │                        # opening_monotony, phrase_repetition, structural_repetition,
-│   │                        # template_repetition
+│   │                        # template_repetition, anti_echo (user→assistant echo)
 │   ├── inference/           # INFERENCE LAYER — LLM transport + prompt/tool assembly; deps: core
 │   │   ├── __init__.py      # Facade re-export
-│   │   ├── client.py        # LLM API client (was llm_client.py): OpenAI-compatible, streaming, reasoning
+│   │   ├── client.py        # LLM API client: OpenAI-compatible, streaming, reasoning
 │   │   ├── endpoint_profiles.py # Per-provider quirks (url patterns, body transforms) — a LEAF here
 │   │   ├── cached_call.py   # Core cached-call path: CachedBase (byte-identical
 │   │   │                    # prefix+tools+model base every pass extends) + cached_complete
@@ -268,30 +268,20 @@ api  →  {pipeline, features}  →  workflows  →  {inference, analysis}  → 
 - **`analysis/`** — pure prose-quality detection; depends only on `database.models` (+ stdlib). Sits below `workflows` and `pipeline`, parallel to `inference`. It exists so the auditor can be shared by both the editor pass *and* `workflows/toolkit` without a `workflows → pipeline` back-edge.
 - **`workflows/`** — the plugin-registry gold standard; sits *below* `pipeline/` and *above* `inference`/`analysis`. `pipeline/workflow_bridge.py` imports it (the single pipeline↔workflows seam); it imports only `inference`, `analysis`, `core`, `database` — all downward.
 - **`pipeline/`** — the Director→Writer→Editor turn engine + its per-turn contracts (`state.py`) + its passes.
-- **`features/`** — vertical slices (`cards`, `summarization`, `presets`, `lorebook`), each self-contained. Most reach down into `inference`/`database`; **`lorebook/`** is the pure one — world-info activation (selection: constant / keyword scan / Director pick; + rendering) that imports only `core`, consumed by the director stage (via the `LorebookTurn` bundle in `pipeline/state.py`) and the context-size route, both above it. It was a root-level shared layer beside `analysis/` until the only `workflows → lorebook` edge — a `workflows/toolkit` re-export that no workflow consumed — was dropped, which freed it to move down into a slice.
+- **`features/`** — vertical slices (`cards`, `summarization`, `presets`, `lorebook`), each self-contained. Most reach down into `inference`/`database`. **`lorebook/`** is the pure one: lorebook activation (selection — constant / keyword scan / Director pick — plus rendering) that imports only `core`. It is consumed by the director stage (via the `LorebookTurn` bundle in `pipeline/state.py`) and the context-size route, both of which sit above it.
 - **`api/`** — the HTTP layer at the top; the only layer that wires everything together.
 
-**The one-way rule:** a layer may import *downward* but never *up* or *sideways into a peer slice*. `database/` already enforced this; the reorg generalized it to every layer. When a lower layer genuinely needs higher-layer *behavior* at a fixed seam, use **dependency inversion** (the lower layer declares a registration hook; the higher layer registers an impl at import) — see `database/queries/messages.py`'s `register_workflow_attachment_persister`, registered by `workflows/attachment_cache.py`. Don't dodge the rule with a lazy `import backend.<higher layer>` inside a lower-layer function; that hides the inversion from the import graph without removing it. (The sanctioned lazy-import exception — `database/bootstrap.py`'s `from ..features import presets` — is documented and explicit.)
+**The one-way rule:** a layer may import *downward* but never *up*, and never *sideways into a peer slice*. When a lower layer genuinely needs higher-layer *behavior* at a fixed seam, use **dependency inversion**: the lower layer declares a registration hook, and the higher layer registers an implementation at import. See `register_workflow_attachment_persister` in `database/queries/messages.py`, which `workflows/attachment_cache.py` fills in. Don't dodge the rule with a lazy `import backend.<higher layer>` inside a lower-layer function — that hides the inversion from the import graph without removing it. (The one sanctioned lazy-import exception is `database/bootstrap.py`'s `from ..features import presets`, which is documented and explicit.)
 
-> **A passing `python -c "import backend.main"` does not prove the DAG is clean** — a back-edge only crashes if it forms a true import *cycle*. The one-way rule is a design invariant, not something the smoke test enforces; an `import-linter` contract is the proper backstop (see *Optional follow-up* — not yet wired).
+> **A passing `python -c "import backend.main"` does not prove the dependency graph is clean** — a back-edge only crashes if it forms a true import *cycle*. The one-way rule is a design invariant, not something the smoke test enforces; an `import-linter` contract would be the proper backstop.
 
 ### The bottom-up retarget rule
 
-When relocating a module, the cost-free method is to move layers **bottom-up**
-(`core` → `inference`/`analysis` → `pipeline` → `features` → `api`) and **retarget
-every importer of a moved module in the same step** — even importers that will
-themselves move later. Because each new layer package sits at the `backend` top
-level exactly where the flat module used to, a facade re-export changes only the
-*name* you import from (`from .llm_client` → `from .inference`), **keeping the dot
-count unchanged**. A module that both imports a lower layer *and* moves later is
-touched twice: once to **retarget the name** (when the lower layer moves) and once
-to **bump the dots** (when it moves deeper). Both edits are mechanical, and the
-gate after each step — `import backend.main` + pyright 0 + `./scripts/tests.sh all`
-+ a `grep tests/` for stale paths — catches any miss. Note the second blast radius
-the facades do **not** cover: test imports of deep submodule paths, and
-`monkeypatch.setattr`/`mock.patch` **string** targets (e.g. `LLMClient` is patched
-in several namespaces) — these fail at *runtime*, not at import, so update each
-string target when *its* module moves.
+When relocating a module, move layers **bottom-up** (`core` → `inference`/`analysis` → `pipeline` → `features` → `api`) and **retarget every importer of the moved module in the same step** — even importers that will themselves move later. Each layer package sits at the `backend` top level exactly where the flat module used to, so a facade re-export changes only the *name* you import from (`from .llm_client` → `from .inference`) and leaves the relative-import dot count unchanged.
+
+A module that both imports a lower layer *and* moves later is touched twice: once to **retarget the name** (when the lower layer moves) and once to **bump the dots** (when it moves deeper). Both edits are mechanical, and the gate after each step catches any miss: `import backend.main`, pyright at zero, `./scripts/tests.sh all`, and a `grep tests/` for stale paths.
+
+One blast radius the facades do **not** cover: test imports of deep submodule paths, and `monkeypatch.setattr`/`mock.patch` **string** targets (e.g. `LLMClient` is patched in several namespaces). These fail at *runtime*, not at import, so update each string target when *its* module moves.
 
 ### The Standard Slice Shape (the symmetry contract)
 
@@ -421,11 +411,15 @@ under `backend.core.locks.maintenance_lock`.
 
 ## Data Contracts (the model layer)
 
-`backend/database/models.py` is the **model layer**: domain data contracts (a `TypedDict` per table-group row, plus the `PhraseGroup` union — `list[str] | LiteralPhraseGroup | RegexPhraseGroup`, a discriminated union keyed on `kind`) that describe the *shape* of persisted data and depend on nothing else in the codebase. The dependency rule is one-way — every other layer points its dependencies **inward**, toward the data, and `backend/database/` must never import "up" into `pipeline/`, `inference/`, `analysis/`, `workflows/`, or `api/` (see **Architecture Layers** below). (The introducing commit moved `PhraseGroup` *down* into `models.py` from `slop_detector.py` to kill the last upward import; the same move later extracted the prose auditor *down* into `analysis/` to kill the last `workflows → passes` edge. Anything in `database/` that reaches up for a shared shape is an architectural inversion — put the shape here instead.) When the database layer genuinely needs higher-layer *behavior* at a fixed seam — `add_message` persisting workflow attachments inside its own write transaction — it declares the contract and the higher layer registers an implementation (dependency inversion): `database/queries/messages.py` owns `register_workflow_attachment_persister`, and `workflows/attachment_cache.py` registers `insert_workflow_attachments` into it at import. Don't reintroduce a lazy `import backend.workflows` inside a `database/` function to dodge the rule — that hides the inversion from the import graph without removing it.
+`backend/database/models.py` is the **model layer**: domain data contracts — one `TypedDict` per table-group row, plus the `PhraseGroup` union (`list[str] | LiteralPhraseGroup | RegexPhraseGroup`, a discriminated union keyed on `kind`). They describe the *shape* of persisted data and depend on nothing else in the codebase.
+
+The dependency rule is one-way: every other layer points its dependencies **inward**, toward the data, and `backend/database/` must never import "up" into `pipeline/`, `inference/`, `analysis/`, `workflows/`, or `api/` (see **Architecture Layers** above). Anything in `database/` that reaches up for a shared shape is an architectural inversion — put the shape here instead.
+
+When the database layer genuinely needs higher-layer *behavior* at a fixed seam — e.g. `add_message` persisting workflow attachments inside its own write transaction — it declares the contract and the higher layer registers an implementation (dependency inversion): `database/queries/messages.py` owns `register_workflow_attachment_persister`, and `workflows/attachment_cache.py` registers `insert_workflow_attachments` into it at import. Don't reintroduce a lazy `import backend.workflows` inside a `database/` function to dodge the rule — that hides the inversion from the import graph without removing it.
 
 - **The TypedDicts label plain dicts, with zero runtime change.** The query layer still returns ordinary `dict(row)` objects; each query stamps the shape at its boundary with `cast(SomeRow, ...)` (a `TypedDict` is not assignable from a bare `dict`). So `row["col"]` access is checked against the schema without any wrapper object, validation, or runtime cost. Each `queries/*.py` module imports just the contract(s) for its tables (`SettingsRow`, `ConversationRow`/`ConversationListRow`, `MessageRow`/`MessageWithAttachments`, `EndpointRow`, `ModelConfigRow`, `WorldRow`, `LorebookEntryRow`, `CharacterCardRow`, `DirectorStateRow`, `InteractiveFragmentRow`, `MoodFragmentRow`, `UserPersonaRow`, `ConversationLogRow`, `PhraseBankRow`, and the attachment rows).
 - **Every row-shaped query return is typed; only free-form blobs stay `dict`.** A query that returns table rows uses a contract. The lone exception is the per-workflow JSON state/config accessors (`get_workflow_state`, `get_workflow_message_state`, `get_workflow_character_state`, `get_workflow_config`) — these decode an arbitrary per-workflow slot with no fixed schema, so they correctly return bare `dict`/`dict | None`. Don't invent a contract for those.
-- **JSON columns are typed as their *decoded* shape** (`dict`/`list`) **only on the queries that actually decode them.** Where a query leaves the column as a raw JSON string it stays `str` — e.g. `MessageRow.progressive_fields` is `dict` because `get_path_to_leaf()` decodes it, while `get_message_by_id()` leaves it a string; `ConversationLogRow` decodes `tool_calls`/`active_moods_after` to lists but leaves `progressive_fields_after` a raw string. The label makes those pre-existing inconsistencies visible rather than fixing them.
+- **JSON columns are typed as their *decoded* shape** (`dict`/`list`) **only on the queries that actually decode them.** Where a query leaves the column as a raw JSON string it stays `str` — e.g. `MessageRow.progressive_fields` is `dict` because `get_path_to_leaf()` decodes it, while `get_message_by_id()` leaves it a string; `ConversationLogRow` decodes `tool_calls`/`active_moods_after` to lists but leaves `progressive_fields_after` a raw string.
 - **SQLite has no boolean type**, so flag columns (`enabled`, `required`, `case_insensitive`, `constant`, …) are typed `int` to match the 0/1 that `dict(row)` returns — not `bool`.
 - **`total=False`** marks contracts whose keys are only conditionally present: the `DEFAULT_SETTINGS` fallback vs the `SELECT *` branch, the column subsets different readers project, and the attachment/branch-nav metadata glued on after the base row.
 - **Required base + optional extension** is the idiom when one reader projects a strict superset of another's columns: a `total=True` base holds the always-present keys (so consumers can subscript them) and a subclass adds the rest. `_SettingsBase` → `SettingsRow`, and `WorkflowAttachmentRowBase` → `WorkflowAttachmentRow` (the base is what `get_workflow_attachments_for_message()` returns — it omits the redundant `message_id` it filters on; the full row that single-row and glue readers return adds it).
@@ -433,7 +427,7 @@ under `backend.core.locks.maintenance_lock`.
 
 ### Type checking (pyright)
 
-`pyrightconfig.json` runs pyright in **standard** mode over `backend/` (target Python 3.12, missing imports downgraded to warnings), and the **whole backend passes clean — zero errors, no file-level suppressions.** (An earlier stage suppressed four rules in what are now `api/`/`pipeline/orchestrator.py` while the row TypedDicts were threaded through bare-`dict` helpers; those suppressions are gone now that the consumer signatures were widened.) Keep it at zero:
+`pyrightconfig.json` runs pyright in **standard** mode over `backend/` (target Python 3.12, missing imports downgraded to warnings), and the **whole backend passes clean — zero errors, no file-level suppressions.** Keep it at zero:
 
 - **Widen consumers, don't re-tighten producers.** When a typed row flows into a helper, the helper takes `Mapping[str, Any]` (read-only dict) and `Sequence[Mapping[str, Any]]` (read-only list), not bare `dict`/`list[dict]` — `list[SomeRow]` is *not* assignable to `list[dict]` (list is invariant), but it *is* to `Sequence[Mapping[str, Any]]` (covariant). The pipeline already types `history`, `settings`, and the fragment lists this way; `attachments` now matches. Use the concrete `dict`/`list[dict]` only where the code actually mutates the value (e.g. the attachment-cache writer tags and copies dicts — `add_message` materializes `dict(att)` at that boundary).
 - **Don't add suppressions to dodge a type error** — fix the contract or widen the consumer. A `# pyright: ignore` or file-level `# pyright:` header reintroduced here is a regression.
@@ -685,4 +679,6 @@ See [docs/architecture/secondary-workflow.md](docs/architecture/secondary-workfl
 
 9. **Lorebook scan depth** — Hard-coded to 6 messages (`LOREBOOK_SCAN_DEPTH` in `backend/features/lorebook/activation.py`). Only the last 6 messages are scanned for lorebook keyword matches.
 
-10. **Macros resolve at different levels** — `resolve_message()` expands everything ({{user}}, {{char}}, inline macros like {{roll}}). `resolve_prompt()` only does {{user}}/{{char}} substitution. Use `resolve_prompt()` for historical messages where inline macros shouldn't fire. `core/macros.py` is a **dependency-free leaf** (it imports nothing else in the codebase — like `database/models.py` and `core/llm_types.py`): it transforms strings and message dicts, and knows nothing about the LLM client. The transport-boundary catch-all that scrubs `{{user}}`/`{{char}}` from *every* outgoing message (the director's tool prompt embeds user-authored fragment text that can carry `{{char}}`) is `Macros.resolve_prompt_messages`. It is **bound** as the `CachedBase.resolve` hook in `_resolve_pipeline_config()` (`pipeline/config.py`) (`resolve=macros.resolve_prompt_messages`, where `macros` is a local `Macros` instance) and **applied** inside `inference/cached_call.py` — to `[*prefix, *trailing]` right before the call, so the KV tracker snapshots the exact resolved bytes sent. There is **no** macro-resolving `LLMClient` subclass/wrapper; don't reintroduce one.
+10. **Macros resolve at different levels** — `resolve_message()` expands everything ({{user}}, {{char}}, and inline macros like {{roll}}), while `resolve_prompt()` only substitutes {{user}}/{{char}}. Use `resolve_prompt()` for historical messages, where inline macros shouldn't fire again. `core/macros.py` is a **dependency-free leaf** (like `database/models.py` and `core/llm_types.py`, it imports nothing else in the codebase): it transforms strings and message dicts and knows nothing about the LLM client.
+
+    The transport-boundary catch-all is `Macros.resolve_prompt_messages`, which scrubs `{{user}}`/`{{char}}` from *every* outgoing message (the director's tool prompt embeds user-authored fragment text that can carry `{{char}}`). It is **bound** as the `CachedBase.resolve` hook in `_resolve_pipeline_config()` (`pipeline/config.py`, as `resolve=macros.resolve_prompt_messages` where `macros` is a local `Macros` instance) and **applied** inside `inference/cached_call.py` — to `[*prefix, *trailing]` right before the call, so the KV tracker snapshots the exact resolved bytes sent. There is **no** macro-resolving `LLMClient` subclass or wrapper; don't reintroduce one.

@@ -1,26 +1,24 @@
 """
-text_segmentation.py — Shared paragraph / sentence / dialogue segmentation for
-the editor audit passes.
+text_segmentation.py — Shared paragraph, sentence, and dialogue segmentation
+used by all detectors.
 
-Every scanner (opening_monotony, template_repetition, phrase_repetition,
-slop_detector, contrastive_negation, structural_repetition) used to carry its
-own copy of these regexes and helpers, and they had drifted apart: some treated
-``…`` as a sentence terminator and some didn't; some recognised single curly
-quotes and some didn't; one lacked the trailing-marker tolerance the others had.
-This module is the single source of truth so the passes segment text the same
-way.
+Every detector used to carry its own copy of these helpers, and they had silently
+drifted apart: some treated "…" as a sentence terminator and some didn't; some
+recognized single curly quotes and some didn't; one was missing the
+trailing-marker tolerance the others had. This module is the single source of
+truth so all detectors split text the same way.
 
-Two families of consumers, served by two functions:
+Two splitting functions serve two families of consumers:
 
-* ``split_sentences`` keeps dialogue intact — for scanners that match inside
-  quotes (slop_detector) or analyse clause grammar (contrastive_negation).
-* ``split_narration_sentences`` strips dialogue first — for scanners that only
+- split_sentences — keeps dialogue intact. Used by detectors that need to match
+  inside quotes (slop_detector) or analyze clause grammar (contrastive_negation).
+- split_narration_sentences — strips dialogue first. Used by detectors that only
   care about narration prose (opening_monotony, template_repetition,
   phrase_repetition).
 
-``find_quote_spans`` and ``count_sentences`` support structural_repetition,
-which classifies blocks rather than stripping them but still wants the same
-quote/terminator definitions.
+find_quote_spans and count_sentences support structural_repetition, which
+classifies blocks rather than stripping them but still needs the same quote and
+terminator definitions.
 """
 
 from __future__ import annotations
@@ -39,20 +37,7 @@ __all__ = [
     "split_narration_sentences",
     "find_quote_spans",
     "count_sentences",
-    "normalize_word",
 ]
-
-
-# ---------- word normalization ----------
-
-
-def normalize_word(word: str) -> str:
-    """Lowercase a word and strip everything but ``a-z0-9'``.
-
-    Shared by the opener/template scanners so they key on the same normalized
-    token form.
-    """
-    return re.sub(r"[^a-z0-9']", "", word.lower())
 
 
 # ---------- canonical patterns ----------
@@ -60,22 +45,21 @@ def normalize_word(word: str) -> str:
 # Paragraph break: a blank line, optionally filled with whitespace.
 PARA_SPLIT = re.compile(r"\n\s*\n")
 
-# Sentence boundary: a terminator (``. ! ? …``) followed by whitespace. We
-# tolerate trailing closing markers between the terminator and the whitespace —
-# quotes and markdown emphasis/brackets (e.g. ``Hiro.*`` or ``done."``).
-# Without this, a terminator hidden behind a markdown marker fails to split,
-# merging adjacent sentences (and, across newlines, whole paragraphs) into one
-# unit.
-SENT_SPLIT = re.compile(r"(?<=[.!?…])[\"”’'*_)\]]*\s+")
+# Sentence boundary: a terminator (. ! ? …) followed by whitespace. Trailing
+# closing markers (quotes, markdown emphasis, brackets) between the terminator
+# and the whitespace are tolerated — e.g. Hiro.* or done." — so a terminator
+# hidden behind a markdown marker still splits correctly rather than merging
+# adjacent sentences into one.
+SENT_SPLIT = re.compile(r"(?<=[.!?…])[\"\u201d\u2019'*_)\]]*\s+")
 
 # Curly directional quotes are unambiguous: left opens, right closes.
-OPEN_QUOTES = frozenset({"“", "‘"})  # “ ‘
-CLOSE_QUOTES = frozenset({"”", "’"})  # ” ’
+OPEN_QUOTES = frozenset({"\u201c", "\u2018"})  # " '
+CLOSE_QUOTES = frozenset({"\u201d", "\u2019"})  # " '
 # Straight double quote has no direction; we toggle on each occurrence.
-# The straight single quote is deliberately excluded from every set so that
-# contractions (I'm, don't) survive. (Note: U+2019 doubles as a typographic
-# apostrophe, so curly-apostrophe contractions can still be clipped — an
-# accepted trade-off for recognising single-quoted dialogue.)
+# The straight single quote is intentionally excluded from every set so that
+# contractions like I'm and don't survive. (Note: U+2019 also doubles as a
+# typographic apostrophe, so curly-apostrophe contractions may be clipped —
+# an accepted trade-off for recognizing single-quoted dialogue.)
 TOGGLE_QUOTES = frozenset({'"'})
 
 
@@ -88,10 +72,10 @@ def split_paragraphs(text: str) -> list[str]:
 
 
 def split_sentences(text: str) -> list[str]:
-    """Split ``text`` into sentences, paragraph-first, keeping dialogue intact.
+    """Split text into sentences, keeping dialogue intact.
 
-    Paragraph-first splitting means a paragraph whose final sentence lacks a
-    detectable terminator can't merge into the next paragraph.
+    Splitting is paragraph-first: a paragraph whose final sentence has no
+    detectable terminator can't bleed into the next paragraph.
     """
     sentences: list[str] = []
     for para in split_paragraphs(text):
@@ -106,11 +90,12 @@ def split_sentences(text: str) -> list[str]:
 
 
 def extract_narration(paragraph: str) -> str:
-    """Return only the characters of ``paragraph`` that lie outside any quote.
+    """Return only the text from paragraph that falls outside any quoted span.
 
-    The caller splits into paragraphs first, so state resets at each paragraph
-    boundary and an unclosed quote inside one paragraph cannot contaminate the
-    next. Spaces are inserted where quotes are stripped, to prevent word fusion.
+    The caller splits into paragraphs first, so quote state resets at each
+    paragraph boundary — an unclosed quote inside one paragraph can't bleed
+    into the next. Spaces are inserted where quotes are stripped to prevent
+    adjacent words from fusing.
     """
     out: list[str] = []
     inside = False
@@ -146,7 +131,11 @@ def extract_narration(paragraph: str) -> str:
 
 
 def split_narration_sentences(text: str) -> list[str]:
-    """Paragraph-aware sentence splitter that strips dialogue in the process."""
+    """Split text into narration sentences, stripping dialogue in the process.
+
+    Splitting is paragraph-aware so quote state and terminators don't bleed
+    across paragraph boundaries.
+    """
     sentences: list[str] = []
     for para in split_paragraphs(text):
         narration = extract_narration(para).strip()
@@ -163,11 +152,12 @@ def split_narration_sentences(text: str) -> list[str]:
 
 
 def find_quote_spans(text: str) -> list[tuple[int, int]]:
-    """Return ``(start, end)`` spans of quoted regions, inclusive of the quotes.
+    """Return (start, end) character spans of every quoted region, inclusive of
+    the quote marks themselves.
 
-    Used by block-classifying consumers that need quote *positions* rather than
-    stripped narration. Shares the same quote definitions as
-    ``extract_narration`` so the two agree on what counts as dialogue.
+    Used by detectors that need quote positions rather than stripped narration
+    (e.g. structural_repetition, anti_echo). Uses the same quote definitions as
+    extract_narration so the two functions agree on what counts as dialogue.
     """
     spans: list[tuple[int, int]] = []
     inside = False
@@ -192,10 +182,10 @@ def find_quote_spans(text: str) -> list[tuple[int, int]]:
 
 
 def count_sentences(text: str) -> int:
-    """Count sentences in a block of text.
+    """Count the sentences in a block of text.
 
-    Non-empty text with no sentence terminator still counts as 1 (a fragment or
-    short imperative). Empty text returns 0.
+    Non-empty text with no terminator counts as 1 (a sentence fragment or short
+    imperative). Empty text returns 0.
     """
     stripped = text.strip()
     if not stripped:
