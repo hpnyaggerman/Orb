@@ -139,6 +139,10 @@ Orb/
 │   │   │                    # deps: database.models + stdlib only. Shared by editor pass + workflows.
 │   │   ├── __init__.py      # Facade: run_audit, format_report, AuditReport, AUDIT_TYPES + result types
 │   │   ├── audit.py         # Phrase bank matching, opener/template detection
+│   │   ├── format_consistency.py # Deterministic RP-markup normalizer — NOT a detector but a
+│   │   │                    # transformer (returns rewritten text, not findings): holds a draft's
+│   │   │                    # quote/asterisk convention to recent messages. Pure; the
+│   │   │                    # format_consistency workflow calls it via the toolkit.
 │   │   └── detectors/       # slop_detector, text_segmentation, contrastive_negation,
 │   │                        # opening_monotony, phrase_repetition, structural_repetition,
 │   │                        # template_repetition, anti_echo (user→assistant echo)
@@ -178,6 +182,10 @@ Orb/
 │   │   ├── toolkit.py       # Stable author import surface (LLM, prompts, DB readers, state, locks)
 │   │   ├── _forced_call.py  # forced_tool_call(): one-shot single-tool forced LLM call
 │   │   ├── attachment_cache.py # Byte-budget LRU-3 artifact cache (insert/rehydrate/evict/siblings)
+│   │   ├── format_consistency/ # Shipped format-consistency workflow (no artifacts, no tools)
+│   │   │   ├── __init__.py  # Workflow(...) instance (config: enabled, default on)
+│   │   │   └── hooks.py     # post_pipeline hook: gates on config, calls analysis/format_consistency
+│   │   │                    # via the toolkit, yields draft_replaced on a rewrite
 │   │   └── tts/             # Shipped TTS workflow
 │   │       ├── __init__.py  # Workflow(...) instance
 │   │       ├── hooks.py     # post_pipeline / on_demand / regenerate / reroll_gen hooks
@@ -213,6 +221,7 @@ Orb/
 │   ├── fonts/               # Self-hosted: Crimson, Exo2, Lora, Playfair, Spectral, Fira Code
 │   ├── themes/              # 9 CSS theme files
 │   └── workflows/           # Frontend secondary workflow modules
+│       ├── format_consistency/ # Shipped: index.js (one Tools-panel toggle for the normalizer)
 │       └── tts/             # Shipped TTS frontend (index, widget, karaoke, config_panel, extract, tts.css)
 ├── docs/
 │   ├── index.md             # Docs home / table of contents

@@ -31,11 +31,15 @@ __all__ = [
     "OPEN_QUOTES",
     "CLOSE_QUOTES",
     "TOGGLE_QUOTES",
+    "EMPHASIS_RE",
     "split_paragraphs",
     "split_sentences",
     "extract_narration",
     "split_narration_sentences",
     "find_quote_spans",
+    "find_emphasis_spans",
+    "extract_block_spans",
+    "extract_blocks",
     "count_sentences",
 ]
 
@@ -192,3 +196,84 @@ def count_sentences(text: str) -> int:
         return 0
     pieces = [s.strip() for s in SENT_SPLIT.split(stripped) if s.strip()]
     return len(pieces) if pieces else 1
+
+
+# ---------- block extraction (SPEECH / EMPHASIS / NARRATION) ----------
+# A paragraph is decomposed into ordered spans of three block types:
+#   SPEECH    — a quoted span (dialogue), markers included
+#   EMPHASIS  — an *asterisk* or _underscore_ span, markers included
+#   NARRATION — everything else (bare prose)
+# This is the shared source of truth for structural_repetition (which only needs
+# the types/counts) and format_consistency (which needs the raw offsets to splice
+# a rewrite). Both go through extract_block_spans so they agree on segmentation.
+
+EMPHASIS_RE = re.compile(
+    r"(?<!\w)\*(?!\s)([^*\n]+?)\*(?!\w)"  # *thought*  (not bullet)
+    r"|"
+    r"(?<!\w)_(?!\s)([^_\n]+?)_(?!\w)",  # _thought_
+)
+
+
+def find_emphasis_spans(text: str) -> list[tuple[int, int]]:
+    """Return (start, end) spans of *asterisk* / _underscore_ emphasis runs,
+    inclusive of the markers. A leading ``*`` that is the first non-space on its
+    line and followed by a space is treated as a markdown bullet and skipped."""
+    spans = []
+    for m in EMPHASIS_RE.finditer(text):
+        if m.group(0).startswith("*"):
+            line_start = text.rfind("\n", 0, m.start()) + 1
+            prefix = text[line_start : m.start()]
+            after_star = m.start() + 1
+            if prefix.strip() == "" and after_star < len(text) and text[after_star] in " \t":
+                continue
+        spans.append((m.start(), m.end()))
+    return spans
+
+
+def _start_inside(start: int, spans: list[tuple[int, int]]) -> bool:
+    return any(qs <= start < qe for qs, qe in spans)
+
+
+def extract_block_spans(para: str) -> list[tuple[str, int, int]]:
+    """Decompose a paragraph into contiguous, ordered (block_type, start, end)
+    spans that fully tile the paragraph (NARRATION fills the gaps).
+
+    Offsets are raw — no stripping — so ``"".join(para[s:e] ...)`` reconstructs the
+    paragraph exactly, which is what lets a rewriter splice individual spans
+    without disturbing the surrounding whitespace.
+
+    Emphasis is scanned over the whole paragraph (so the bullet guard keeps its
+    line context) and then any emphasis falling inside a quoted span is dropped —
+    a ``*`` inside dialogue is never treated as emphasis.
+    """
+    quote_spans = find_quote_spans(para)
+    emphasis_spans = [(s, e) for s, e in find_emphasis_spans(para) if not _start_inside(s, quote_spans)]
+
+    typed = sorted([(s, e, "SPEECH") for s, e in quote_spans] + [(s, e, "EMPHASIS") for s, e in emphasis_spans])
+
+    spans: list[tuple[str, int, int]] = []
+    idx = 0
+    for s, e, typ in typed:
+        if s < idx:  # overlap guard (e.g. emphasis straddling a quote boundary)
+            continue
+        if idx < s:
+            spans.append(("NARRATION", idx, s))
+        spans.append((typ, s, e))
+        idx = e
+    if idx < len(para):
+        spans.append(("NARRATION", idx, len(para)))
+    return spans
+
+
+def extract_blocks(para: str) -> list[tuple[str, str]]:
+    """Break a paragraph into ordered (block_type, text) pairs with text stripped.
+
+    Block types are SPEECH (quoted dialogue), EMPHASIS (*thought* or _thought_),
+    and NARRATION (everything else). Empty (whitespace-only) blocks are dropped.
+    """
+    blocks: list[tuple[str, str]] = []
+    for typ, s, e in extract_block_spans(para):
+        t = para[s:e].strip()
+        if t:
+            blocks.append((typ, t))
+    return blocks

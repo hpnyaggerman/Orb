@@ -26,6 +26,10 @@ from .detectors.template_repetition import TemplateResult, detect_template_repet
 # UI exposes a checkbox per type and persists the on/off state; the editor pass
 # passes the resulting dict to run_audit, which skips any disabled scanner.
 # Order here is the order the toggles render in the UI.
+#
+# Note: the deterministic RP format-consistency normalizer is intentionally NOT
+# listed here. It is a post-editor markup rewriter (not a flag-only scanner) and
+# is not user-toggleable — it always runs. See editor.editor_stage.
 AUDIT_TYPES = (
     "banned_phrases",
     "repetitive_openers",

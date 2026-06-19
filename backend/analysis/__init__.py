@@ -21,6 +21,7 @@ from .detectors.slop_detector import DetectionResult
 from .detectors.structural_repetition import StructuralResult
 from .detectors.template_repetition import FlaggedTemplate, TemplateResult
 from .detectors.text_segmentation import split_narration_sentences
+from .format_consistency import FormatDriftReport, normalize_to_baseline
 
 __all__ = [
     # audit — consolidated runner + report
@@ -37,6 +38,9 @@ __all__ = [
     "StructuralResult",
     "PhraseResult",
     "EchoResult",
+    # format consistency — deterministic markup normalizer
+    "FormatDriftReport",
+    "normalize_to_baseline",
     # shared segmentation helper
     "split_narration_sentences",
 ]

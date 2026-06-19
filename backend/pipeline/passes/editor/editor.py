@@ -10,7 +10,12 @@ import logging
 import time
 from typing import TYPE_CHECKING, Any, AsyncIterator, Mapping, Sequence
 
-from ....analysis import AuditReport, DetectionResult, format_report, run_audit
+from ....analysis import (
+    AuditReport,
+    DetectionResult,
+    format_report,
+    run_audit,
+)
 from .feedback import FeedbackResult, feedback_step
 
 if TYPE_CHECKING:
@@ -182,6 +187,30 @@ def _build_audit_text(draft: str, previous_assistant_msgs: list[str]) -> str:
         return draft
     context = "\n\n".join(reversed(previous_assistant_msgs))
     return context + "\n\n" + draft
+
+
+def _baseline_window(base: CachedBase, audit_context_msgs: list[str] | None) -> list[str]:
+    """The recent assistant-message window (newest first, up to 3) the
+    repetition scanners compare the draft against.
+
+    Callers may pass an explicit list via *audit_context_msgs* (e.g.
+    super-regenerate, which excludes the message being replaced); when None the
+    window is derived from the cached prefix.
+    """
+    if audit_context_msgs is not None:
+        return audit_context_msgs[:3]
+    window: list[str] = []
+    for msg in reversed(base.prefix):
+        if msg.get("role") == "assistant":
+            # Assistant history is always plain text; the multimodal list form
+            # only ever rides user messages, so a non-str body has nothing to
+            # contribute to the repetition window.
+            content = msg.get("content", "")
+            if isinstance(content, str):
+                window.append(content)
+                if len(window) >= 3:
+                    break
+    return window
 
 
 def _run_contextual_audit(
@@ -462,71 +491,70 @@ async def editor_stage(
     # there. Mirrors director_start/director_done.
     yield {"event": "writer_done", "data": {"editor_will_run": editor_will_run}}
 
-    if not editor_will_run:
+    if editor_will_run:
+        logger.info(
+            "Editor pass starting (draft=%d chars, phrase_bank=%d groups, edit=%s, feedback=%s)",
+            len(state.resp_text),
+            len(phrase_bank) if phrase_bank else 0,
+            cfg.do_edit,
+            feedback_needed,
+        )
+        # Errors are not caught here: an editor failure propagates and aborts the
+        # turn, like the director/writer passes. _consume_pipeline's finally still
+        # fallback-persists whatever the writer already streamed.
+        async for event in editor_pass(
+            cfg.agent_lane.client,
+            cfg.agent_lane.base,
+            state.effective_msg,
+            state.resp_text,
+            settings,
+            phrase_bank or [],
+            # do_edit == (audit_enabled or length_guard is not None), so in the
+            # feedback-only path (do_edit False) both are already inert — pass them
+            # straight through and let the edit loop no-op.
+            cfg.audit_enabled,
+            cfg.length_guard,
+            kv_tracker=kv_tracker,
+            reasoning_on=cfg.editor_reasoning_on,
+            audit_context_msgs=editor_audit_msgs,
+            writer_user_msg=state.writer_content,
+            feedback_fragments=feedback_fragments if feedback_needed else None,
+        ):
+            if event["type"] == "reasoning":
+                # Feedback reasoning is folded into the editor channel (it is an
+                # editor sub-step, so it shares the Editor reasoning toggle and box).
+                state.reasoning_editor += event["delta"]
+                yield {
+                    "event": "reasoning",
+                    "data": {"pass": "editor", "delta": event["delta"]},
+                }
+            elif event["type"] == "done":
+                state.latency += int(event.get("elapsed", 0) or 0)
+                refined_draft = event["draft"]
+                if refined_draft and refined_draft != state.resp_text:
+                    state.resp_text = refined_draft
+                    yield {
+                        "event": "writer_rewrite",
+                        "data": {"refined_text": state.resp_text},
+                    }
+                if event.get("tool_calls"):
+                    yield {
+                        "event": "editor_done",
+                        "data": {"tool_calls": event["tool_calls"]},
+                    }
+                state.feedback_values = event.get("feedback", {}) or {}
+                if state.feedback_values:
+                    yield {
+                        "event": "feedback",
+                        "data": {"values": state.feedback_values},
+                    }
+    else:
         logger.info(
             "Editor pass skipped (do_edit=%s, feedback=%s, draft=%d chars)",
             cfg.do_edit,
             feedback_needed,
             len(state.resp_text),
         )
-        return
-
-    logger.info(
-        "Editor pass starting (draft=%d chars, phrase_bank=%d groups, edit=%s, feedback=%s)",
-        len(state.resp_text),
-        len(phrase_bank) if phrase_bank else 0,
-        cfg.do_edit,
-        feedback_needed,
-    )
-    # Errors are not caught here: an editor failure propagates and aborts the
-    # turn, like the director/writer passes. _consume_pipeline's finally still
-    # fallback-persists whatever the writer already streamed.
-    async for event in editor_pass(
-        cfg.agent_lane.client,
-        cfg.agent_lane.base,
-        state.effective_msg,
-        state.resp_text,
-        settings,
-        phrase_bank or [],
-        # do_edit == (audit_enabled or length_guard is not None), so in the
-        # feedback-only path (do_edit False) both are already inert — pass them
-        # straight through and let the edit loop no-op.
-        cfg.audit_enabled,
-        cfg.length_guard,
-        kv_tracker=kv_tracker,
-        reasoning_on=cfg.editor_reasoning_on,
-        audit_context_msgs=editor_audit_msgs,
-        writer_user_msg=state.writer_content,
-        feedback_fragments=feedback_fragments if feedback_needed else None,
-    ):
-        if event["type"] == "reasoning":
-            # Feedback reasoning is folded into the editor channel (it is an
-            # editor sub-step, so it shares the Editor reasoning toggle and box).
-            state.reasoning_editor += event["delta"]
-            yield {
-                "event": "reasoning",
-                "data": {"pass": "editor", "delta": event["delta"]},
-            }
-        elif event["type"] == "done":
-            state.latency += int(event.get("elapsed", 0) or 0)
-            refined_draft = event["draft"]
-            if refined_draft and refined_draft != state.resp_text:
-                state.resp_text = refined_draft
-                yield {
-                    "event": "writer_rewrite",
-                    "data": {"refined_text": state.resp_text},
-                }
-            if event.get("tool_calls"):
-                yield {
-                    "event": "editor_done",
-                    "data": {"tool_calls": event["tool_calls"]},
-                }
-            state.feedback_values = event.get("feedback", {}) or {}
-            if state.feedback_values:
-                yield {
-                    "event": "feedback",
-                    "data": {"values": state.feedback_values},
-                }
 
 
 async def _run_edit_loop(
@@ -560,21 +588,7 @@ async def _run_edit_loop(
     # Collect previous assistant messages for cross-message context.
     # audit_context_msgs lets callers override which messages are used, so that
     # super-regenerate doesn't compare the new draft against the message it replaced.
-    assistant_messages: list[str] = []
-    if audit_enabled:
-        if audit_context_msgs is not None:
-            assistant_messages = audit_context_msgs[:3]
-        else:
-            for msg in reversed(base.prefix):
-                if msg.get("role") == "assistant":
-                    # Assistant history is always plain text; the multimodal
-                    # list form only ever rides user messages, so a non-str
-                    # body has nothing to contribute to the repetition window.
-                    content = msg.get("content", "")
-                    if isinstance(content, str):
-                        assistant_messages.append(content)
-                    if len(assistant_messages) >= 3:
-                        break
+    assistant_messages: list[str] = _baseline_window(base, audit_context_msgs) if audit_enabled else []
 
     # ── Initial audit
     if audit_enabled:
