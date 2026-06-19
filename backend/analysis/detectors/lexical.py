@@ -2,24 +2,28 @@
 lexical.py — Shared word-level helpers used across the prose-quality detectors.
 
 These are the operations that work on individual words and token lists:
-tokenizing text, normalizing a single word, sliding an n-gram window, and the
+tokenizing text, normalizing a single word, sliding an n-gram window, comparing
+two token sequences (longest shared run, contiguous containment), and the
 content-word floor (a match is only worth flagging if it carries enough
 non-stopword words). Detectors used to carry their own copies of these — the
-tokenizer regex, the stopword list, the n-gram helper — and the copies had
-silently drifted apart. This module is the single source of truth so every
-detector tokenizes, normalizes, and judges "content" the same way.
+tokenizer regex, the stopword list, the n-gram helper, the sequence comparisons —
+and the copies had silently drifted apart. This module is the single source of
+truth so every detector tokenizes, normalizes, and judges "content" the same way.
 
 Note on tokenizers: slop_detector and contrastive_negation deliberately keep
 their own tokenizers — slop_detector needs phrase casing and punctuation
 boundaries, contrastive_negation needs punctuation tokens for clause grammar —
-so they don't use tokenize()/STOPWORDS here. They do share ngrams(), which is a
-pure sequence operation independent of how the tokens were produced.
+so they don't use tokenize()/STOPWORDS here. They do share the pure sequence
+operations (ngrams(), longest_common_run(), is_contiguous_subsequence()), which
+work on a token list regardless of how the tokens were produced.
 
 Public API:
     TOKEN_RE                — the word pattern ([a-z0-9']+)
     tokenize(text)          — lowercase word tokens
     normalize_word(word)    — lowercase a word, stripped to [a-z0-9']
     ngrams(tokens, n)       — sliding window of n-word tuples over a token list
+    longest_common_run(a, b)               — longest token run shared contiguously by two token lists
+    is_contiguous_subsequence(short, long) — whether one token sequence is a contiguous run of another
     STOPWORDS               — function/filler words excluded from the content-word floor
     count_content_words(ts) — number of tokens in ts that are not stopwords
 """
@@ -34,6 +38,8 @@ __all__ = [
     "tokenize",
     "normalize_word",
     "ngrams",
+    "longest_common_run",
+    "is_contiguous_subsequence",
     "STOPWORDS",
     "count_content_words",
 ]
@@ -74,6 +80,52 @@ def ngrams(tokens: list[str], n: int) -> Iterator[tuple[str, ...]]:
     """
     for i in range(len(tokens) - n + 1):
         yield tuple(tokens[i : i + n])
+
+
+# ---------- token-sequence comparison ----------
+# Pure operations over token lists/tuples — independent of how the tokens were
+# produced, so detectors with their own tokenizers can share them too.
+
+
+def longest_common_run(a: list[str], b: list[str]) -> list[str]:
+    """Return the longest token sequence that appears contiguously in both a and
+    b (token-level longest common substring), as sliced from a.
+
+    Returns an empty list when either input is empty or they share no token. Used
+    by anti_echo to measure how much of a question copies a run of the user's
+    speech.
+    """
+    if not a or not b:
+        return []
+    best_len = 0
+    best_end = 0  # exclusive end index into a
+    prev = [0] * (len(b) + 1)
+    for i, atok in enumerate(a, start=1):
+        curr = [0] * (len(b) + 1)
+        for j, btok in enumerate(b, start=1):
+            if atok == btok:
+                run = prev[j - 1] + 1
+                curr[j] = run
+                if run > best_len:
+                    best_len = run
+                    best_end = i
+        prev = curr
+    return a[best_end - best_len : best_end]
+
+
+def is_contiguous_subsequence(short: tuple[str, ...], long: tuple[str, ...]) -> bool:
+    """True if short appears as a contiguous run of tokens inside long.
+
+    A sequence is never a strict sub-run of one no longer than itself, so an
+    equal-or-longer short returns False. Used by phrase_repetition to drop a
+    shorter n-gram that is fully contained in a longer one.
+    """
+    if len(short) >= len(long):
+        return False
+    for i in range(len(long) - len(short) + 1):
+        if long[i : i + len(short)] == short:
+            return True
+    return False
 
 
 # ---------- stopwords / content filter ----------

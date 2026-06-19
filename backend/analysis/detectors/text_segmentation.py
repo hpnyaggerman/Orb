@@ -19,6 +19,11 @@ Two splitting functions serve two families of consumers:
 find_quote_spans and count_sentences support structural_repetition, which
 classifies blocks rather than stripping them but still needs the same quote and
 terminator definitions.
+
+strip_ooc and ends_with_question support anti_echo: strip_ooc removes the
+[OOC: ...] directives that aren't in-character speech, and ends_with_question
+classifies a sentence by its terminator (using the same trailing-marker
+tolerance as SENT_SPLIT).
 """
 
 from __future__ import annotations
@@ -36,11 +41,13 @@ __all__ = [
     "split_sentences",
     "extract_narration",
     "split_narration_sentences",
+    "strip_ooc",
     "find_quote_spans",
     "find_emphasis_spans",
     "extract_block_spans",
     "extract_blocks",
     "count_sentences",
+    "ends_with_question",
 ]
 
 
@@ -152,6 +159,30 @@ def split_narration_sentences(text: str) -> list[str]:
     return sentences
 
 
+# ---------- out-of-character asides ----------
+
+# Out-of-character asides are wrapped in square brackets in this app (the system
+# itself emits ``[OOC: ...]`` directives, and users follow the same convention).
+# They are instructions *to* the model, not in-character speech — including any
+# quotes nested inside them. Matching the innermost brackets and re-running until
+# stable clears nested asides without letting a stray inner quote survive.
+_OOC_BRACKET_RE = re.compile(r"\[[^\[\]]*\]")
+
+
+def strip_ooc(text: str) -> str:
+    """Remove [OOC: ...] out-of-character asides, replacing each with a space
+    so the words on either side don't fuse into one token.
+
+    Used by anti_echo to drop the user's directives (and any quotes nested
+    inside them) before reading their in-character dialogue.
+    """
+    prev = None
+    while prev != text:
+        prev = text
+        text = _OOC_BRACKET_RE.sub(" ", text)
+    return text
+
+
 # ---------- structural helpers ----------
 
 
@@ -196,6 +227,22 @@ def count_sentences(text: str) -> int:
         return 0
     pieces = [s.strip() for s in SENT_SPLIT.split(stripped) if s.strip()]
     return len(pieces) if pieces else 1
+
+
+# Trailing closing markers SENT_SPLIT tolerates after a terminator, plus the
+# other terminal punctuation that can ride alongside a ``?`` (e.g. "?!", "??").
+_TRAILING_MARKERS = " \t\n\"”’'*_)]}>"
+_TRAILING_TERMINALS = "!.…"
+
+
+def ends_with_question(sentence: str) -> bool:
+    """True when the sentence ends with a question mark, allowing for trailing
+    closing markers (quotes, markdown emphasis) and adjacent terminals like "?!".
+
+    Used by anti_echo to pick out the interrogative sentences in a draft.
+    """
+    trimmed = sentence.rstrip(_TRAILING_MARKERS).rstrip(_TRAILING_TERMINALS)
+    return trimmed.endswith("?")
 
 
 # ---------- block extraction (SPEECH / EMPHASIS / NARRATION) ----------

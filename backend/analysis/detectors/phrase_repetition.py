@@ -36,7 +36,7 @@ import os
 import sys
 from dataclasses import dataclass, field
 
-from .lexical import count_content_words, ngrams, tokenize
+from .lexical import count_content_words, is_contiguous_subsequence, ngrams, tokenize
 from .text_segmentation import split_narration_sentences
 
 DEBUG = "DEBUG_PHRASE_REPETITION" in os.environ
@@ -73,16 +73,8 @@ _split_sentences = split_narration_sentences
 
 
 # ---------- n-gram suppression ----------
-# n-gram extraction itself lives in lexical (shared, was duplicated here).
-
-
-def _is_contiguous_sub(short: tuple[str, ...], long: tuple[str, ...]) -> bool:
-    if len(short) >= len(long):
-        return False
-    for i in range(len(long) - len(short) + 1):
-        if long[i : i + len(short)] == short:
-            return True
-    return False
+# n-gram extraction and the contiguous-containment test both live in lexical
+# (shared, were duplicated here); this module keeps only the suppression policy.
 
 
 def _suppress_subgrams(
@@ -100,7 +92,7 @@ def _suppress_subgrams(
         items.sort(key=lambda x: len(x[0]), reverse=True)
         kept: list[tuple[str, ...]] = []
         for gram, docs in items:
-            if any(_is_contiguous_sub(gram, k) for k in kept):
+            if any(is_contiguous_subsequence(gram, k) for k in kept):
                 continue
             kept.append(gram)
             survivors[gram] = docs

@@ -36,14 +36,15 @@ How it works:
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 
-from .lexical import count_content_words, tokenize
+from .lexical import count_content_words, longest_common_run, tokenize
 from .text_segmentation import (
+    ends_with_question,
     find_quote_spans,
     split_narration_sentences,
     split_sentences,
+    strip_ooc,
 )
 
 __all__ = [
@@ -69,57 +70,10 @@ class EchoResult:
 
 
 # ---------- text processing ----------
-
-# Out-of-character asides are wrapped in square brackets in this app (the system
-# itself emits ``[OOC: ...]`` directives, and users follow the same convention).
-# They are instructions *to* the model, not in-character speech — including any
-# quotes nested inside them — so they're removed before the user's dialogue is
-# read. Matching the innermost brackets and re-running until stable clears nested
-# asides without letting a stray inner quote survive.
-_OOC_BRACKET_RE = re.compile(r"\[[^\[\]]*\]")
-
-# Trailing closing markers SENT_SPLIT tolerates after a terminator, plus the
-# other terminal punctuation that can ride alongside a ``?`` (e.g. "?!", "??").
-_TRAILING_MARKERS = " \t\n\"”’'*_)]}>"
-_TRAILING_TERMINALS = "!.…"
-
-
-def _strip_ooc(text: str) -> str:
-    """Remove [OOC: ...] out-of-character asides, replacing each with a space
-    so the words on either side don't fuse into one token."""
-    prev = None
-    while prev != text:
-        prev = text
-        text = _OOC_BRACKET_RE.sub(" ", text)
-    return text
-
-
-def _ends_with_question(sentence: str) -> bool:
-    """True when the sentence ends with a question mark, allowing for trailing
-    closing markers (quotes, markdown emphasis) and adjacent terminals like "?!"."""
-    trimmed = sentence.rstrip(_TRAILING_MARKERS).rstrip(_TRAILING_TERMINALS)
-    return trimmed.endswith("?")
-
-
-def _longest_common_run(candidate: list[str], user_tokens: list[str]) -> list[str]:
-    """Return the longest word sequence from candidate that also appears
-    contiguously in user_tokens (token-level longest common substring)."""
-    if not candidate or not user_tokens:
-        return []
-    best_len = 0
-    best_end = 0  # exclusive end index into *candidate*
-    prev = [0] * (len(user_tokens) + 1)
-    for i, ctok in enumerate(candidate, start=1):
-        curr = [0] * (len(user_tokens) + 1)
-        for j, utok in enumerate(user_tokens, start=1):
-            if ctok == utok:
-                run = prev[j - 1] + 1
-                curr[j] = run
-                if run > best_len:
-                    best_len = run
-                    best_end = i
-        prev = curr
-    return candidate[best_end - best_len : best_end]
+# Dialogue segmentation (strip_ooc, find_quote_spans, sentence splitting,
+# ends_with_question) and token-sequence comparison (longest_common_run) live in
+# the shared helper modules; the glue below assembles them into the user-dialogue
+# pool and the draft's question candidates.
 
 
 def _user_dialogue_runs(user_message: str) -> list[list[str]]:
@@ -130,7 +84,7 @@ def _user_dialogue_runs(user_message: str) -> list[list[str]]:
     own token list so a shared run can't bridge two separate utterances. A
     message with no quoted dialogue returns an empty list, leaving nothing to
     compare against."""
-    cleaned = _strip_ooc(user_message)
+    cleaned = strip_ooc(user_message)
     runs: list[list[str]] = []
     for start, end in find_quote_spans(cleaned):
         toks = tokenize(cleaned[start + 1 : end - 1])
@@ -143,7 +97,7 @@ def _longest_run_against_any(candidate: list[str], user_runs: list[list[str]]) -
     """Longest contiguous word sequence candidate shares with any single user spoken span."""
     best: list[str] = []
     for toks in user_runs:
-        run = _longest_common_run(candidate, toks)
+        run = longest_common_run(candidate, toks)
         if len(run) > len(best):
             best = run
     return best
@@ -164,7 +118,7 @@ def _interrogative_candidates(draft: str) -> list[str]:
     # Narration: dialogue is stripped, so quoted questions are not double-counted.
     candidates.extend(split_narration_sentences(draft))
 
-    return [s for s in candidates if _ends_with_question(s)]
+    return [s for s in candidates if ends_with_question(s)]
 
 
 # ---------- public entry point ----------
