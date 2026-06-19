@@ -262,6 +262,59 @@ def build_director_tool_prompt(
     return "\n\n".join(parts)
 
 
+def _render_decided(value: Any) -> str:
+    return ", ".join(str(x) for x in value) if isinstance(value, list) else str(value)
+
+
+def build_director_scene_step_prompt(
+    user_message: str,
+    active_moods: list[str],
+    mood_fragments: Sequence[Mapping[str, Any]],
+    *,
+    tool_schema: dict | None = None,
+    reasoning_on: bool = False,
+    target_fragment: Mapping[str, Any] | None = None,
+    decided_fields: Sequence[tuple[str, Any]] = (),
+    progressive_prior: Any = None,
+    lorebook_catalog: str = "",
+) -> str:
+    """Build one ``direct_scene`` request that targets a single output.
+
+    With ``target_fragment`` None the model is asked only for ``moods`` and the
+    lorebook selection; otherwise only for the named fragment, with the values
+    already chosen this turn (``decided_fields``) shown so it can build on them.
+    """
+    schema = tool_schema if tool_schema is not None else TOOLS["direct_scene"]["schema"]
+    desc = schema["function"]["description"]
+    parts = [DIRECTOR_PREAMBLE + (REASONING_GUIDANCE if reasoning_on else "")]
+
+    if target_fragment is None:
+        wanted = "moods" + (", selected_lorebook_entries" if lorebook_catalog else "")
+        parts.append(f"Call ONLY direct_scene - {desc}\nFill ONLY: {wanted}. Leave every scene-direction field empty.")
+        moods = ", ".join(active_moods) or "none"
+        frags = "\n".join(f"* [{f['id']}] - use in case: {f['description']}" for f in mood_fragments)
+        parts.append(f"Previously active moods: {moods}\n\nAvailable writing moods:\n{frags}")
+        if lorebook_catalog:
+            parts.append(lorebook_catalog)
+    else:
+        fid = target_fragment["id"]
+        hint = {"array": "list of strings", "progressive": "single value, evolves across turns"}.get(
+            target_fragment["field_type"], "single value"
+        )
+        parts.append(
+            f"Call ONLY direct_scene - {desc}\nFill ONLY the '{fid}' parameter. Leave moods and all other fields empty."
+        )
+        parts.append(f"Field '{fid}' ({hint}): {target_fragment['description']}")
+        prior = [f"- {label}: {_render_decided(value)}" for label, value in decided_fields if value]
+        if prior:
+            parts.append("Decided so far this turn (build on these, do not contradict):\n" + "\n".join(prior))
+        if target_fragment["field_type"] == "progressive" and progressive_prior:
+            parts.append(f"Previous value (update it): {progressive_prior}")
+
+    parts.append(f'User\'s next message (context):\n"""{user_message}"""')
+    return "\n\n".join(parts)
+
+
 def build_feedback_prompt(
     feedback_fragments: Sequence[Mapping[str, Any]],
     reasoning_on: bool = False,

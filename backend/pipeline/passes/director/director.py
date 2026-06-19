@@ -19,6 +19,7 @@ from ....inference import (
     LLMClient,
     _KVCacheTracker,
     build_direct_scene_tool,
+    build_director_scene_step_prompt,
     build_director_tool_prompt,
     compute_style_injection_block,
     parse_tool_calls,
@@ -168,11 +169,79 @@ async def director_pass(
         (json.dumps([s["function"]["name"] for s in tool_schemas]) if tool_schemas else "[]"),
     )
 
+    per_fragment_on = bool(settings.get("director_individual_fragments", 0))
+
     t0 = time.monotonic()
     for name in tool_names:
         if client.is_aborted:
             break
         tool_schema = next((s for s in tool_schemas if s["function"]["name"] == name), None)
+        if name == "direct_scene" and per_fragment_on and interactive_fragments:
+            reasoning_params = reasoning_cfg(reasoning_on and not suppresses_reasoning(name))
+            hyperparams = extract_hyperparams(settings, defaults={"temperature": 0.25, "max_tokens": 8192})
+
+            # One forced call per fragment, each shown the values already chosen
+            # this turn so later fragments build on earlier ones. Moods and the
+            # lorebook selection are resolved first, in a call of their own.
+            decided: list[tuple[str, Any]] = []
+            for stage in [None, *interactive_fragments]:
+                if client.is_aborted:
+                    break
+                target = stage["id"] if stage else "moods"
+                step_tail = build_director_scene_step_prompt(
+                    user_message,
+                    active_moods,
+                    mood_fragments,
+                    tool_schema=tool_schema,
+                    reasoning_on=reasoning_on,
+                    target_fragment=stage,
+                    decided_fields=decided,
+                    progressive_prior=(progressive_state or {}).get(stage["id"]) if stage else None,
+                    lorebook_catalog=lorebook_catalog if stage is None else "",
+                )
+                step_tail = ("___\n\n" + lorebook_block + "\n\n" if lorebook_block else "") + step_tail
+                content = build_multimodal_content(step_tail, attachments)
+                trailing = [{"role": "user", "content": content}]
+                logger.info(
+                    "Agent tool=direct_scene target=%s prompt:\n%s",
+                    target,
+                    json.dumps([*base.prefix, *trailing], indent=2, ensure_ascii=False),
+                )
+                resp = {}
+                async for event in base.complete(
+                    client,
+                    label="director:direct_scene",
+                    trailing=trailing,
+                    tool_choice=TOOLS["direct_scene"]["choice"],
+                    kv_tracker=kv_tracker,
+                    **hyperparams,
+                    **reasoning_params,
+                ):
+                    if event["type"] == "reasoning":
+                        yield {"type": "reasoning", "delta": event["delta"]}
+                    elif event["type"] == "done":
+                        resp = event["message"]
+                last_raw = json.dumps(resp, default=str)
+                logger.info("Agent tool=direct_scene target=%s output:\n%s", target, last_raw)
+                parsed = parse_tool_calls(resp)
+                if not parsed:
+                    logger.info("Agent tool=direct_scene target=%s: model skipped", target)
+                    continue
+                all_calls.extend(parsed)
+                if stage is None:
+                    # Reuse the shared unpacker so moods and lorebook behave exactly
+                    # as in the combined call; any fragment values it returns are
+                    # dropped, each fragment being produced in its own call.
+                    active_moods, _, _, new_lorebook = apply_tool_calls(parsed, active_moods)
+                    if new_lorebook:
+                        selected_lorebook_entries = new_lorebook
+                else:
+                    args = next((tc.get("arguments", {}) for tc in parsed if tc.get("name") == "direct_scene"), {})
+                    val = args.get(stage["id"])
+                    if val not in (None, "", []):
+                        extra_fields[stage["id"]] = val
+                    decided.append((stage["injection_label"], val))
+            continue
         tool_tail = build_director_tool_prompt(
             name,
             user_message,
