@@ -46,6 +46,7 @@ export const S = {
   reasoningEditor: "", // also carries the feedback sub-step's reasoning (folded into the editor channel)
   lastFeedback: null, // {values: {...}} from the editor feedback sub-step for the current/streamed turn (null when none)
   feedbackEnabled: false,
+  directorIndividualFragments: false,
   reasoningPassActive: 0,
   reasoningPassSelected: 0,
   reasoningUserOverride: false,

@@ -48,6 +48,7 @@ class SettingsUpdate(BaseModel):
     agent_endpoint_id: Optional[int] = None
     agent_shared_system_prompt: Optional[str] = None
     feedback_enabled: Optional[bool] = None
+    director_individual_fragments: Optional[bool] = None
     inspector_open_states: Optional[dict] = None
     workflows_globally_enabled: Optional[bool] = None
 

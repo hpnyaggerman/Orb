@@ -87,6 +87,7 @@ export async function loadSettings() {
   // Editor Feedback: a feature flag (post-writer user-facing note). Gated here
   // and again by at least one enabled feedback-type interactive fragment server-side.
   S.feedbackEnabled = Boolean(S.settings.feedback_enabled);
+  S.directorIndividualFragments = Boolean(S.settings.director_individual_fragments);
 
   if (S.settings.length_guard_max_words) S.lengthGuardMaxWords = S.settings.length_guard_max_words;
   if (S.settings.length_guard_max_paragraphs) S.lengthGuardMaxParagraphs = S.settings.length_guard_max_paragraphs;
@@ -297,6 +298,12 @@ export async function toggleFeedbackEnabled(on) {
   // Feedback fragments in the sidebar are greyed out when this feature is off.
   renderInteractiveFragments();
   await persistSettings({ feedback_enabled: on });
+}
+
+export async function toggleDirectorIndividualFragments(on) {
+  S.directorIndividualFragments = on;
+  renderToolsPanel();
+  await persistSettings({ director_individual_fragments: on });
 }
 
 export async function toggleShowEditorDiff(on) {
@@ -533,7 +540,19 @@ export function renderToolsPanel() {
     <div class="tool-card-desc">After each reply, surfaces a note to you (e.g. what you could do next). Runs only when at least one interactive fragment has its Field Type set to "feedback".</div>
   </div>`;
 
-  $("tools-list").innerHTML = toolCards + lengthGuardCard + feedbackCard;
+  const ifpOn = S.directorIndividualFragments;
+  const individualFragmentsCard = `<div class="tool-card ${ifpOn ? "tool-on" : ""}">
+    <div class="tool-card-header">
+      <span class="tool-card-name">Individual Fragment Processing</span>
+      <label class="tog" onclick="event.stopPropagation()">
+        <input type="checkbox" ${ifpOn ? "checked" : ""} onchange="toggleDirectorIndividualFragments(this.checked)">
+        <span class="tog-slider"></span>
+      </label>
+    </div>
+    <div class="tool-card-desc">Director fills each interactive fragment in its own LLM call. More focused output; higher latency.</div>
+  </div>`;
+
+  $("tools-list").innerHTML = toolCards + lengthGuardCard + feedbackCard + individualFragmentsCard;
 
   const secEl = $("tools-list-secondary");
   if (secEl) {

@@ -97,6 +97,7 @@ class _SettingsBase(TypedDict):
     agent_same_as_writer: bool
     agent_shared_system_prompt: str
     feedback_enabled: int
+    director_individual_fragments: int
     workflows_globally_enabled: int
 
 
