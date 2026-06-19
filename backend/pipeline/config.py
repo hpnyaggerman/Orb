@@ -18,6 +18,7 @@ from typing import Any, Mapping, Sequence
 from ..core import ChatMessage, Macros
 from ..database.models import PhraseGroup
 from ..inference import CachedBase, LLMClient, enabled_schemas
+from ..workflows.enablement import disabled_workflow_tool_names
 from .passes.director import build_direct_scene_override
 from .passes.editor import _feedback_active, build_feedback_override
 from .passes.editor.length_guard import (
@@ -47,6 +48,11 @@ def _resolve_pipeline_config(
     writer and agent lanes, and returns a :class:`_PipelineConfig`. Called once
     per turn by ``_run_pipeline`` and ``handle_magic_rewrite``.
     """
+    # Drop a disabled workflow's tools from the per-turn blob at the single
+    # chokepoint that builds it, covering both the standing enabled_tools map and
+    # any per-turn enable. Empty no-op when no disabled workflow owns tools.
+    enabled_tools = {k: v for k, v in enabled_tools.items() if k not in disabled_workflow_tool_names(settings)}
+
     agent_on = agent_enabled(settings)
     reasoning_passes = settings.get("reasoning_enabled_passes") or {}
 

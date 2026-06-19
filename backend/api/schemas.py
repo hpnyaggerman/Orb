@@ -50,12 +50,19 @@ class SettingsUpdate(BaseModel):
     feedback_enabled: Optional[bool] = None
     director_individual_fragments: Optional[bool] = None
     inspector_open_states: Optional[dict] = None
+    workflows_globally_enabled: Optional[bool] = None
 
 
 class WorkflowConfigUpdate(BaseModel):
     # Required (no default): a body lacking "config" is a 422, not a silent
     # clear; an explicit {"config": {}} is the intentional reset-to-defaults.
     config: dict
+
+
+class WorkflowEnabledUpdate(BaseModel):
+    # Required (no default): a body lacking "enabled" is a 422, mirroring
+    # WorkflowConfigUpdate -- the per-workflow toggle is never an implicit value.
+    enabled: bool
 
 
 class EndpointCreate(BaseModel):

@@ -9,7 +9,7 @@ import {
   _renderWorkflowArtifacts,
   _renderWorkflowRejection,
 } from "./chat_workflow.js";
-import { S } from "./state.js";
+import { S, effectiveWorkflowEnabled } from "./state.js";
 import { requestSendPermission } from "./tabLock.js";
 import { segmentBody } from "./workflow_segmentation.js";
 import { markClickable } from "./workflow_text_interaction.js";
@@ -153,9 +153,10 @@ export function buildMsgToolbar(m, childByParent = null) {
 function _renderExtraButtons(msg) {
   if (!S.workflowMessageButtonRenderers.length) return "";
   let html = "";
-  for (const fn of S.workflowMessageButtonRenderers) {
+  for (const { workflowId, render } of S.workflowMessageButtonRenderers) {
+    if (!effectiveWorkflowEnabled(workflowId)) continue;
     try {
-      const piece = fn(msg);
+      const piece = render(msg);
       if (typeof piece === "string" && piece) html += piece;
     } catch (e) {
       console.error("workflow message button renderer threw:", e);

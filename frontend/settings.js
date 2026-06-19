@@ -4,12 +4,12 @@
 // bank, and reset-to-defaults, and re-exports the two sub-modules so existing
 // importers (app.js, workflow_loader.js) keep working unchanged.
 import { api } from "./api.js";
-import { renderMessages } from "./chat.js";
+import { renderInspectorSecondary, renderMessages } from "./chat.js";
 import { renderInteractiveFragments } from "./library_fragments.js";
 import { closeModal, showConfirmModal, showModal } from "./modal.js";
 import { initComboboxes, loadAgentModelConfigs, loadEndpoints, renderEndpoints } from "./settings_models.js";
 import { loadPersonas, updateUserBtn } from "./settings_personas.js";
-import { S } from "./state.js";
+import { S, effectiveWorkflowEnabled } from "./state.js";
 import { $, esc, toast } from "./utils.js";
 import { validate } from "./validate.js";
 
@@ -355,6 +355,76 @@ export async function saveLengthGuardConfig() {
   }
 }
 
+// -- Workflow enable/disable toggles (Agents panel, Secondary tab)
+//
+// Two storage columns back these: workflows_globally_enabled (master) and the
+// workflow_enabled {wid: bool} map. The master persists through the normal settings
+// PUT; each per-workflow flip goes through its dedicated per-key route (which writes
+// only that key), never the full-column settings PUT, so two tabs flipping different
+// workflows cannot clobber each other.
+
+export async function toggleWorkflowsGlobal(on) {
+  await persistSettings({ workflows_globally_enabled: on });
+  renderToolsPanel();
+  renderMessages();
+  renderInspectorSecondary();
+}
+
+export async function toggleWorkflowEnabled(wid, on) {
+  try {
+    const res = await api.post("/workflows/" + wid + "/enabled", { enabled: on });
+    if (res && typeof res.workflow_enabled === "object") S.settings.workflow_enabled = res.workflow_enabled;
+  } catch (e) {
+    toast("Failed to toggle workflow", true);
+  }
+  // Re-render regardless: on success the reassigned map drives the new state; on
+  // failure the unchanged stored value reverts the checkbox.
+  renderToolsPanel();
+  renderMessages();
+  renderInspectorSecondary();
+}
+
+// Master row plus one row per manifest workflow, prepended above the config cards in
+// the Secondary tab. Empty when no workflow exists so the panel's "no workflows"
+// fallback still shows. Each per-workflow checkbox reflects effective state -- so the
+// master being off shows every row unchecked, greyed, and disabled (the dependent-
+// disable pattern) while the stored per-workflow value is preserved (the master
+// writes a separate column).
+function buildWorkflowToggleRows() {
+  if (!S.workflowManifest.length) return "";
+  const g = S.settings?.workflows_globally_enabled;
+  const globalOn = g === undefined ? true : Boolean(g);
+
+  const masterRow = `<div class="tool-card ${globalOn ? "tool-on" : ""}">
+    <div class="tool-card-header">
+      <span class="tool-card-name">Enable workflows</span>
+      <label class="tog" onclick="event.stopPropagation()">
+        <input type="checkbox" ${globalOn ? "checked" : ""} onchange="toggleWorkflowsGlobal(this.checked)">
+        <span class="tog-slider"></span>
+      </label>
+    </div>
+    <div class="tool-card-desc">Master switch for secondary workflows. Off suspends every workflow's hooks and production controls; existing attachments stay viewable.</div>
+  </div>`;
+
+  const workflowRows = S.workflowManifest
+    .map((w) => {
+      const effOn = effectiveWorkflowEnabled(w.id);
+      return `<div class="tool-card ${effOn ? "tool-on" : ""}"${globalOn ? "" : ' style="opacity:0.5"'}>
+    <div class="tool-card-header">
+      <span class="tool-card-name">${esc(w.display_name || w.id)}</span>
+      <label class="tog" onclick="event.stopPropagation()">
+        <input type="checkbox" ${effOn ? "checked" : ""} ${globalOn ? "" : "disabled"} onchange="toggleWorkflowEnabled('${w.id}', this.checked)">
+        <span class="tog-slider"></span>
+      </label>
+    </div>
+    ${globalOn ? "" : '<div class="tool-card-desc"><em>Workflows globally off.</em></div>'}
+  </div>`;
+    })
+    .join("");
+
+  return masterRow + workflowRows;
+}
+
 export function renderToolsPanel() {
   $("agent-enable-chk").checked = S.agentEnabled;
   $("tools-panel-btn").style.opacity = S.agentEnabled ? "1" : "0.5";
@@ -471,16 +541,19 @@ export function renderToolsPanel() {
   const secEl = $("tools-list-secondary");
   if (secEl) {
     let secHtml = "";
-    for (const fn of S.workflowToolsPanelRenderers) {
+    for (const { workflowId, render } of S.workflowToolsPanelRenderers) {
+      if (!effectiveWorkflowEnabled(workflowId)) continue;
       try {
-        const piece = fn();
+        const piece = render();
         if (typeof piece === "string" && piece) secHtml += piece;
       } catch (e) {
         console.error("workflow tools-panel renderer threw:", e);
       }
     }
+    const toggleRows = buildWorkflowToggleRows();
     secEl.innerHTML =
-      secHtml || `<div style="color:var(--text-muted);font-size:12px;padding:8px 0;">No workflows registered.</div>`;
+      toggleRows + secHtml ||
+      `<div style="color:var(--text-muted);font-size:12px;padding:8px 0;">No workflows registered.</div>`;
   }
 }
 

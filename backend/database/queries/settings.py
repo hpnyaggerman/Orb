@@ -29,6 +29,7 @@ async def get_settings() -> SettingsRow:
             or '{"banned_phrases":true,"repetitive_openers":true,"repetitive_templates":true,'
             '"contrastive_negation":true,"phrase_repetition":true,"structural_repetition":true}'
         )
+        s["workflow_enabled"] = json.loads(s.get("workflow_enabled") or "{}")
         # Overlay endpoint_url, api_key, model_name, and hyperparameters from the
         # active endpoint's active model config so callers always get live values
         # rather than the stale flat columns.
@@ -167,6 +168,27 @@ async def set_workflow_config(workflow_id: str, payload: dict) -> None:
         await db.commit()
 
 
+async def set_workflow_enabled(workflow_id: str, enabled: bool) -> None:
+    """Set one workflow's on/off flag via a per-key JSON1 write.
+
+    Writes only the named key in the ``workflow_enabled`` map, never the whole
+    column, so two tabs flipping different workflows cannot clobber each other.
+    The ``json_set`` is a single atomic statement at the SQL layer with no
+    Python-side read-modify-write window, so it needs no application lock --
+    unlike ``set_workflow_config``, whose callers compute the payload from a
+    prior read. A missing key reads back as enabled, so this is the only writer
+    the per-workflow toggle ever needs.
+    """
+    async with get_db() as db:
+        await db.execute(
+            "UPDATE settings "
+            "SET workflow_enabled = json_set(COALESCE(workflow_enabled, '{}'), '$.' || ?, json(?)) "
+            "WHERE id = 1",
+            (workflow_id, json.dumps(bool(enabled))),
+        )
+        await db.commit()
+
+
 async def update_settings(data: dict) -> SettingsRow:
     async with get_db() as db:
         allowed = [
@@ -205,6 +227,7 @@ async def update_settings(data: dict) -> SettingsRow:
             "feedback_enabled",
             "director_individual_fragments",
             "inspector_open_states",
+            "workflows_globally_enabled",
         ]
         sets, vals = _build_set_clause(
             allowed,

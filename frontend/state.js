@@ -83,10 +83,13 @@ export const S = {
 
   // Workflow slot registries -- pushed into at module load by workflow JS files.
   // Built-in chat/settings/index code iterates these; no built-in code knows about specific workflows.
-  workflowInspectorCardRenderers: [], // [() => htmlString], rendered into the Inspector Secondary tab (global panel, no per-message context)
-  workflowToolsPanelRenderers: [], // [() => htmlString], rendered into the Agents panel Secondary tab
-  workflowMessageButtonRenderers: [], // [(msg) => htmlString], extra per-message toolbar buttons
-  workflowEventHandlers: {}, // {[event_name]: (data, msgDiv|null) => void}, custom SSE event dispatch
+  // The four production registries below carry the owning workflowId so the framework can filter each
+  // entry by effectiveWorkflowEnabled(workflowId) at its read site: a disabled workflow's production
+  // surfaces vanish while its consumption surfaces (attachment renderer, audio, swipe/delete) stay live.
+  workflowInspectorCardRenderers: [], // [{workflowId, render: () => htmlString}], Inspector Secondary cards
+  workflowToolsPanelRenderers: [], // [{workflowId, render: () => htmlString}], Agents-panel Secondary cards
+  workflowMessageButtonRenderers: [], // [{workflowId, render: (msg) => htmlString}], extra per-message toolbar buttons
+  workflowEventHandlers: {}, // {[event_name]: {workflowId, handler: (data, msgDiv|null) => void}}, custom SSE dispatch
   workflowAttachmentRenderers: {}, // {[workflow_id]: (ctx) => htmlString} where ctx = {att, buttons:{regen,reroll}, defaultHtml}; defaultHtml is the complete default rendering (media plus the regen/reroll button strip) -- returning it reproduces the framework default exactly. buttons.regen/buttons.reroll are the individual button strings, already contained in defaultHtml, for authors who place the controls themselves; splice defaultHtml OR the buttons, not both (both double the strip). One renderer per workflow_id -- a workflow producing multiple attachment kinds should register as multiple workflow ids rather than branching inside one renderer. Widget renders one row (the active sibling)
   workflowPipelines: [], // [{id, label, passes:[{id,label}]}], pushed by registerWorkflowPipeline
   workflowState: {}, // {[workflow_id]: any}, per-workflow opaque UI state
@@ -109,6 +112,21 @@ export const S = {
   // into footer chips (null tag) and per-widget chips (root_id tag).
   rejectedWorkflowAtts: [],
 };
+
+// Mirrors the backend truth table (backend/workflows/enablement.py): a workflow
+// is effective only when the global master and its per-workflow flag are both on,
+// each defaulting to on when its value is missing. Reads S.settings directly (the
+// single source), so a toggle takes effect at the next render with no refetch, and
+// it is safe before loadSettings populates S.settings (defaults to enabled). The
+// typeof guard mirrors the backend's defensive coercion: a malformed
+// workflow_enabled degrades to enabled rather than throwing at every gate.
+export function effectiveWorkflowEnabled(wid) {
+  const g = S.settings?.workflows_globally_enabled;
+  const globalOn = g === undefined ? true : Boolean(g);
+  const map = (S.settings && typeof S.settings.workflow_enabled === "object" && S.settings.workflow_enabled) || {};
+  const localOn = wid in map ? Boolean(map[wid]) : true;
+  return globalOn && localOn;
+}
 
 const RESERVED_PASS_IDS = new Set(["director", "writer", "editor"]);
 
@@ -191,4 +209,53 @@ export function registerClickHandler(entry) {
   const existing = S.workflowClickHandlers.findIndex((e) => e.id === entry.id);
   if (existing >= 0) S.workflowClickHandlers[existing] = record;
   else S.workflowClickHandlers.push(record);
+}
+
+// Production registrars. Each entry carries its owning workflowId so the framework
+// suppresses it for a disabled workflow at the read site. Validation matches the
+// registrars above (console.error and skip on a bad arg). Idempotent on workflowId:
+// re-registering the same workflow replaces its entry rather than duplicating it.
+function _registerWorkflowArrayEntry(arr, workflowId, render, where) {
+  if (typeof workflowId !== "string" || !workflowId) {
+    console.error(where + ": missing or empty workflowId", workflowId);
+    return;
+  }
+  if (typeof render !== "function") {
+    console.error(where + ": render must be a function (workflow " + workflowId + ")");
+    return;
+  }
+  const record = { workflowId, render };
+  const existing = arr.findIndex((e) => e.workflowId === workflowId);
+  if (existing >= 0) arr[existing] = record;
+  else arr.push(record);
+}
+
+export function registerWorkflowInspectorCard(workflowId, render) {
+  _registerWorkflowArrayEntry(S.workflowInspectorCardRenderers, workflowId, render, "registerWorkflowInspectorCard");
+}
+
+export function registerWorkflowToolsPanelCard(workflowId, render) {
+  _registerWorkflowArrayEntry(S.workflowToolsPanelRenderers, workflowId, render, "registerWorkflowToolsPanelCard");
+}
+
+export function registerWorkflowMessageButton(workflowId, render) {
+  _registerWorkflowArrayEntry(S.workflowMessageButtonRenderers, workflowId, render, "registerWorkflowMessageButton");
+}
+
+// Keyed by event name (last writer per event wins), so the workflowId rides along
+// for the read-site gate rather than acting as the map key.
+export function registerWorkflowEventHandler(workflowId, event, handler) {
+  if (typeof workflowId !== "string" || !workflowId) {
+    console.error("registerWorkflowEventHandler: missing or empty workflowId", workflowId);
+    return;
+  }
+  if (typeof event !== "string" || !event) {
+    console.error("registerWorkflowEventHandler: missing or empty event (workflow " + workflowId + ")");
+    return;
+  }
+  if (typeof handler !== "function") {
+    console.error("registerWorkflowEventHandler: handler must be a function (workflow " + workflowId + ")");
+    return;
+  }
+  S.workflowEventHandlers[event] = { workflowId, handler };
 }

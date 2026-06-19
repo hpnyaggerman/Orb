@@ -201,6 +201,7 @@ DEFAULT_SETTINGS = {
     "agent_shared_system_prompt": "",
     "feedback_enabled": 0,
     "director_individual_fragments": 0,
+    "workflows_globally_enabled": 1,
 }
 
 

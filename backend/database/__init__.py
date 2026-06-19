@@ -93,6 +93,7 @@ from .queries.settings import (
     get_settings,
     get_workflow_config,
     set_workflow_config,
+    set_workflow_enabled,
     update_settings,
 )
 from .queries.stats import add_generated_chars, get_generated_chars, get_global_stats
@@ -212,6 +213,7 @@ __all__ = [
     "set_active_leaf",
     "set_workflow_character_state",
     "set_workflow_config",
+    "set_workflow_enabled",
     "set_workflow_message_state",
     "set_workflow_state",
     "switch_to_branch",
