@@ -60,17 +60,13 @@ function triggerUrl() {
   return convUrl(S.activeConvId, "workflows", WORKFLOW_ID, "trigger");
 }
 
-// Tools-panel card: one compact entry that opens the settings in a modal, so a
-// shipped workflow occupies a single row in the shared panel rather than
-// spilling its whole form into it.
+// Tools-panel card body: the framework owns the card frame (name + on/off toggle);
+// this fills in the description and a Settings button that opens the full form in a
+// modal, so the workflow stays a single entry rather than spilling its whole form
+// into the panel.
 export function configPanelRenderer() {
-  return `<div class="tool-card">
-    <div class="tool-card-header">
-      <span class="tool-card-name">Text-to-Speech</span>
-      <button class="tts-settings-btn" onclick="window.ttsOpenSettings()">Settings</button>
-    </div>
-    <div class="tool-card-desc">Generate and play spoken audio for assistant replies.</div>
-  </div>`;
+  return `<div class="tool-card-desc">Generate and play spoken audio for assistant replies.</div>
+    <button class="tts-settings-btn" onclick="window.ttsOpenSettings()">Settings</button>`;
 }
 
 function settingsBodyHtml() {

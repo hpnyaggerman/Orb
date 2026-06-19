@@ -86,7 +86,7 @@ export const S = {
   // entry by effectiveWorkflowEnabled(workflowId) at its read site: a disabled workflow's production
   // surfaces vanish while its consumption surfaces (attachment renderer, audio, swipe/delete) stay live.
   workflowInspectorCardRenderers: [], // [{workflowId, render: () => htmlString}], Inspector Secondary cards
-  workflowToolsPanelRenderers: [], // [{workflowId, render: () => htmlString}], Agents-panel Secondary cards
+  workflowToolsPanelRenderers: [], // [{workflowId, render: () => htmlString}], Agents-panel Secondary card body folded into the workflow's on/off card (the framework owns the name + toggle header; render() returns the body below it)
   workflowMessageButtonRenderers: [], // [{workflowId, render: (msg) => htmlString}], extra per-message toolbar buttons
   workflowEventHandlers: {}, // {[event_name]: {workflowId, handler: (data, msgDiv|null) => void}}, custom SSE dispatch
   workflowAttachmentRenderers: {}, // {[workflow_id]: (ctx) => htmlString} where ctx = {att, buttons:{regen,reroll}, defaultHtml}; defaultHtml is the complete default rendering (media plus the regen/reroll button strip) -- returning it reproduces the framework default exactly. buttons.regen/buttons.reroll are the individual button strings, already contained in defaultHtml, for authors who place the controls themselves; splice defaultHtml OR the buttons, not both (both double the strip). One renderer per workflow_id -- a workflow producing multiple attachment kinds should register as multiple workflow ids rather than branching inside one renderer. Widget renders one row (the active sibling)

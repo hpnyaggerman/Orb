@@ -14,7 +14,7 @@ A workflow is a Python record in the process-local registry -- one record per wo
 - Carry state across four DB-backed tiers (conversation, message, character, config) plus one in-memory per-turn scratch tier.
 - Ship a frontend module that registers renderers (message buttons, attachment widgets, inspector/tools-panel cards -- a config panel is just a tools-panel renderer), click/text-effect/SSE handlers.
 
-Built-in registered workflows: `tts` (`backend/workflows/tts/`, `frontend/workflows/tts/`) and `format_consistency` (`backend/workflows/format_consistency/`, `frontend/workflows/format_consistency/`). `tts` binds four of the five hook types (post-pipeline, on-demand, regenerate, reroll-gen -- not pre-pipeline) and uses the character and config state tiers; cross-reference it as the full worked example. `format_consistency` is the minimal example: a single post-pipeline hook (priority `-10`, so it runs before any artifact hook like TTS and they synthesize from the normalized text) that calls the deterministic RP-markup normalizer in `backend/analysis/format_consistency.py` via the toolkit, produces no artifacts and no tools, and gates on an `enabled` flag in its config tier (default on, preserving its prior always-run behaviour). Its frontend module is a single Tools-panel toggle.
+Built-in registered workflows: `tts` (`backend/workflows/tts/`, `frontend/workflows/tts/`) and `format_consistency` (`backend/workflows/format_consistency/`, `frontend/workflows/format_consistency/`). `tts` binds four of the five hook types (post-pipeline, on-demand, regenerate, reroll-gen -- not pre-pipeline) and uses the character and config state tiers; cross-reference it as the full worked example. `format_consistency` is the minimal example: a single post-pipeline hook (priority `-10`, so it runs before any artifact hook like TTS and they synthesize from the normalized text) that calls the deterministic RP-markup normalizer in `backend/analysis/format_consistency.py` via the toolkit, produces no artifacts and no tools, and gates on an `enabled` flag in its config tier (default on, preserving its prior always-run behaviour). Its frontend module does nothing but register a one-line Tools-panel card body (a description); the on/off toggle itself is framework-rendered for every manifest workflow.
 
 ---
 
@@ -643,7 +643,7 @@ Top-level `register*` and `S.workflow*` push/assign calls run on import. Manifes
 | Slot | Initial | Write path | Read path (built-in) |
 |---|---|---|---|
 | `workflowInspectorCardRenderers` | `[]` | `S.workflowInspectorCardRenderers.push(() => htmlString)` | `_buildSecondaryAgentsHtml` (`chat.js`) |
-| `workflowToolsPanelRenderers` | `[]` | `.push(() => htmlString)` | `renderToolsPanel` (`settings.js`) |
+| `workflowToolsPanelRenderers` | `[]` | `.push(() => htmlString)` (card *body*, folded into the workflow's on/off card) | `buildWorkflowToggleRows` (`settings.js`) |
 | `workflowMessageButtonRenderers` | `[]` | `.push((msg) => htmlString)` | `_renderExtraButtons` (`chat.js`) |
 | `workflowEventHandlers` | `{}` | `S.workflowEventHandlers["my_event"] = (data, msgDiv) => ...` | `handleSSEEvent` default (`chat.js`) |
 | `workflowAttachmentRenderers` | `{}` | `S.workflowAttachmentRenderers[wid] = (ctx) => htmlString` | `_renderWorkflowSwipeContainer` (`chat.js`) |
@@ -865,7 +865,7 @@ Source aliases: `att.b64 || att.data_b64`, `att.mime || att.mime_type` (fallback
 
 Inspector Secondary card iteration: `_buildSecondaryAgentsHtml` (`chat.js`). Each `S.workflowInspectorCardRenderers[i]()` output is concatenated raw (no per-card wrap).
 
-Tools Secondary card iteration: `renderToolsPanel` (`settings.js`). Same shape, iterating `S.workflowToolsPanelRenderers` (a distinct array from the inspector's `S.workflowInspectorCardRenderers`).
+Tools Secondary card iteration: `buildWorkflowToggleRows` (`settings.js`, called by `renderToolsPanel`). Unlike the inspector cards, a tools-panel renderer does **not** return a standalone card -- the framework renders one card per manifest workflow (name + on/off toggle), and `S.workflowToolsPanelRenderers[wid]()` supplies that card's *body* (description + any controls), folded in only while the workflow is effectively enabled. So a shipped workflow is a single entry, not a separate toggle and settings card.
 
 Per-message buttons: `_renderExtraButtons(msg)` (`chat.js`). Each `S.workflowMessageButtonRenderers[i](msg)` spliced into the toolbar between magic and delete buttons.
 
