@@ -33,7 +33,7 @@ import { refreshCharacters } from "./library.js";
 // Imported directly rather than via settings.js to avoid an import cycle
 // (settings.js → chat.js → this module), as chat_conversations.js does.
 import { ensurePersonaPinned } from "./settings_personas.js";
-import { S } from "./state.js";
+import { S, effectiveWorkflowEnabled } from "./state.js";
 import {
   $,
   convUrl,
@@ -610,14 +610,16 @@ function handleSSEEvent(event, data, container, msgDiv, onToken, onRewrite) {
       break;
     }
     default: {
-      const handler = S.workflowEventHandlers[event];
-      if (typeof handler === "function") {
+      const entry = S.workflowEventHandlers[event];
+      // Skip a disabled workflow's events. The backend fan-out gate already
+      // suppresses them at the source; this covers the flip-mid-stream window.
+      if (entry && typeof entry.handler === "function" && effectiveWorkflowEnabled(entry.workflowId)) {
         let parsed = data;
         try {
           parsed = JSON.parse(data);
         } catch (_) {}
         try {
-          handler(parsed, msgDiv || null);
+          entry.handler(parsed, msgDiv || null);
         } catch (e) {
           console.error("workflow event handler for", event, "threw:", e);
         }

@@ -14,8 +14,8 @@ from backend.database import (
     get_messages,
     get_workflow_attachments_for_message,
     get_workflow_message_state,
+    set_workflow_enabled,
 )
-from backend.workflows import set_workflow_config
 
 from ._fixtures import make_workflow, register_for_test
 
@@ -73,9 +73,9 @@ async def _seed_reply(client, llm_mock) -> tuple[str, int]:
         json={"model_name": "writer-model", "enable_agent": True, "enabled_tools": {"direct_scene": True}},
     )
     assert resp.status_code == 200
-    # The format normalizer would otherwise rewrite the draft before the probe
-    # runs; disable it so the seeded and rewritten contents are exact.
-    await set_workflow_config("format_consistency", {"enabled": False})
+    # Suspend the format normalizer so the seeded and rewritten contents stay
+    # exact; the probe under test is the only post-pipeline hook that should run.
+    await set_workflow_enabled("format_consistency", False)
 
     llm_mock.enqueue_writer("The original reply.")
     send = await client.post(f"/api/conversations/{cid}/send", json={"content": "Tell me a story.", "attachments": []})

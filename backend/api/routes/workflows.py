@@ -25,6 +25,7 @@ from ...database import (
     get_messages_before,
     get_settings,
     get_workflow_attachment_by_id,
+    set_workflow_enabled,
 )
 from ...inference import LLMClient
 from ...workflows import (
@@ -51,8 +52,9 @@ from ...workflows.attachment_cache import (
     set_active_sibling,
     validate_workflow_attachment_shape,
 )
+from ...workflows.enablement import effective_workflow_enabled
 from ..deps import _workflow_root_lock
-from ..schemas import WorkflowConfigUpdate
+from ..schemas import WorkflowConfigUpdate, WorkflowEnabledUpdate
 
 logger = logging.getLogger(__name__)
 
@@ -95,13 +97,36 @@ async def api_get_workflow_config(workflow_id: str):
     return {"config": await get_workflow_config(workflow_id)}
 
 
+@router.post("/api/workflows/{workflow_id}/enabled")
+async def api_set_workflow_enabled(workflow_id: str, data: WorkflowEnabledUpdate):
+    """Flip one workflow's on/off toggle and return the full decoded map.
+
+    Ungated -- this is the control that re-enables a suspended workflow. A
+    dedicated per-key route rather than PUT /settings because the latter does a
+    full-column overwrite that would clobber a concurrent tab's flip of another
+    workflow (the per-key json_set in set_workflow_enabled does not).
+    """
+    if get_workflow(workflow_id) is None:
+        raise HTTPException(status_code=404, detail=f"Workflow {workflow_id!r} is not registered")
+    await set_workflow_enabled(workflow_id, data.enabled)
+    settings = await get_settings()
+    logger.info("workflow %r enabled=%s", scrub_log(workflow_id), data.enabled)
+    return {"workflow_enabled": settings.get("workflow_enabled", {})}
+
+
 @router.post("/api/conversations/{cid}/workflows/{workflow_id}/trigger")
 async def api_trigger_workflow(cid: str, workflow_id: str, body: dict = Body(default={})):  # noqa: B008
     """Run a workflow's on_demand hook against the current conversation state."""
     if get_workflow(workflow_id) is None:
         raise HTTPException(status_code=404, detail=f"Workflow {workflow_id!r} is not registered")
     sub = get_subscription(workflow_id, HookType.ON_DEMAND)
-    if sub is None:
+    # Gate before the lock so a disabled-workflow request does no DB work. A
+    # disabled workflow is indistinguishable from a missing handler to the caller
+    # (both 404); the log disambiguates server-side.
+    settings_snapshot = await get_settings()
+    if sub is None or not effective_workflow_enabled(workflow_id, settings_snapshot):
+        if sub is not None:
+            logger.info("workflow %r on-demand trigger suspended (disabled)", scrub_log(workflow_id))
         raise HTTPException(
             status_code=404,
             detail=f"Workflow {workflow_id!r} has no on_demand handler",
@@ -118,7 +143,6 @@ async def api_trigger_workflow(cid: str, workflow_id: str, body: dict = Body(def
         card = await get_character_card(card_id) if card_id else None
         msgs = await get_messages(cid)
         last_user = next((m["content"] for m in reversed(msgs) if m["role"] == "user"), "")
-        settings_snapshot = await get_settings()
         client = LLMClient(
             settings_snapshot["endpoint_url"],
             api_key=settings_snapshot.get("api_key", ""),
@@ -151,7 +175,12 @@ async def api_regenerate_attachment(cid: str, mid: int, aid: int, body: dict = B
         raise HTTPException(status_code=404, detail="Attachment not found on this message")
     wid = att.get("workflow_id")
     sub = get_subscription(wid, HookType.REGENERATE) if wid else None
-    if sub is None:
+    # Gate before the root lock so a disabled-workflow request never contends for
+    # the same lock the live activate/delete consumption routes hold.
+    settings_snapshot = await get_settings()
+    if sub is None or not effective_workflow_enabled(wid, settings_snapshot):
+        if sub is not None:
+            logger.info("workflow %r regenerate suspended (disabled)", scrub_log(wid))
         raise HTTPException(
             status_code=404,
             detail=f"Workflow {wid!r} is not registered or has no regenerate handler",
@@ -166,7 +195,6 @@ async def api_regenerate_attachment(cid: str, mid: int, aid: int, body: dict = B
             raise HTTPException(status_code=404, detail="Message not found in conversation")
         msgs = await get_messages_before(cid, mid)
         last_user = next((m["content"] for m in reversed(msgs) if m["role"] == "user"), "")
-        settings_snapshot = await get_settings()
         client = LLMClient(
             settings_snapshot["endpoint_url"],
             api_key=settings_snapshot.get("api_key", ""),
@@ -333,7 +361,12 @@ async def api_reroll_gen_attachment(cid: str, mid: int, aid: int, body: dict = B
         raise HTTPException(status_code=404, detail="Message not found in conversation")
     wid = att.get("workflow_id")
     sub = get_subscription(wid, HookType.REROLL_GEN) if wid else None
-    if sub is None:
+    # Gate before the root lock so a disabled-workflow request never contends for
+    # the same lock the live activate/delete consumption routes hold.
+    settings_snapshot = await get_settings()
+    if sub is None or not effective_workflow_enabled(wid, settings_snapshot):
+        if sub is not None:
+            logger.info("workflow %r reroll-gen suspended (disabled)", scrub_log(wid))
         raise HTTPException(
             status_code=404,
             detail=f"Workflow {wid!r} is not registered or has no reroll_gen handler",
@@ -351,7 +384,6 @@ async def api_reroll_gen_attachment(cid: str, mid: int, aid: int, body: dict = B
 
     async with _workflow_root_lock(root_id):
         seed = _generated_seed()
-        settings_snapshot = await get_settings()
         client = LLMClient(
             settings_snapshot["endpoint_url"],
             api_key=settings_snapshot.get("api_key", ""),
@@ -431,6 +463,23 @@ async def api_rehydrate_attachment(cid: str, mid: int, aid: int, body: dict = Bo
     if not seed:
         raise HTTPException(status_code=409, detail="Attachment has no stored seed; cannot rehydrate")
 
+    # Gate before the root lock: rehydrate re-synthesizes evicted bytes by running
+    # the workflow's generative REROLL_GEN hook (an LLM call for tts) -- the same
+    # hook reroll-gen gates -- so a disabled workflow must not fire it. An artifact
+    # evicted while off therefore needs a re-enable to restore (no data loss; the
+    # row and seed persist). workflow_id is stable across the in-lock re-read, so
+    # the pre-lock att is a safe source for the gate.
+    wid = att.get("workflow_id")
+    rg_sub = get_subscription(wid, HookType.REROLL_GEN) if wid else None
+    settings_snapshot = await get_settings()
+    if rg_sub is None or not effective_workflow_enabled(wid, settings_snapshot):
+        if rg_sub is not None:
+            logger.info("workflow %r rehydrate suspended (disabled)", scrub_log(wid))
+        raise HTTPException(
+            status_code=404,
+            detail=f"Workflow {wid!r} is not registered or has no reroll_gen handler",
+        )
+
     # Serialize same-root rehydrates the way /regenerate, /reroll-gen, and
     # /activate already do for their sibling-tree mutations. Without this,
     # two concurrent callers would each run the full reroll_gen LLM call
@@ -463,7 +512,6 @@ async def api_rehydrate_attachment(cid: str, mid: int, aid: int, body: dict = Bo
         if not isinstance(params, dict):
             params = {}
 
-        settings_snapshot = await get_settings()
         client = LLMClient(
             settings_snapshot["endpoint_url"],
             api_key=settings_snapshot.get("api_key", ""),

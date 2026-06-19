@@ -33,6 +33,7 @@ from ..workflows import (
     get_workflow,
     iter_subscriptions,
 )
+from ..workflows.enablement import effective_workflow_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -74,6 +75,9 @@ async def _run_post_pipeline(
     staged_attachments: list[dict] = []
     staged_message_state: dict[str, dict] = {}
     for sub in iter_subscriptions(HookType.POST_PIPELINE):
+        if not effective_workflow_enabled(sub.workflow_id, settings):
+            logger.info("workflow %r post-pipeline hook suspended (disabled)", sub.workflow_id)
+            continue
         replaced_this_hook = False
         # Serialize same-(cid, workflow_id) writers against concurrent
         # /trigger calls and any other in-flight pipeline that reaches this
@@ -297,6 +301,9 @@ async def _iterate_pre_pipeline_hooks(
     ``{"merged_enabled_tools": <dict>, "extras": []}``.
     """
     for sub in iter_subscriptions(HookType.PRE_PIPELINE):
+        if not effective_workflow_enabled(sub.workflow_id, settings):
+            logger.info("workflow %r pre-pipeline hook suspended (disabled)", sub.workflow_id)
+            continue
         # Lock held for the hook's full lifetime to keep workflow_state RMW atomic.
         async with (
             workflow_state_lock(conversation_id, sub.workflow_id),
