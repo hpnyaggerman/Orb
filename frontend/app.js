@@ -174,6 +174,8 @@ import {
   toggleShowEditorDiff,
   toggleToolEnabled,
   toggleToolsPanel,
+  toggleWorkflowEnabled,
+  toggleWorkflowsGlobal,
 } from "./settings.js";
 import { S } from "./state.js";
 import { initTabLock, setLockStateChangeCallback } from "./tabLock.js";
@@ -236,6 +238,8 @@ Object.assign(window, {
   toggleAuditType,
   toggleHideUntilBaked,
   togglePreventPromptOverrides,
+  toggleWorkflowsGlobal,
+  toggleWorkflowEnabled,
   // phrase bank
   showPhraseBankModal,
   showAddPhraseGroupModal,
