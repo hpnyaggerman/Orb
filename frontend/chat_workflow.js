@@ -9,7 +9,7 @@ import { ICON_CHEVRON, ICON_DEL, ICON_REGEN, ICON_REROLL, renderMessages, setMes
 import { clearWorkflowPhase, setWorkflowPhase, workflowPhaseLabel } from "./chat_inspector.js";
 import { renderDefaultWidget } from "./default_widget.js";
 import { closeModal, showModal } from "./modal.js";
-import { S } from "./state.js";
+import { S, effectiveWorkflowEnabled } from "./state.js";
 import { broadcastWorkflowMutation, requestSendPermission, setWorkflowMutationCallback } from "./tabLock.js";
 import { convUrl, esc, toast } from "./utils.js";
 
@@ -28,6 +28,11 @@ function _evictedAttachmentHtml(msg, att) {
   let btn;
   if (!canRehydrate) {
     btn = `<span class="workflow-rehydrate-disabled" title="No stored seed -- bytes cannot be recovered">Bytes evicted</span>`;
+  } else if (!effectiveWorkflowEnabled(att.workflow_id)) {
+    // Rehydrate re-runs the workflow's generative hook (gated server-side when
+    // off), so the action is suppressed; the evicted-card display is consumption
+    // and stays. Restoring the bytes requires re-enabling the workflow.
+    btn = `<span class="workflow-rehydrate-disabled" title="Re-enable ${esc(_workflowLabel(att))} to restore">Workflow off</span>`;
   } else if (S.hasMultipleTabs) {
     btn = `<button class="workflow-rehydrate-button" disabled title="Close other tabs to rehydrate">Rehydrate</button>`;
   } else {
@@ -44,6 +49,7 @@ function _workflowRegenButtonHtml(msg, att) {
   if (!wid) return "";
   const entry = S.workflowManifest.find((w) => w.id === wid);
   if (!entry) return "";
+  if (!effectiveWorkflowEnabled(wid)) return "";
   if (S.hasMultipleTabs) {
     return `<button class="workflow-regen-button" disabled title="Close other tabs to regenerate">${ICON_REGEN}</button>`;
   }
@@ -55,6 +61,7 @@ function _workflowRerollButtonHtml(msg, att) {
   if (!wid) return "";
   const entry = S.workflowManifest.find((w) => w.id === wid);
   if (!entry) return "";
+  if (!effectiveWorkflowEnabled(wid)) return "";
   if (S.hasMultipleTabs) {
     return `<button class="workflow-reroll-button" disabled title="Close other tabs to reroll">${ICON_REROLL}</button>`;
   }

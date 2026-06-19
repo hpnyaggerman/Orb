@@ -97,6 +97,7 @@ class _SettingsBase(TypedDict):
     agent_same_as_writer: bool
     agent_shared_system_prompt: str
     feedback_enabled: int
+    workflows_globally_enabled: int
 
 
 class SettingsRow(_SettingsBase, total=False):
@@ -126,6 +127,7 @@ class SettingsRow(_SettingsBase, total=False):
     reasoning_enabled_passes: dict
     inspector_open_states: dict
     workflow_config: str  # left raw; decoded per-slot by get_workflow_config()
+    workflow_enabled: dict[str, bool]  # decoded by get_settings(); per-workflow on/off, missing key => on
     # Agent-endpoint cascade overlays (present only when it resolves).
     agent_endpoint_url: str
     agent_api_key: str

@@ -489,3 +489,24 @@ def test_library_path_rejects_traversal():
     for bad in ("../secret.db", "sub/dir.db", "/etc/passwd", "..\\evil.db", "noext"):
         with pytest.raises(presets.PresetError):
             presets._library_path(bad)
+
+
+async def test_apply_preserves_local_workflow_toggles(client):
+    """Which workflows an install has disabled is local operational state, not
+    content a shared preset should dictate. Both toggle columns are in
+    PRESERVED_COLUMNS, so applying a configs preset must not re-enable a workflow
+    the user turned off locally."""
+    from backend.database import get_settings, set_workflow_enabled
+
+    # Snapshot configs while the toggles sit at their on-state defaults.
+    name = (await client.post("/api/presets/export", json={"domains": ["configs"]})).json()["name"]
+
+    # Flip both locally off, then apply the on-state preset over them.
+    await client.put("/api/settings", json={"workflows_globally_enabled": False})
+    await set_workflow_enabled("tts", False)
+    resp = await client.post(f"/api/presets/{name}/apply", json={})
+    assert resp.status_code == 200
+
+    s = await get_settings()
+    assert s["workflows_globally_enabled"] == 0
+    assert s.get("workflow_enabled") == {"tts": False}

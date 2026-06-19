@@ -1,11 +1,12 @@
 """Unit tests for the format_consistency workflow's post_pipeline hook.
 
-These stay true unit tests (no DB, no Codex-sandbox aiosqlite caveat) by
-monkeypatching ``get_workflow_config`` as imported into the hook module. The
-pure normalizer it calls is covered exhaustively by
-``tests/unit/test_format_consistency.py``; here we only pin the hook's wiring:
-the config gate, the baseline reconstructed from ``ctx.history``, and the
-``draft_replaced`` event shape.
+These stay true unit tests (no DB, no Codex-sandbox aiosqlite caveat). The pure
+normalizer the hook calls is covered exhaustively by
+``tests/unit/test_format_consistency.py``; here we pin the hook's wiring: the
+baseline reconstructed from ``ctx.history`` and the ``draft_replaced`` event
+shape. The on/off decision is no longer the hook's concern -- the framework's
+per-workflow toggle suspends it in the fan-out loop -- so the hook always runs
+when reached, and there is no config gate to patch.
 """
 
 from __future__ import annotations
@@ -24,13 +25,6 @@ CONSISTENT_DRAFT = 'He nods slowly. "I understand," he replies.'
 
 # Conflicting conventions in the window -> no axis agrees -> nothing to enforce.
 ASTERISK_MSG = "*She smiles and steps back, turning to the window.* I won't go."
-
-
-def _patch_cfg(monkeypatch, enabled: bool) -> None:
-    async def fake_get_workflow_config(workflow_id):
-        return {"enabled": enabled}
-
-    monkeypatch.setattr(hooks, "get_workflow_config", fake_get_workflow_config)
 
 
 def _ctx(draft: str, history: list[dict]) -> PostCtx:
@@ -55,9 +49,10 @@ async def _collect(ctx) -> list[dict]:
     return [ev async for ev in hooks.post_pipeline(ctx)]
 
 
-async def test_yields_draft_replaced_on_drift(monkeypatch):
-    _patch_cfg(monkeypatch, True)
-    # A user message is interleaved to confirm the baseline window skips it.
+async def test_yields_draft_replaced_on_drift():
+    # No config patch: the hook runs unconditionally now (the framework toggle is
+    # the only on/off). A user message is interleaved to confirm the baseline
+    # window skips it.
     history = [
         {"role": "assistant", "content": QUOTED_BASELINE},
         {"role": "user", "content": "and then?"},
@@ -67,18 +62,7 @@ async def test_yields_draft_replaced_on_drift(monkeypatch):
     assert events == [{"type": "draft_replaced", "draft": NORMALIZED}]
 
 
-async def test_no_yield_when_disabled(monkeypatch):
-    # Same drifting draft, but the config gate is off -> the hook returns before
-    # touching the normalizer.
-    _patch_cfg(monkeypatch, False)
-    history = [{"role": "assistant", "content": QUOTED_BASELINE}]
-    events = await _collect(_ctx(DRIFTING_DRAFT, history))
-
-    assert events == []
-
-
-async def test_no_yield_when_baseline_unstable(monkeypatch):
-    _patch_cfg(monkeypatch, True)
+async def test_no_yield_when_baseline_unstable():
     # Two assistant messages with conflicting conventions -> neither axis agrees.
     history = [
         {"role": "assistant", "content": QUOTED_BASELINE},
@@ -89,16 +73,14 @@ async def test_no_yield_when_baseline_unstable(monkeypatch):
     assert events == []
 
 
-async def test_no_yield_when_already_consistent(monkeypatch):
-    _patch_cfg(monkeypatch, True)
+async def test_no_yield_when_already_consistent():
     history = [{"role": "assistant", "content": QUOTED_BASELINE}]
     events = await _collect(_ctx(CONSISTENT_DRAFT, history))
 
     assert events == []
 
 
-async def test_no_yield_when_no_assistant_baseline(monkeypatch):
-    _patch_cfg(monkeypatch, True)
+async def test_no_yield_when_no_assistant_baseline():
     # Only user messages: the window is empty, so the normalizer no-ops.
     history = [{"role": "user", "content": "hello"}]
     events = await _collect(_ctx(DRIFTING_DRAFT, history))

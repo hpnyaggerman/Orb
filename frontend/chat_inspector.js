@@ -4,7 +4,7 @@
 // keep working.
 import { api } from "./api.js";
 import { renderContextSize, renderMessages } from "./chat_core.js";
-import { S } from "./state.js";
+import { S, effectiveWorkflowEnabled } from "./state.js";
 import { $, esc } from "./utils.js";
 
 // ── Inspector — Reasoning stepper rail
@@ -180,9 +180,10 @@ export function _relightWorkflowPipelinePass(pipeline, passId) {
 function _buildSecondaryAgentsHtml() {
   if (!S.workflowInspectorCardRenderers.length) return "";
   let html = "";
-  for (const fn of S.workflowInspectorCardRenderers) {
+  for (const { workflowId, render } of S.workflowInspectorCardRenderers) {
+    if (!effectiveWorkflowEnabled(workflowId)) continue;
     try {
-      const piece = fn();
+      const piece = render();
       if (typeof piece === "string" && piece) html += piece;
     } catch (e) {
       console.error("workflow inspector card renderer threw:", e);
@@ -283,6 +284,14 @@ export function _syncGenerationStatusVisibility() {
 // operations. A blank label clears the channel, matching the phase_status SSE
 // contract so that path and these callers share one writer for S.workflowPhases.
 export function setWorkflowPhase(channel, label) {
+  // Suppress the pill for a disabled workflow. Two channel grammars exist: the bare
+  // "workflow:tts" (POST-hook SSE emitter) and "workflow:<wid>:<op>:<id>" (client
+  // ops); the wid is always the second colon-token (wids contain no colon), so [1]
+  // is correct for both, where [2] or a trailing-segment guess would misparse.
+  if (typeof channel === "string" && channel.startsWith("workflow:")) {
+    const wid = channel.split(":")[1];
+    if (wid && !effectiveWorkflowEnabled(wid)) return;
+  }
   if (label && label.trim()) S.workflowPhases[channel] = label;
   else delete S.workflowPhases[channel];
   _renderWorkflowPhasesPill();

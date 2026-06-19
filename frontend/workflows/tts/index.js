@@ -5,7 +5,12 @@
 // loads the workflow's global config slot into a snapshot the widget and panel
 // share by reference.
 
-import { S } from "/static/state.js";
+import {
+  S,
+  registerWorkflowEventHandler,
+  registerWorkflowMessageButton,
+  registerWorkflowToolsPanelCard,
+} from "/static/state.js";
 import { api } from "/static/api.js";
 import { initWidget, createButtonRenderer, attachmentRenderer, autoplayHandler } from "./widget.js";
 import { initKaraoke } from "./karaoke.js";
@@ -55,9 +60,11 @@ initWidget(config);
 initKaraoke(config);
 initConfigPanel(config);
 
-S.workflowMessageButtonRenderers.push(createButtonRenderer);
+registerWorkflowMessageButton(WORKFLOW_ID, createButtonRenderer);
+// The attachment renderer is a consumption surface (it replays already-produced
+// bytes), so it stays keyed by workflow id and is never gated by the toggle.
 S.workflowAttachmentRenderers[WORKFLOW_ID] = attachmentRenderer;
-S.workflowToolsPanelRenderers.push(configPanelRenderer);
-S.workflowEventHandlers[WORKFLOW_ID + "_autoplay"] = autoplayHandler;
+registerWorkflowToolsPanelCard(WORKFLOW_ID, configPanelRenderer);
+registerWorkflowEventHandler(WORKFLOW_ID, WORKFLOW_ID + "_autoplay", autoplayHandler);
 
 loadConfig();
