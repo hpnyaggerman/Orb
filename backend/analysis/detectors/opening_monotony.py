@@ -20,8 +20,8 @@ import os
 import sys
 from dataclasses import dataclass, field
 
-from .lexical import normalize_word
-from .text_segmentation import split_narration_sentences
+from ..text.lexical import normalize_word
+from ..text.text_segmentation import split_narration_sentences
 
 DEBUG = "DEBUG_OPENING_MONOTONY" in os.environ
 # ---------- public dataclasses (unchanged) ----------

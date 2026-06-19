@@ -32,7 +32,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from enum import Enum
 
-from .detectors.text_segmentation import extract_block_spans, split_paragraphs
+from .text.text_segmentation import extract_block_spans, split_paragraphs
 
 __all__ = [
     "Dialogue",

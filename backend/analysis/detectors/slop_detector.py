@@ -29,8 +29,8 @@ import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
-from .lexical import ngrams
-from .text_segmentation import split_sentences
+from ..text.lexical import ngrams
+from ..text.text_segmentation import split_sentences
 
 if TYPE_CHECKING:
     from ...database.models import PhraseGroup

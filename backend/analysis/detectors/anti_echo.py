@@ -38,8 +38,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
-from .lexical import count_content_words, longest_common_run, tokenize
-from .text_segmentation import (
+from ..text.lexical import count_content_words, longest_common_run, tokenize
+from ..text.text_segmentation import (
     ends_with_question,
     find_quote_spans,
     split_narration_sentences,

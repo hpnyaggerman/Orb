@@ -36,8 +36,13 @@ import os
 import sys
 from dataclasses import dataclass, field
 
-from .lexical import count_content_words, is_contiguous_subsequence, ngrams, tokenize
-from .text_segmentation import split_narration_sentences
+from ..text.lexical import (
+    count_content_words,
+    is_contiguous_subsequence,
+    ngrams,
+    tokenize,
+)
+from ..text.text_segmentation import split_narration_sentences
 
 DEBUG = "DEBUG_PHRASE_REPETITION" in os.environ
 

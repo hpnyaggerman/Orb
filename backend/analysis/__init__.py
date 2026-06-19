@@ -20,8 +20,8 @@ from .detectors.phrase_repetition import PhraseResult
 from .detectors.slop_detector import DetectionResult
 from .detectors.structural_repetition import StructuralResult
 from .detectors.template_repetition import FlaggedTemplate, TemplateResult
-from .detectors.text_segmentation import split_narration_sentences
 from .format_consistency import FormatDriftReport, normalize_to_baseline
+from .text.text_segmentation import split_narration_sentences
 
 __all__ = [
     # audit — consolidated runner + report

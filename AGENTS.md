@@ -138,14 +138,21 @@ Orb/
 │   ├── analysis/            # ANALYSIS LAYER (shared, pure) — prose-quality detection;
 │   │   │                    # deps: database.models + stdlib only. Shared by editor pass + workflows.
 │   │   ├── __init__.py      # Facade: run_audit, format_report, AuditReport, AUDIT_TYPES + result types
-│   │   ├── audit.py         # Phrase bank matching, opener/template detection
+│   │   ├── audit.py         # Consolidated runner: run_audit() runs the enabled detectors →
+│   │   │                    # AuditReport, format_report() renders it; AUDIT_TYPES toggle map
 │   │   ├── format_consistency.py # Deterministic RP-markup normalizer — NOT a detector but a
 │   │   │                    # transformer (returns rewritten text, not findings): holds a draft's
 │   │   │                    # quote/asterisk convention to recent messages. Pure; the
-│   │   │                    # format_consistency workflow calls it via the toolkit.
-│   │   └── detectors/       # slop_detector, text_segmentation, contrastive_negation,
-│   │                        # opening_monotony, phrase_repetition, structural_repetition,
-│   │                        # template_repetition, anti_echo (user→assistant echo)
+│   │   │                    # format_consistency workflow calls it via the toolkit. Peer of the
+│   │   │                    # detector suite (intentionally flat, not inside detectors/).
+│   │   ├── text/            # FOUNDATION sub-layer — pure text primitives, no intra-analysis deps;
+│   │   │                    # used by every detector, format_consistency, and the facade:
+│   │   │                    #   lexical.py — tokenize/normalize, n-grams, token-sequence compare,
+│   │   │                    #     stopwords + content-word floor
+│   │   │                    #   text_segmentation.py — paragraph/sentence/dialogue split + block extraction
+│   │   └── detectors/       # Flag-only scanners (read text → findings): slop_detector,
+│   │                        # contrastive_negation, opening_monotony, phrase_repetition,
+│   │                        # structural_repetition, template_repetition, anti_echo (user→assistant echo)
 │   ├── inference/           # INFERENCE LAYER — LLM transport + prompt/tool assembly; deps: core
 │   │   ├── __init__.py      # Facade re-export
 │   │   ├── client.py        # LLM API client: OpenAI-compatible, streaming, reasoning

@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import re
 
-from .text_segmentation import split_sentences
+from ..text.text_segmentation import split_sentences
 
 # ── helpers ───────────────────────────────────────────────────────────────────
 
