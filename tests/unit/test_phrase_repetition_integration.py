@@ -46,9 +46,29 @@ def test_phrase_repetition_no_false_positive_when_draft_is_distinct():
     )
 
 
-def test_phrase_repetition_below_threshold_not_flagged():
-    """An echo across only two messages (draft + one previous) must NOT be
-    flagged, since the default threshold is three messages."""
+def test_phrase_repetition_two_word_pair_below_threshold_not_flagged():
+    """A two-word pair echoed across only two messages (draft + one previous)
+    must NOT be flagged: short phrases keep the higher three-message threshold,
+    since a 2-word match is easily a coincidence."""
+    prev1 = "His eyes burned with quiet fury at the news."
+    draft = "A quiet fury settled over the room as he left."
+
+    report, _ = _run_contextual_audit(
+        draft=draft,
+        phrase_bank=[],
+        previous_assistant_msgs=[prev1],
+    )
+    assert report.phrase_result is not None
+    assert not report.phrase_result.flagged_phrases, (
+        "A two-word pair shared by only two messages must not be flagged at the "
+        f"three-message threshold, got {[p.phrase for p in report.phrase_result.flagged_phrases]}"
+    )
+
+
+def test_phrase_repetition_long_phrase_flagged_at_two_messages():
+    """A three-word phrase echoed across only two messages (draft + one previous)
+    MUST be flagged: longer phrases are distinctive enough that a single repeat is
+    damning, so they use the lower two-message threshold."""
     draft = "She met the shadowed red eyes across the crowded table without a word."
 
     report, _ = _run_contextual_audit(
@@ -57,9 +77,47 @@ def test_phrase_repetition_below_threshold_not_flagged():
         previous_assistant_msgs=[_PREV1],
     )
     assert report.phrase_result is not None
+    phrases = [p.phrase for p in report.phrase_result.flagged_phrases]
+    assert "shadowed red eyes" in phrases, (
+        f"A distinctive 3-word phrase shared by two messages must be flagged at the two-message threshold, got {phrases}"
+    )
+
+
+def test_phrase_repetition_detects_two_word_pair():
+    """A distinctive two-content-word pair echoed across three messages must be
+    flagged even when the messages share no 3-word overlap. Proves min_n=2 is in
+    effect end-to-end."""
+    prev1 = "His eyes burned with quiet fury at the news."
+    prev2 = "She spoke with quiet fury, voice low and even."
+    draft = "A quiet fury settled over the room as he left."
+
+    report, _ = _run_contextual_audit(
+        draft=draft,
+        phrase_bank=[],
+        previous_assistant_msgs=[prev1, prev2],
+    )
+    assert report.phrase_result is not None
+    phrases = [p.phrase for p in report.phrase_result.flagged_phrases]
+    assert "quiet fury" in phrases, f"Expected 'quiet fury' to be flagged, got {phrases}"
+
+
+def test_phrase_repetition_two_word_pair_needs_two_content_words():
+    """A bigram echoed across three messages that is one stopword + one content
+    word (e.g. 'his gaze') must NOT be flagged. The min_content_words=2 floor
+    keeps 2-word detection from degenerating into a single-word match."""
+    prev1 = "He held his gaze on the horizon for a while."
+    prev2 = "She felt his gaze settle on her shoulders."
+    draft = "I returned his gaze without a single word."
+
+    report, _ = _run_contextual_audit(
+        draft=draft,
+        phrase_bank=[],
+        previous_assistant_msgs=[prev1, prev2],
+    )
+    assert report.phrase_result is not None
     assert not report.phrase_result.flagged_phrases, (
-        "A phrase shared by only two messages must not be flagged at the "
-        f"three-message threshold, got {[p.phrase for p in report.phrase_result.flagged_phrases]}"
+        "A content+stopword bigram has only one content word and must not be "
+        f"flagged, got {[p.phrase for p in report.phrase_result.flagged_phrases]}"
     )
 
 

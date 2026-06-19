@@ -13,7 +13,11 @@ if TYPE_CHECKING:
 from .detectors.anti_echo import EchoResult, detect_anti_echo
 from .detectors.contrastive_negation import detect_contrastive_negation
 from .detectors.opening_monotony import MonotonyResult, detect_opening_monotony
-from .detectors.phrase_repetition import PhraseResult, detect_phrase_repetition
+from .detectors.phrase_repetition import (
+    PhraseResult,
+    deduplicate_phrases,
+    detect_phrase_repetition,
+)
 from .detectors.structural_repetition import (
     StructuralResult,
     detect_structural_repetition,
@@ -45,6 +49,19 @@ def _on(toggles: dict | None, key: str) -> bool:
     """Whether scanner *key* is enabled. Missing key / None toggles → enabled,
     so callers (and older databases) default to the prior all-on behaviour."""
     return True if toggles is None else bool(toggles.get(key, True))
+
+
+def _merge_phrase_results(short: PhraseResult, long: PhraseResult) -> PhraseResult:
+    """Combine the short-phrase (high-threshold) and long-phrase (low-threshold)
+    phrase-repetition passes into a single result.
+
+    deduplicate_phrases drops any phrase that restates the same repeat as another
+    across the two passes — a sub-phrase of a longer one ("shadowed red" under
+    "shadowed red eyes"), a longer phrase that recurs less than its frequent core
+    ("for six centuries" under "six centuries"), or an overlapping fragment
+    ("the tight ring" beside "ring of muscle")."""
+    merged = deduplicate_phrases(long.flagged_phrases + short.flagged_phrases)
+    return PhraseResult(flagged_phrases=merged, total_messages=short.total_messages)
 
 
 # Data container
@@ -136,9 +153,11 @@ def run_audit(
     template_flag_threshold: int = 2,
     structural_similarity_threshold: float = 0.75,
     structural_min_complexity: int = 2,
-    phrase_min_n: int = 3,
+    phrase_min_n: int = 2,
     phrase_max_n: int = 5,
     phrase_min_messages: int = 3,
+    phrase_short_max_n: int = 2,
+    phrase_long_min_messages: int = 2,
     phrase_min_content_words: int = 2,
     assistant_messages: list[str] | None = None,
     structural_text: str | None = None,
@@ -181,14 +200,29 @@ def run_audit(
             )
         if _on(audit_toggles, "phrase_repetition"):
             # The draft must be last so require_last_message focuses flags on it.
-            phrase_result = detect_phrase_repetition(
-                assistant_messages + [current_msg],
+            phrase_messages = assistant_messages + [current_msg]
+            # Two universal passes with different thresholds by phrase length:
+            #  - short phrases (up to phrase_short_max_n words) need phrase_min_messages
+            #    repeats, since a 2-word match is easily a coincidence.
+            #  - longer phrases are distinctive enough that phrase_long_min_messages
+            #    (a lower threshold) repeats are damning.
+            short_phrases = detect_phrase_repetition(
+                phrase_messages,
                 min_n=phrase_min_n,
-                max_n=phrase_max_n,
+                max_n=phrase_short_max_n,
                 min_messages=phrase_min_messages,
                 min_content_words=phrase_min_content_words,
                 require_last_message=True,
             )
+            long_phrases = detect_phrase_repetition(
+                phrase_messages,
+                min_n=phrase_short_max_n + 1,
+                max_n=phrase_max_n,
+                min_messages=phrase_long_min_messages,
+                min_content_words=phrase_min_content_words,
+                require_last_message=True,
+            )
+            phrase_result = _merge_phrase_results(short_phrases, long_phrases)
 
     return AuditReport(
         cliche_result=(
@@ -271,10 +305,18 @@ def format_report(report: AuditReport) -> str:
     # 5. Exact phrase repetition (echoed across messages)
     if report.phrase_result and report.phrase_result.flagged_phrases:
         lines = ["Repeated Phrases (echoed across messages)"]
+        # Group phrases that cite the same target sentence so it's shown once, not
+        # repeated under every phrase that happens to live in it.
+        groups: dict[str, list] = {}
         for fp in report.phrase_result.flagged_phrases:
-            lines.append(f'   - "{_strip_asterisks(fp.phrase)}" (in {fp.count} previous messages):')
-            if fp.example_sentences:
-                lines.append(f"     • {_strip_asterisks(fp.example_sentences[-1])}")
+            sentence = fp.example_sentences[-1] if fp.example_sentences else ""
+            groups.setdefault(sentence, []).append(fp)
+        for sentence, fps in groups.items():
+            for j, fp in enumerate(fps):
+                suffix = ":" if sentence and j == len(fps) - 1 else ""
+                lines.append(f'   - "{_strip_asterisks(fp.phrase)}" (in {fp.count} previous messages){suffix}')
+            if sentence:
+                lines.append(f"     • {_strip_asterisks(sentence)}")
         sections.append("\n".join(lines))
 
     # 6. Structural repetition
