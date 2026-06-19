@@ -4,15 +4,15 @@ entrypoints.py — The five public turn handlers and the shared turn driver.
 Wires together context loading, the pass orchestrator, and persistence:
 
 * :func:`handle_turn` / :func:`handle_fork_edit` / :func:`handle_regenerate` /
-  :func:`handle_super_regenerate` — arrange history and turn indices, persist
-  the user row, then delegate to :func:`_generate_reply` (setup → pipeline →
-  persist).
-* :func:`handle_magic_rewrite` — the outlier: a single writer-style call with
-  no director or editor, reusing the writer lane so the KV cache stays warm.
+  :func:`handle_super_regenerate` / :func:`handle_magic_rewrite` -- arrange
+  history and turn indices, persist the user row when one is needed, then
+  delegate to :func:`_generate_reply` (setup -> pipeline -> persist).
 
 ``_resolve_target_and_parent`` and ``_prepare_regen_context`` are shared helpers
 for the regenerate family: load the target message, rebuild branch history, and
-reset the director to the branch baseline.
+reset the director to the branch baseline. ``_regenerate_with_steering`` backs
+both super-regenerate and magic-rewrite, which differ only in the steering
+message they inject.
 """
 
 from __future__ import annotations
@@ -21,13 +21,9 @@ import logging
 from typing import Any, AsyncIterator, List, Mapping, Optional, Sequence
 
 from .. import database as db
-from ..core import Macros, extract_hyperparams
-from ..features.lorebook import agentic_lorebook_active
-from ..inference import AbortToken, _KVCacheTracker, reasoning_cfg
-from .config import _build_writer_tools_blob, _resolve_pipeline_config
+from ..inference import AbortToken
 from .context import (
     PipelineContext,
-    _build_prefix_from_ctx,
     _load_pipeline_context,
     _prepare_turn,
     _TurnSetup,
@@ -36,7 +32,6 @@ from .orchestrator import _run_pipeline
 from .passes.director import progressive
 from .passes.director.prompt_rewrite import disable_rewrite
 from .persistence import _consume_pipeline, _conversation_log_writer
-from .predicates import agent_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -108,11 +103,12 @@ async def _generate_reply(
     The user message row must already be persisted before this is called.
 
     *pipeline_settings* drives the passes; *consume_settings* (defaults to the
-    same) is used during persistence — they differ only for super-regenerate,
-    which passes a rewrite-disabled copy to the pipeline but persists under the
-    original settings. *user_message* is what the writer actually receives; it
-    may differ from *last_user_message* (super-regenerate sends an OOC steering
-    message as the writer input while *last_user_message* carries the original).
+    same) is used during persistence. They differ for the steered-regenerate
+    paths (super-regenerate and magic-rewrite), which pass a rewrite-disabled
+    copy to the pipeline but persist under the original settings. *user_message*
+    is what the writer actually receives; it may differ from *last_user_message*
+    (the steered paths send an OOC message as the writer input while
+    *last_user_message* carries the original).
     """
     setup: _TurnSetup | None = None
     async for ev in _prepare_turn(
@@ -382,18 +378,21 @@ async def handle_regenerate(
 _SUPER_REGEN_MSG = "[OOC: Your response was kind of meh, rewrite it in a slightly different but still realistic direction.]"
 
 
-async def handle_super_regenerate(
+async def _regenerate_with_steering(
     conversation_id: str,
     assistant_msg_id: int,
+    steer_msg: str,
     abort_token: AbortToken | None = None,
+    *,
+    log_label: str = "Steered regenerate",
 ) -> AsyncIterator[dict]:
-    """Regenerate a reply with the original exchange visible as context.
+    """Regenerate an assistant reply as a new sibling, steered by an OOC message.
 
-    Entry point for ``POST /messages/{id}/super_regenerate``. Extends history to
-    include the original exchange so the model sees what it previously wrote, then
-    sends an OOC steering message asking for a different direction. The prompt-
-    rewrite tool is disabled so the director can't alter that steering message.
-    The result is saved as a new sibling branch.
+    Extends history with the original exchange so the model sees what it wrote,
+    then runs the full pipeline with *steer_msg* as the current-turn user
+    message: the director reads it when shaping the scene and the writer rewrites
+    against it. The prompt-rewrite tool is disabled so the director cannot alter
+    the steering message. The original reply is left intact on its own branch.
     """
     try:
         ctx = await _load_pipeline_context(conversation_id, abort_token=abort_token)
@@ -417,22 +416,23 @@ async def handle_super_regenerate(
             {"role": "user", "content": user_msg["content"]},
             {"role": "assistant", "content": target["content"]},
         ]
-        super_regen_settings = {
+        steer_settings = {
             **settings,
             "enabled_tools": disable_rewrite(settings.get("enabled_tools") or {}),
         }
 
-        # Exclude target content from audit so the new draft isn't penalised for repeating it.
+        # From history, not extended_history: the reply being replaced is excluded
+        # from the audit so the new draft isn't penalised for resembling it.
         editor_audit_msgs = [msg["content"] for msg in reversed(history) if msg.get("role") == "assistant"][:3]
 
         async for event in _generate_reply(
             ctx,
             conversation_id,
             history=extended_history,
-            pipeline_settings=super_regen_settings,
+            pipeline_settings=steer_settings,
             last_user_message=user_msg["content"],
             lorebook_messages=extended_history,
-            user_message=_SUPER_REGEN_MSG,
+            user_message=steer_msg,
             attachments=attachments,
             user_msg_id=user_msg_id,
             asst_turn_index=target["turn_index"],
@@ -443,8 +443,28 @@ async def handle_super_regenerate(
             yield event
 
     except Exception:
-        logger.exception("Super-regenerate error")
+        logger.exception("%s error", log_label)
         yield {"event": "error", "data": "Generation failed; see server logs"}
+
+
+async def handle_super_regenerate(
+    conversation_id: str,
+    assistant_msg_id: int,
+    abort_token: AbortToken | None = None,
+) -> AsyncIterator[dict]:
+    """Regenerate a reply, nudging the model toward a different direction.
+
+    Entry point for ``POST /messages/{id}/super_regenerate``. Sends a canned OOC
+    steering message and saves the result as a new sibling branch.
+    """
+    async for event in _regenerate_with_steering(
+        conversation_id, assistant_msg_id, _SUPER_REGEN_MSG, abort_token, log_label="Super-regenerate"
+    ):
+        yield event
+
+
+_MAGIC_STEER_PREFIX = "[OOC: Rewrite your previous response above, following this direction: "
+_MAGIC_STEER_SUFFIX = ". Keep it consistent with the established scene, characters, and continuity.]"
 
 
 async def handle_magic_rewrite(
@@ -453,99 +473,15 @@ async def handle_magic_rewrite(
     direction: str,
     abort_token: AbortToken | None = None,
 ) -> AsyncIterator[dict]:
-    """Rewrite an assistant message in place following a user-supplied direction.
+    """Rewrite an assistant reply following a user-supplied direction.
 
-    Entry point for ``POST /messages/{id}/magic_rewrite``. Appends the original
-    exchange to history, then runs a single writer-style call (no director or
-    editor) with an OOC instruction built from *direction*. Uses the same writer
-    lane and tool blob as a normal turn so the KV cache is reused. On success
-    the stored message is overwritten; on abort the original is left unchanged.
+    Entry point for ``POST /messages/{id}/magic_rewrite``. Wraps *direction* in an
+    OOC steering message and regenerates as a new sibling branch. The message is
+    assembled by concatenation rather than string formatting so braces in
+    *direction* are inert (it is macro-resolved downstream).
     """
-    try:
-        ctx = await _load_pipeline_context(conversation_id, abort_token=abort_token)
-        if ctx is None:
-            yield {"event": "error", "data": "Conversation not found"}
-            return
-
-        settings = ctx.settings
-        result = await _resolve_target_and_parent(conversation_id, assistant_msg_id)
-        if isinstance(result, str):
-            yield {"event": "error", "data": result}
-            return
-        target, user_msg = result
-
-        parent_id: int | None = user_msg.get("parent_id")
-        history = await db.get_path_to_leaf(conversation_id, parent_id) if parent_id is not None else []
-
-        extended_history = [
-            *history,
-            {"role": "user", "content": user_msg["content"]},
-            {"role": "assistant", "content": target["content"]},
-        ]
-        prefix = _build_prefix_from_ctx(ctx, extended_history)
-
-        direction_msg = f"[OOC: Rewrite the above response. Direction: {direction}]"
-
-        # Use the writer lane so the tool blob is byte-identical to normal turns
-        # (single-model ships the shared schema; dual-model drops tools per Invariant 5).
-        macros = Macros.from_settings(settings, ctx.conv["character_name"], ctx.active_persona)
-        enabled_tools_setting = settings.get("enabled_tools") or {}
-        enabled_tools = dict(enabled_tools_setting) if agent_enabled(settings) else {k: False for k in enabled_tools_setting}
-        agentic_active = agentic_lorebook_active(
-            settings, enabled_tools, ctx.lorebook_entries, agent_on=agent_enabled(settings)
-        )
-        schema_overrides = _build_writer_tools_blob(
-            settings, ctx.interactive_fragments, enabled_tools, agentic_lorebook=agentic_active
-        )
-        cfg = _resolve_pipeline_config(
-            settings,
-            enabled_tools,
-            macros=macros,
-            client=ctx.client,
-            agent_client=ctx.agent_client,
-            agent_prefix=None,  # agent lane is unused by the rewrite
-            prefix=prefix,
-            phrase_bank=ctx.phrase_bank,
-            schema_overrides=schema_overrides,
-        )
-        writer_lane = cfg.writer_lane
-
-        hyperparams = extract_hyperparams(settings)
-
-        writer_reasoning_on = bool((settings.get("reasoning_enabled_passes") or {}).get("writer", False))
-        extra = reasoning_cfg(writer_reasoning_on)
-
-        kv_tracker = _KVCacheTracker(conversation_id=conversation_id)
-        accumulated = ""
-        async for item in writer_lane.base.complete(
-            writer_lane.client,
-            label="magic_rewrite",
-            trailing=[{"role": "user", "content": direction_msg}],
-            # Empty in dual-model (no tools); otherwise prevent the model from calling any.
-            tool_choice="none" if writer_lane.base.tools else None,
-            kv_tracker=kv_tracker,
-            **extra,
-            **hyperparams,
-        ):
-            if item["type"] == "done":
-                break
-            if item["type"] == "reasoning":
-                yield {
-                    "event": "reasoning",
-                    "data": {"pass": "writer", "delta": item["delta"]},
-                }
-            elif item["type"] == "content":
-                accumulated += item["delta"]
-                yield {"event": "token", "data": item["delta"]}
-
-        kv_tracker.log_summary()
-
-        # Don't overwrite on abort; keep the original message.
-        if accumulated.strip() and not ctx.client.is_aborted:
-            await db.update_message_content(assistant_msg_id, accumulated)
-
-        yield {"event": "done"}
-
-    except Exception:
-        logger.exception("Magic rewrite error")
-        yield {"event": "error", "data": "Generation failed; see server logs"}
+    steer = _MAGIC_STEER_PREFIX + direction + _MAGIC_STEER_SUFFIX
+    async for event in _regenerate_with_steering(
+        conversation_id, assistant_msg_id, steer, abort_token, log_label="Magic rewrite"
+    ):
+        yield event

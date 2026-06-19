@@ -312,10 +312,11 @@ The only attachment writer exposed to authors. See sec. 9.
 | `handle_turn` | `user_message_created` | `done` |
 | `handle_regenerate` | `director_start` or, when the director block is skipped, `director_done` | `done` |
 | `handle_super_regenerate` | same as `handle_regenerate` | `done` |
+| `handle_magic_rewrite` | same as `handle_regenerate` | `done` |
 
-All three run PRE-pipeline hooks first. `handle_regenerate` / `handle_super_regenerate` skip `user_message_created` -- they do not persist a new user row. `done` fires last from `_consume_pipeline` on any turn that completes without raising -- it sits after the pipeline's `try/finally`, so a pipeline exception propagates past it.
+All four run PRE-pipeline hooks first. `handle_regenerate` / `handle_super_regenerate` / `handle_magic_rewrite` skip `user_message_created` -- they do not persist a new user row. `done` fires last from `_consume_pipeline` on any turn that completes without raising -- it sits after the pipeline's `try/finally`, so a pipeline exception propagates past it.
 
-`handle_magic_rewrite` does NOT use pre/post hooks; out of scope for workflow integration.
+`handle_magic_rewrite` is super-regenerate with a user-supplied steering message (the typed direction) in place of the canned one; it runs the same full pipeline and persists a new sibling.
 
 ### 7.2 Per-turn shared identities
 

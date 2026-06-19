@@ -366,10 +366,17 @@
 
 .message.user .msg-toolbar { justify-content: flex-end; }
 
-.magic-input {
+.magic-input-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   flex: 1;
   min-width: 0;
   max-width: 240px;
+}
+.magic-input {
+  flex: 1;
+  min-width: 0;
   padding: 3px 8px;
   font-size: 12px;
   background: var(--bg-input, var(--bg-secondary));
@@ -379,6 +386,7 @@
   outline: none;
 }
 .magic-input:focus { border-color: var(--accent); }
+.magic-apply { flex: none; }
 
 /* Swipe navigation */
 .swipe-nav {

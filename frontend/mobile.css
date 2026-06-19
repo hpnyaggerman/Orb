@@ -423,4 +423,14 @@ body {
     height: 36px;
     font-size: 14px;
   }
+
+  .msg-toolbar {
+    flex-wrap: wrap;
+  }
+
+  .magic-input-wrap {
+    order: 1;
+    flex-basis: 100%;
+    max-width: none;
+  }
 }
