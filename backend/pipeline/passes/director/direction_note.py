@@ -144,6 +144,7 @@ async def direction_note_step(
         return
 
     agent_raw = json.dumps(resp, default=str)
+    logger.info("Direction-note step output:\n%s", agent_raw)
     notes = extract_direction_notes(parse_tool_calls(resp), direction_note_fragments)
 
     yield {"type": "done", "result": DirectionNoteResult(notes=notes, agent_raw=agent_raw)}

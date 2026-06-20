@@ -550,30 +550,30 @@ export function renderToolsPanel() {
     <div class="tool-card-desc">Director fills each interactive fragment in its own LLM call. More focused output; higher latency.</div>
   </div>`;
 
-  const pfMode = S.directionNotesMode || "off";
-  const pfInject = S.directionNotesInject !== false;
-  const pfRecipient = S.directionNotesRecipient || "both";
-  const directionNotesCard = `<div class="tool-card ${pfMode !== "off" ? "tool-on" : ""}">
+  const dnMode = S.directionNotesMode || "off";
+  const dnInject = S.directionNotesInject !== false;
+  const dnRecipient = S.directionNotesRecipient || "both";
+  const directionNotesCard = `<div class="tool-card ${dnMode !== "off" ? "tool-on" : ""}">
     <div class="tool-card-header">
       <span class="tool-card-name">Direction Notes</span>
     </div>
     <div class="dn-config">
       <label>Recording</label>
       <select class="tool-card-select" onchange="setDirectionNotesMode(this.value)">
-        <option value="off" ${pfMode === "off" ? "selected" : ""}>Off</option>
-        <option value="pre_writer" ${pfMode === "pre_writer" ? "selected" : ""}>Before writer</option>
-        <option value="post_turn" ${pfMode === "post_turn" ? "selected" : ""}>End of turn</option>
+        <option value="off" ${dnMode === "off" ? "selected" : ""}>Off</option>
+        <option value="pre_writer" ${dnMode === "pre_writer" ? "selected" : ""}>Before writer</option>
+        <option value="post_turn" ${dnMode === "post_turn" ? "selected" : ""}>End of turn</option>
       </select>
       <label>Inject into context</label>
       <select class="tool-card-select" onchange="setDirectionNotesInject(this.value)">
-        <option value="on" ${pfInject ? "selected" : ""}>On</option>
-        <option value="off" ${!pfInject ? "selected" : ""}>Off</option>
+        <option value="on" ${dnInject ? "selected" : ""}>On</option>
+        <option value="off" ${!dnInject ? "selected" : ""}>Off</option>
       </select>
       <label>Who receives</label>
-      <select class="tool-card-select" onchange="setDirectionNotesRecipient(this.value)" ${pfInject ? "" : "disabled"}>
-        <option value="director" ${pfRecipient === "director" ? "selected" : ""}>Director</option>
-        <option value="writer" ${pfRecipient === "writer" ? "selected" : ""}>Writer</option>
-        <option value="both" ${pfRecipient === "both" ? "selected" : ""}>Director and writer</option>
+      <select class="tool-card-select" onchange="setDirectionNotesRecipient(this.value)" ${dnInject ? "" : "disabled"}>
+        <option value="director" ${dnRecipient === "director" ? "selected" : ""}>Director</option>
+        <option value="writer" ${dnRecipient === "writer" ? "selected" : ""}>Writer</option>
+        <option value="both" ${dnRecipient === "both" ? "selected" : ""}>Director and writer</option>
       </select>
     </div>
     <div class="tool-card-desc">Recording adds a note per enabled "direction_note" fragment, kept on this branch ("before writer" adds latency before the reply streams; "end of turn" records after the final reply). Injection is separate from recording. "Who receives" picks whether the director sees the notes while planning the scene, the writer while generating prose, or both.</div>
