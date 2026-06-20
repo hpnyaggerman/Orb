@@ -148,7 +148,7 @@ async def api_super_regenerate_msg(cid: str, msg_id: int, request: Request, data
 
 @router.post("/api/conversations/{cid}/messages/{msg_id}/magic_rewrite")
 async def api_magic_rewrite_msg(cid: str, msg_id: int, request: Request, data: MagicRewriteMsg):
-    """Magic rewrite: calls the LLM directly with a user-supplied direction, no agent passes."""
+    """Magic rewrite: runs the full pipeline as a new sibling steered by a user-supplied direction."""
     conv = await get_conversation(cid)
     if not conv:
         raise HTTPException(status_code=404, detail="Conversation not found")

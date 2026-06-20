@@ -62,7 +62,7 @@ def apply_rewrite(user_message: str, rewritten_msg: str | None) -> tuple[str, bo
 def disable_rewrite(enabled_tools: Mapping[str, bool]) -> dict[str, bool]:
     """Return *enabled_tools* with ``rewrite_user_prompt`` forced off.
 
-    Used by super-regenerate, whose OOC steering message must not be rewritten.
-    Returns a fresh dict rather than mutating the input.
+    Used by the steered-regenerate paths, whose OOC steering message must not be
+    rewritten by the director. Returns a fresh dict rather than mutating the input.
     """
     return {**enabled_tools, REWRITE_TOOL_NAME: False}

@@ -46,7 +46,7 @@ def _resolve_pipeline_config(
 
     Resolves feature flags (audit, length guard, per-pass reasoning), builds the
     writer and agent lanes, and returns a :class:`_PipelineConfig`. Called once
-    per turn by ``_run_pipeline`` and ``handle_magic_rewrite``.
+    per turn by ``_run_pipeline``.
     """
     # Drop a disabled workflow's tools from the per-turn blob at the single
     # chokepoint that builds it, covering both the standing enabled_tools map and
@@ -131,10 +131,10 @@ def _build_writer_tools_blob(
 
     Mutates *enabled_tools* in place to add ``give_feedback`` when the feedback
     step is active. Returns a ``schema_overrides`` dict (``direct_scene`` and
-    optionally ``give_feedback``) that stays byte-identical across the main turn
-    and magic-rewrite so the LLM's KV cache is not busted.
+    optionally ``give_feedback``) held byte-stable across every cached call in a
+    turn so the LLM's KV cache is not busted.
 
-    Called by ``_prepare_turn`` and ``handle_magic_rewrite``.
+    Called by ``_prepare_turn``.
     """
     writer_fragments, feedback_fragments = _split_interactive_fragments(interactive_fragments)
     overrides: dict = {"direct_scene": build_direct_scene_override(writer_fragments, agentic_lorebook=agentic_lorebook)}

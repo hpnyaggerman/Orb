@@ -8,10 +8,11 @@ Why this file exists (the gap that shipped a real cache regression):
     and asserts the cache invariants *within one turn* — every pass compared
     against its sibling passes. That can never catch a defect in a DIFFERENT
     entry point, and it can never catch a single-call handler that diverges from
-    the conversation's established cache: ``handle_magic_rewrite`` issues exactly
-    one LLM call, so "all my calls agree with each other" is trivially true even
-    when that one call shipped ``tools=None`` and busted the whole provider
-    prefix cache (cached_tokens → 0).
+    the conversation's established cache: ``handle_magic_rewrite`` once issued a
+    single LLM call, so "all my calls agree with each other" was trivially true
+    even when that one call shipped ``tools=None`` and busted the whole provider
+    prefix cache (cached_tokens -> 0). It now runs the full pipeline, but the
+    cross-entry-point invariant below still guards every call it makes.
 
     The real bug: every normal pass ships the byte-identical tool-schema blob, so
     the inference server caches a prefix that *includes* the templated tools
@@ -172,8 +173,7 @@ async def _drive_fork_edit(client, llm_mock, b: _Baseline) -> None:
 
 
 async def _drive_magic_rewrite(client, llm_mock, b: _Baseline) -> None:
-    # magic_rewrite is a single writer-style call — no enqueue needed, the writer
-    # queue's empty default ("") is fine; we only inspect the wire payload.
+    _enqueue_turn(llm_mock)
     resp = await client.post(
         f"/api/conversations/{b.cid}/messages/{b.asst_id}/magic_rewrite",
         json={"direction": "make it darker"},
@@ -182,15 +182,15 @@ async def _drive_magic_rewrite(client, llm_mock, b: _Baseline) -> None:
     _ = resp.text
 
 
-# ``expect_full_blob`` — whether the entry point ships the turn's exact blob.
-# super_regenerate intentionally disables ``rewrite_user_prompt`` (it must not
-# rewrite the OOC steering message), so its blob is a smaller — but still
-# non-empty and internally consistent — schema set than the turn's.
+# ``expect_full_blob`` -- whether the entry point ships the turn's exact blob.
+# super_regenerate and magic_rewrite disable ``rewrite_user_prompt`` (they must
+# not rewrite the OOC steering message), so their blob is a smaller -- but still
+# non-empty and internally consistent -- schema set than the turn's.
 _ENTRY_POINTS = [
     ("regenerate", _drive_regenerate, True),
     ("super_regenerate", _drive_super_regenerate, False),
     ("fork_edit", _drive_fork_edit, True),
-    ("magic_rewrite", _drive_magic_rewrite, True),
+    ("magic_rewrite", _drive_magic_rewrite, False),
 ]
 
 
@@ -246,31 +246,25 @@ async def test_entry_point_tools_blob_and_prefix_match_the_turn(client, llm_mock
         )
 
 
-async def test_magic_rewrite_ships_the_turns_full_tools_blob(client, llm_mock):
-    """Focused regression test for the magic_rewrite KV-cache bust.
+async def test_magic_rewrite_writer_call_ships_a_stable_blob(client, llm_mock):
+    """The magic_rewrite writer call ships a non-empty, cache-stable tools blob
+    with tool_choice='none', on the writer model.
 
-    Before the fix, ``handle_magic_rewrite`` called the client directly with
-    ``tools=None``; its one call carried an empty blob while every turn on the
-    conversation carried the full schema blob, so the provider prefix cache
-    (which spans the templated tools region) reset to cached_tokens=0. The fix
-    routes the rewrite through the writer lane, which ships the shared blob with
-    tool_choice="none". This test pins that behavior down end-to-end."""
+    The rewrite runs the full pipeline (director, writer, editor); its writer
+    call mirrors super_regenerate -- a rewrite-disabled blob (smaller than the
+    turn's full blob) shipped purely to keep the templated tools region
+    byte-stable, with the writer barred from invoking a tool. An empty blob here
+    is the original ``tools=None`` cache bust."""
     b = await _baseline_turn(client, llm_mock)
 
     start = len(llm_mock.captured)
     await _drive_magic_rewrite(client, llm_mock, b)
     calls = llm_mock.captured[start:]
 
-    assert len(calls) == 1, "magic_rewrite should issue exactly one writer-style call"
-    call = calls[0]
-    assert _wire_tools(call["tools"]) == b.tools_blob, (
-        "CACHE BUST: magic_rewrite's tools blob != the turn's blob. tools=None (or any "
-        "divergent blob) busts the whole provider prefix cache."
-    )
-    # The writer is barred from invoking a tool; it ships the blob purely so the
-    # cached tools region stays byte-stable.
-    assert call["tool_choice"] == "none", "magic_rewrite must send tool_choice='none', not a forced/auto choice"
-    assert call["model"] == b.writer_model, "magic_rewrite must run on the same (writer) model as the turn"
+    writer = next(c for c in calls if c["pass"] == "writer")
+    assert _wire_tools(writer["tools"]), "magic_rewrite's writer call shipped an empty tools blob (the tools=None bust)"
+    assert writer["tool_choice"] == "none", "magic_rewrite's writer call must send tool_choice='none'"
+    assert writer["model"] == b.writer_model, "magic_rewrite must run on the writer model"
 
 
 async def test_magic_rewrite_drops_tools_in_dual_model(client, llm_mock):
@@ -310,6 +304,7 @@ async def test_magic_rewrite_drops_tools_in_dual_model(client, llm_mock):
     asst_id = next(m["id"] for m in reversed(await get_messages(cid)) if m["role"] == "assistant")
 
     start = len(llm_mock.captured)
+    _enqueue_turn(llm_mock)
     resp = await client.post(
         f"/api/conversations/{cid}/messages/{asst_id}/magic_rewrite",
         json={"direction": "make it darker"},
@@ -318,11 +313,10 @@ async def test_magic_rewrite_drops_tools_in_dual_model(client, llm_mock):
     _ = resp.text
     calls = llm_mock.captured[start:]
 
-    assert len(calls) == 1, "magic_rewrite should issue exactly one writer-style call"
-    call = calls[0]
-    assert _wire_tools(call["tools"]) == "", (
+    writer = next(c for c in calls if c["pass"] == "writer")
+    assert _wire_tools(writer["tools"]) == "", (
         "CACHE BUST: in dual-model magic_rewrite shipped tools to the writer server, whose "
-        "cache is tool-less — it must drop tools to match the writer lane (Invariant 5)."
+        "cache is tool-less -- it must drop tools to match the writer lane (Invariant 5)."
     )
-    assert call["tool_choice"] is None, "with no tools there is nothing to constrain — tool_choice must be omitted"
-    assert call["model"] == writer_model, "magic_rewrite must run on the same (writer) model as the dual-model turn's writer"
+    assert writer["tool_choice"] is None, "with no tools there is nothing to constrain -- tool_choice must be omitted"
+    assert writer["model"] == writer_model, "magic_rewrite must run on the same (writer) model as the dual-model turn's writer"

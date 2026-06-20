@@ -323,9 +323,8 @@ export async function afterStream() {
     if (pendingUserMsg) patchPendingUserMessage(pendingUserMsg);
     patchParentUserMessage(lastMsg);
     updateContextCounter();
-    // Magic rewrite updates a message in-place, so subsequent messages survive on the
-    // backend but were hidden by streamCutoffIndex during streaming. Re-render if any
-    // are missing from the DOM.
+    // The cutoff hid the target and everything after it during streaming; after the
+    // refetch the DOM can hold fewer messages than state. Re-render if any are missing.
     const ct = $("chat-messages");
     if (ct.querySelectorAll(".message[data-msg-id]").length < S.messages.length) {
       renderMessages();
@@ -769,8 +768,8 @@ export function toggleMagicInput(msgId) {
   });
 
   const onMouseDown = (e) => {
-    const el = document.getElementById(`magic-input-${msgId}`);
-    if (el?.contains(e.target)) return;
+    const wrap = document.getElementById(`magic-wrap-${msgId}`);
+    if (wrap?.contains(e.target)) return;
     // If the magic button itself was clicked, its onclick will handle the toggle.
     if (e.target.closest(`[onclick="toggleMagicInput(${msgId})"]`)) {
       document.removeEventListener("mousedown", onMouseDown);
