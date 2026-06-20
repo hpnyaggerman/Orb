@@ -125,9 +125,16 @@ async def _persist_result(
             await db.add_generated_chars(len(resp_text))
         except Exception:
             logger.exception("Failed to update generated-chars counter; row already committed")
+        if res.direction_notes:
+            try:
+                await db.create_direction_notes(conversation_id, asst_id, res.direction_notes)
+            except Exception:
+                logger.exception("Failed to persist direction notes for assistant message %s; row already committed", asst_id)
         return asst_id, rejected
     else:
         logger.info("Skipping assistant message persistence: resp_text is empty (reasoning‑only output)")
+        if res.direction_notes:
+            logger.info("Dropping %d direction note(s): turn produced no assistant message", len(res.direction_notes))
         return None, []
 
 

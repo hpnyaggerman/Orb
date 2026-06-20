@@ -166,13 +166,21 @@ export function renderInteractiveFragments() {
       const enabled = f.enabled === true || f.enabled === 1;
       const toggleId = `interactive-frag-toggle-${f.id}`;
       const userBadge =
-        f.field_type === "feedback" ? ` <span class="frag-type-badge" title="Feedback fragment">F</span>` : "";
-      // Feedback fragments are gated by the "Editor Feedback" feature flag; grey
-      // them out (and explain why on hover) when that feature is disabled.
-      const featureDisabled = f.field_type === "feedback" && !S.feedbackEnabled;
-      const itemTitle = featureDisabled
+        f.field_type === "feedback"
+          ? ` <span class="frag-type-badge" title="Feedback fragment">F</span>`
+          : f.field_type === "direction_note"
+            ? ` <span class="frag-type-badge" title="Direction-note fragment">D</span>`
+            : "";
+      // Feedback and direction-note fragments are gated by their own feature switch;
+      // grey them out (and explain why on hover) when that switch is off.
+      const feedbackDisabled = f.field_type === "feedback" && !S.feedbackEnabled;
+      const directionNoteDisabled = f.field_type === "direction_note" && (S.directionNotesMode || "off") === "off";
+      const featureDisabled = feedbackDisabled || directionNoteDisabled;
+      const itemTitle = feedbackDisabled
         ? "Editor Feedback feature is disabled — enable it in Agents panel to use this fragment"
-        : esc(f.description);
+        : directionNoteDisabled
+          ? "Direction Notes recording is off -- set it to record in the Agents panel to use this fragment"
+          : esc(f.description);
       return `
     <div class="fragment-item${featureDisabled ? " frag-feature-disabled" : ""}" draggable="true" data-id="${esc(f.id)}" title="${itemTitle}" onclick="showInteractiveFragmentModal('${f.id}')">
       <div class="frag-drag-handle" onclick="event.stopPropagation()">⋮⋮</div>
@@ -296,6 +304,13 @@ const INTERACTIVE_FRAGMENT_EXAMPLES = {
     injection_label: "e.g. Tension",
     description: "Track a value that evolves each turn, e.g. 'calm' -> 'uneasy' -> 'breaking point'",
   },
+  direction_note: {
+    id: "e.g. trajectory",
+    label: "e.g. Trajectory",
+    injection_label: "e.g. Direction of travel",
+    description:
+      "A lasting note the director records and keeps on this branch, e.g. 'where the story is heading and the established facts that pin it'",
+  },
   feedback: {
     id: "e.g. next_actions",
     label: "e.g. Next Actions",
@@ -348,6 +363,7 @@ export function showInteractiveFragmentModal(fragId = null) {
           <option value="array" ${d.field_type === "array" ? "selected" : ""}>list</option>
           <option value="progressive" ${d.field_type === "progressive" ? "selected" : ""}>progressive</option>
           <option value="feedback" ${d.field_type === "feedback" ? "selected" : ""}>feedback (note to you)</option>
+          <option value="direction_note" ${d.field_type === "direction_note" ? "selected" : ""}>direction note (persists)</option>
         </select>
       </div>
     </div>

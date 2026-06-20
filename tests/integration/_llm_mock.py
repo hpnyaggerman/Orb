@@ -25,6 +25,7 @@ from backend.inference import AbortToken
 _EDITOR_FUNCTION_NAMES = {"editor_apply_patch", "editor_rewrite"}
 _DIRECTOR_FUNCTION_NAMES = {"direct_scene", "rewrite_user_prompt"}
 _FEEDBACK_FUNCTION_NAMES = {"give_feedback"}
+_DIRECTION_NOTE_FUNCTION_NAMES = {"record_direction_note"}
 
 
 def _validate_tool_calls(tool_calls: Any) -> None:
@@ -85,6 +86,8 @@ def _pass_from_tool_choice(tool_choice: Any) -> str:
             return "director"
         if name in _FEEDBACK_FUNCTION_NAMES:
             return "feedback"
+        if name in _DIRECTION_NOTE_FUNCTION_NAMES:
+            return "direction_note"
         # Any other forced function name belongs to a workflow tool: the
         # toolkit's forced_tool_call helper passes the same dict shape via
         # TOOLS[<wid_registered_name>]["choice"], but the name is not one of
@@ -121,6 +124,7 @@ class FakeLLMClient:
             "writer": [],
             "editor": [],
             "feedback": [],
+            "direction_note": [],
             "workflow": [],
         }
         self._gates: dict[str, list[PassGate]] = {
@@ -128,6 +132,7 @@ class FakeLLMClient:
             "writer": [],
             "editor": [],
             "feedback": [],
+            "direction_note": [],
             "workflow": [],
         }
         # Mirror LLMClient: the turn's clients share one abort token, so an
@@ -175,6 +180,11 @@ class FakeLLMClient:
         """
         _validate_tool_calls(tool_calls)
         self._queues["feedback"].append({"tool_calls": tool_calls})
+
+    def enqueue_direction_note(self, tool_calls: list[dict]) -> None:
+        """Queue a director-notes response (the ``record_direction_note`` forced call)."""
+        _validate_tool_calls(tool_calls)
+        self._queues["direction_note"].append({"tool_calls": tool_calls})
 
     def enqueue_workflow(self, message: dict) -> None:
         self._queues["workflow"].append({"message": message})
@@ -249,6 +259,18 @@ class FakeLLMClient:
 
         if pass_name == "feedback":
             payload = self._queues["feedback"].pop(0) if self._queues["feedback"] else {"tool_calls": []}
+            yield {
+                "type": "done",
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": payload.get("tool_calls", []),
+                },
+            }
+            return
+
+        if pass_name == "direction_note":
+            payload = self._queues["direction_note"].pop(0) if self._queues["direction_note"] else {"tool_calls": []}
             yield {
                 "type": "done",
                 "message": {

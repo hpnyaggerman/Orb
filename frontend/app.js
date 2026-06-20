@@ -158,6 +158,9 @@ import {
   saveSetting,
   saveUserProfile,
   setAgentEnabled,
+  setDirectionNotesInject,
+  setDirectionNotesMode,
+  setDirectionNotesRecipient,
   setPersonaCharacterLock,
   setPersonaConversationLock,
   showAddPhraseGroupModal,
@@ -178,6 +181,12 @@ import {
   toggleWorkflowEnabled,
   toggleWorkflowsGlobal,
 } from "./settings.js";
+import {
+  deleteDirectionNote,
+  editDirectionNote,
+  saveDirectionNote,
+  toggleDirectionNotesPanel,
+} from "./direction_notes_panel.js";
 import { S } from "./state.js";
 import { initTabLock, setLockStateChangeCallback } from "./tabLock.js";
 import { $ } from "./utils.js";
@@ -236,6 +245,13 @@ Object.assign(window, {
   toggleAgenticLorebook,
   toggleFeedbackEnabled,
   toggleDirectorIndividualFragments,
+  setDirectionNotesMode,
+  setDirectionNotesInject,
+  setDirectionNotesRecipient,
+  toggleDirectionNotesPanel,
+  editDirectionNote,
+  saveDirectionNote,
+  deleteDirectionNote,
   toggleShowEditorDiff,
   toggleAuditType,
   toggleHideUntilBaked,

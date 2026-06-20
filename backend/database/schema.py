@@ -39,6 +39,9 @@ CREATE TABLE IF NOT EXISTS settings (
     agent_shared_system_prompt TEXT NOT NULL DEFAULT '',
     feedback_enabled INTEGER NOT NULL DEFAULT 0,
     director_individual_fragments INTEGER NOT NULL DEFAULT 0,
+    direction_notes_mode TEXT NOT NULL DEFAULT 'off',
+    direction_notes_inject INTEGER NOT NULL DEFAULT 1,
+    direction_notes_recipient TEXT NOT NULL DEFAULT 'both',
     inspector_open_states TEXT NOT NULL DEFAULT '{"reasoning":true,"tool_calls":false,"injection_block":false,"context_size":true}',
     workflow_config TEXT NOT NULL DEFAULT '{}',
     workflows_globally_enabled INTEGER NOT NULL DEFAULT 1,
@@ -247,6 +250,19 @@ CREATE TABLE IF NOT EXISTS lorebook_entries (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS direction_notes (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    message_id INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    interactive_fragment_id TEXT NOT NULL DEFAULT '',
+    interactive_fragment_label TEXT NOT NULL DEFAULT '',
+    content TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_dirnote_message ON direction_notes(message_id);
+CREATE INDEX IF NOT EXISTS idx_dirnote_conversation ON direction_notes(conversation_id);
 
 """
 

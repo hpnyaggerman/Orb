@@ -42,6 +42,28 @@ logger = logging.getLogger(__name__)
 # ═══════════════════════════════════════════════════════════════════════════════
 
 
+async def _load_direction_notes(ctx: PipelineContext, conversation_id: str, path: Sequence[Mapping[str, Any]]) -> None:
+    """Seed ``ctx.director['direction_notes']`` with the active-branch notes.
+
+    Reconstructed from the messages on *path*, so the set is branch-correct; each note
+    carries its authoring fragment's label and the turn it was recorded on (mapped from
+    the path). Always loaded (cheap, empty when no notes exist) -- whether the notes are
+    injected into the prompt or shown to the recording step is decided by their own gates
+    downstream, independent of one another.
+    """
+    rows = await db.get_direction_notes_for_path(conversation_id, [m["id"] for m in path])
+    turn_by_message = {m["id"]: m.get("turn_index") for m in path}
+    ctx.director["direction_notes"] = [
+        {
+            "interactive_fragment_id": r["interactive_fragment_id"],
+            "interactive_fragment_label": r["interactive_fragment_label"],
+            "content": r["content"],
+            "turn_index": turn_by_message.get(r["message_id"]),
+        }
+        for r in rows
+    ]
+
+
 async def _resolve_target_and_parent(
     conversation_id: str, assistant_msg_id: int
 ) -> tuple[Mapping[str, Any], Mapping[str, Any]] | str:
@@ -78,6 +100,7 @@ async def _prepare_regen_context(
     moods_before = await db.get_moods_before_turn(conversation_id, target["turn_index"] - 1)
     ctx.director["active_moods"] = moods_before
     ctx.director["progressive_fields"] = progressive.branch_baseline(history)
+    await _load_direction_notes(ctx, conversation_id, history)
     user_msg_id = target["parent_id"]
     attachments = await db.get_user_attachments_for_message(user_msg_id) if user_msg_id else []
     return history, attachments
@@ -207,6 +230,7 @@ async def handle_turn(
 
         # Read progressive_fields from the grandparent node (branch-aware, unlike conversation_logs).
         ctx.director["progressive_fields"] = progressive.branch_baseline(messages)
+        await _load_direction_notes(ctx, conversation_id, messages)
 
         if not skip_user_persist:
             # Normalize frontend attachment format to DB format before persisting.
@@ -290,6 +314,7 @@ async def handle_fork_edit(
         # Reset director to branch-point baseline (branch-aware progressive_fields).
         ctx.director["active_moods"] = await db.get_moods_before_turn(conversation_id, turn_index)
         ctx.director["progressive_fields"] = progressive.branch_baseline(history)
+        await _load_direction_notes(ctx, conversation_id, history)
 
         # Carry original attachments onto the new sibling.
         carried_atts = await db.get_user_attachments_for_message(user_msg_id)

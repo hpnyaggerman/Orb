@@ -8,9 +8,11 @@ import { renderMessages, resetRenderWindow, setMessages } from "./chat_core.js";
 import { renderInspector } from "./chat_inspector.js";
 import { clearInspectedMessage, inspectMessage } from "./chat_messages.js";
 import { resetWorkflowViewportState } from "./chat_workflow.js";
+import { renderDirectionNotesPanel } from "./direction_notes_panel.js";
 import { loadCharacters, refreshCharacters, renderCharacters } from "./library.js";
 import { activateAndPrioritizeWorld, deactivateWorld } from "./lorebooks.js";
 import { closeModal, showConfirmModal, showModal } from "./modal.js";
+import { isUtilityPanelOpen } from "./panels.js";
 // Imported from settings_personas.js directly: going through settings.js would
 // close an import cycle (settings.js → chat.js → this module).
 import { updateUserBtn } from "./settings_personas.js";
@@ -194,6 +196,9 @@ export async function selectConversation(id) {
   } else {
     clearInspectedMessage();
   }
+  // The notes panel shows the conversation's accumulated notes, so refresh it on a
+  // switch (it only otherwise refreshes on open, after a stream, and on revisit).
+  if (isUtilityPanelOpen("direction-notes-panel")) renderDirectionNotesPanel();
 }
 
 function confirmDeleteConversation(id, msgCount, afterDelete) {

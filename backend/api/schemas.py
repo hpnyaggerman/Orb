@@ -7,7 +7,7 @@ it needs and the shapes stay discoverable in one place.
 
 from __future__ import annotations
 
-from typing import Any, List, Optional
+from typing import Any, List, Literal, Optional
 
 from pydantic import BaseModel, field_validator
 
@@ -49,8 +49,15 @@ class SettingsUpdate(BaseModel):
     agent_shared_system_prompt: Optional[str] = None
     feedback_enabled: Optional[bool] = None
     director_individual_fragments: Optional[bool] = None
+    direction_notes_mode: Optional[Literal["off", "pre_writer", "post_turn"]] = None
+    direction_notes_inject: Optional[bool] = None
+    direction_notes_recipient: Optional[Literal["director", "writer", "both"]] = None
     inspector_open_states: Optional[dict] = None
     workflows_globally_enabled: Optional[bool] = None
+
+
+class DirectionNoteUpdate(BaseModel):
+    content: str
 
 
 class WorkflowConfigUpdate(BaseModel):

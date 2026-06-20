@@ -98,6 +98,9 @@ class _SettingsBase(TypedDict):
     agent_shared_system_prompt: str
     feedback_enabled: int
     director_individual_fragments: int
+    direction_notes_mode: str
+    direction_notes_inject: int
+    direction_notes_recipient: str
     workflows_globally_enabled: int
 
 
@@ -363,6 +366,18 @@ class MoodFragmentRow(TypedDict):
     prompt_text: str
     negative_prompt: str
     enabled: int
+
+
+class DirectionNoteRow(TypedDict):
+    """A row from ``direction_notes`` (``SELECT *``)."""
+
+    id: int
+    conversation_id: str
+    message_id: int
+    interactive_fragment_id: str
+    interactive_fragment_label: str
+    content: str
+    created_at: str
 
 
 class DirectorStateRow(TypedDict):

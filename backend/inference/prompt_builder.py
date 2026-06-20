@@ -338,6 +338,67 @@ def build_feedback_prompt(
     return "\n\n".join(parts)
 
 
+DIRECTION_NOTE_PREAMBLE = (
+    "[OOC: Pause the roleplay and step out of character. For each category below, decide whether "
+    "anything from what just happened should be remembered for the rest of this story branch: a "
+    "lasting change to a character, an established fact, or the direction of travel -- and the "
+    "reason behind it. Keep the story unpredictable; record only what genuinely constrains or "
+    "steers future replies. Fill a category's parameter only when it has something new worth "
+    "recording this turn, and leave the rest empty."
+)
+
+
+def _direction_notes_lines(notes: Sequence[Mapping[str, Any]]) -> str:
+    """One line per note in the given order (oldest-first, i.e. turn order), each tagged
+    with its authoring fragment's label and the turn it was recorded on."""
+    lines = []
+    for n in notes:
+        turn = n.get("turn_index")
+        tag = f"{n['interactive_fragment_label']}, turn {turn}" if turn is not None else n["interactive_fragment_label"]
+        lines.append(f"- ({tag}) {n['content']}")
+    return "\n".join(lines)
+
+
+def render_direction_notes_block(notes: Sequence[Mapping[str, Any]]) -> str:
+    """Render the active direction notes as a Scene Direction sub-block, or '' when empty.
+
+    Notes are listed in turn order, each prefixed with the label of the fragment that
+    authored it so the writer can tell which directive a note belongs to.
+    """
+    if not notes:
+        return ""
+    return f"**Direction Notes**\n{_direction_notes_lines(notes)}"
+
+
+def build_direction_note_prompt(
+    active_notes: Sequence[Mapping[str, Any]],
+    direction_note_fragments: Sequence[Mapping[str, Any]],
+    *,
+    inj_block: str | None = None,
+    reasoning_on: bool = False,
+    tool_schema: dict | None = None,
+) -> str:
+    """Build the request message for the direction-note step.
+
+    *active_notes* are already in effect on this branch; they are listed in turn order
+    (each labelled with its fragment) so the model evolves them rather than restating
+    them. *inj_block* is this turn's scene direction, passed for the pre-writer placement;
+    the post-turn placement omits it because the finished reply is already replayed in the
+    message history. Each parameter id is paired with its fragment's label so the model
+    knows what each opaque category id means.
+    """
+    preamble = DIRECTION_NOTE_PREAMBLE + (REASONING_GUIDANCE if reasoning_on else "")
+    parts = [preamble]
+    if active_notes:
+        parts.append("Already recorded (do not repeat these):\n" + _direction_notes_lines(active_notes))
+    if inj_block:
+        parts.append(inj_block)
+    if tool_schema is not None:
+        labels = {df["id"]: (df.get("injection_label") or df.get("label") or "").strip() for df in direction_note_fragments}
+        parts.append(_tool_call_instruction("record_direction_note", tool_schema, labels=labels))
+    return "\n\n".join(parts)
+
+
 def build_editor_prompt(
     has_audit_issues: bool,
     report_text: str,

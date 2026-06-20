@@ -130,6 +130,50 @@ def build_feedback_tool(feedback_fragments: Sequence[Mapping[str, Any]]) -> dict
 GIVE_FEEDBACK_CHOICE = {"type": "function", "function": {"name": "give_feedback"}}
 
 
+_RECORD_DIRECTION_NOTE_DESCRIPTION = (
+    "Record lasting director notes that should persist for the rest of this story branch. "
+    "Each parameter is one category of note; fill only the categories that have something "
+    "new worth remembering this turn, and leave the rest empty."
+)
+
+
+def build_direction_note_tool(direction_note_fragments: Sequence[Mapping[str, Any]]) -> dict:
+    """Build the ``record_direction_note`` tool schema from the enabled direction-note fragments.
+
+    Each ``field_type="direction_note"`` fragment contributes one string parameter
+    (keyed by fragment id); there are no fixed parameters. Returns an OpenAI
+    function-calling format dict.
+
+    The schema rides the shared per-turn tools blob (via ``schema_overrides``) so
+    the direction-note step can force ``tool_choice=record_direction_note`` without
+    a cache miss.
+    """
+    properties: dict = {}
+    required: list[str] = []
+
+    for df in direction_note_fragments:
+        fid = df["id"]
+        properties[fid] = {"type": "string", "description": df["description"]}
+        if df.get("required"):
+            required.append(fid)
+
+    return {
+        "type": "function",
+        "function": {
+            "name": "record_direction_note",
+            "description": _RECORD_DIRECTION_NOTE_DESCRIPTION,
+            "parameters": {
+                "type": "object",
+                "properties": properties,
+                "required": required,
+            },
+        },
+    }
+
+
+RECORD_DIRECTION_NOTE_CHOICE = {"type": "function", "function": {"name": "record_direction_note"}}
+
+
 REWRITE_PROMPT_TOOL = {
     "type": "function",
     "function": {
@@ -227,6 +271,14 @@ TOOLS: dict[str, dict] = {
         "choice": GIVE_FEEDBACK_CHOICE,
         "schema": build_feedback_tool([]),
     },
+    # Internal, mode-gated (never user-toggleable). The empty-properties placeholder
+    # is overridden per-turn via schema_overrides with build_direction_note_tool(direction_note_
+    # fragments); registering it here emits its bytes into the shared blob so the
+    # direction-note step reuses the cached base.
+    "record_direction_note": {
+        "choice": RECORD_DIRECTION_NOTE_CHOICE,
+        "schema": build_direction_note_tool([]),
+    },
 }
 
 # Built-in tool names declared as a literal and asserted equal to TOOLS keys at
@@ -239,6 +291,7 @@ BUILTIN_TOOL_NAMES: frozenset[str] = frozenset(
         "editor_apply_patch",
         "editor_rewrite",
         "give_feedback",
+        "record_direction_note",
     }
 )
 assert BUILTIN_TOOL_NAMES == frozenset(TOOLS.keys()), "BUILTIN_TOOL_NAMES drift vs TOOLS literal keys"
@@ -248,7 +301,7 @@ assert BUILTIN_TOOL_NAMES == frozenset(TOOLS.keys()), "BUILTIN_TOOL_NAMES drift 
 # feedback-step tool (pipeline/passes/editor/feedback.py): it rides the shared per-turn tools
 # blob (Invariant 3) but must NOT be offered to or triggered by the director.
 PRE_WRITER_TOOLS = {"direct_scene", "rewrite_user_prompt"}
-POST_WRITER_TOOLS = {"editor_apply_patch", "editor_rewrite", "give_feedback"}
+POST_WRITER_TOOLS = {"editor_apply_patch", "editor_rewrite", "give_feedback", "record_direction_note"}
 
 assert PRE_WRITER_TOOLS.isdisjoint(POST_WRITER_TOOLS), "phase sets overlap"
 assert PRE_WRITER_TOOLS | POST_WRITER_TOOLS == BUILTIN_TOOL_NAMES, "phase sets must partition built-ins"

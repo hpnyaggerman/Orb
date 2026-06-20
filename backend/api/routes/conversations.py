@@ -15,11 +15,14 @@ from ...database import (
     add_message,
     create_conversation,
     delete_conversation,
+    delete_direction_note,
     fork_conversation,
     get_active_lorebook_entries,
     get_character_card,
     get_conversation,
     get_conversation_logs,
+    get_direction_notes_for_message,
+    get_direction_notes_for_path,
     get_director_log_for_message,
     get_director_state,
     get_interactive_fragments,
@@ -35,6 +38,7 @@ from ...database import (
     set_active_leaf,
     touch_conversation,
     update_conversation,
+    update_direction_note,
     update_director_state,
     user_attachment_payloads,
 )
@@ -49,6 +53,7 @@ from ..schemas import (
     CompressRequest,
     ConversationCreate,
     ConversationUpdate,
+    DirectionNoteUpdate,
     SummarizeRequest,
 )
 
@@ -457,6 +462,14 @@ async def api_get_message_director_log(cid: str, msg_id: int):
     msg = await get_message_by_id(msg_id)
     if not msg or msg.get("conversation_id") != cid:
         raise HTTPException(status_code=404, detail="Message not found")
+    direction_notes = [
+        {
+            "interactive_fragment_id": r["interactive_fragment_id"],
+            "interactive_fragment_label": r["interactive_fragment_label"],
+            "content": r["content"],
+        }
+        for r in await get_direction_notes_for_message(msg_id)
+    ]
     log = await get_director_log_for_message(msg_id)
     if not log:
         return {
@@ -468,6 +481,7 @@ async def api_get_message_director_log(cid: str, msg_id: int):
             "reasoning_writer": "",
             "reasoning_editor": "",
             "feedback": {},
+            "direction_notes": direction_notes,
         }
     return {
         "active_moods": log.get("active_moods_after", []),
@@ -478,4 +492,41 @@ async def api_get_message_director_log(cid: str, msg_id: int):
         "reasoning_writer": log.get("reasoning_writer") or "",
         "reasoning_editor": log.get("reasoning_editor") or "",
         "feedback": log.get("feedback", {}) or {},
+        "direction_notes": direction_notes,
     }
+
+
+@router.get("/api/conversations/{cid}/direction-notes")
+async def api_list_direction_notes(cid: str):
+    conv = await get_conversation(cid)
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    messages = await get_messages(cid)
+    by_id = {m["id"]: m for m in messages}
+    rows = await get_direction_notes_for_path(cid, list(by_id))
+    return [
+        {
+            "id": r["id"],
+            "interactive_fragment_id": r["interactive_fragment_id"],
+            "interactive_fragment_label": r["interactive_fragment_label"],
+            "content": r["content"],
+            "message_id": r["message_id"],
+            "turn_index": by_id[r["message_id"]]["turn_index"],
+        }
+        for r in rows
+    ]
+
+
+@router.put("/api/conversations/{cid}/direction-notes/{fid}")
+async def api_update_direction_note(cid: str, fid: int, data: DirectionNoteUpdate):
+    updated = await update_direction_note(fid, data.content)
+    if not updated:
+        raise HTTPException(status_code=404, detail="Note not found")
+    return updated
+
+
+@router.delete("/api/conversations/{cid}/direction-notes/{fid}")
+async def api_delete_direction_note(cid: str, fid: int):
+    if not await delete_direction_note(fid):
+        raise HTTPException(status_code=404, detail="Note not found")
+    return {"ok": True}

@@ -154,6 +154,20 @@ SEED_INTERACTIVE_FRAGMENTS = [
         "sort_order": 5,
         "enabled": False,
     },
+    {
+        "id": "story_direction",
+        "label": "Story Direction",
+        "description": (
+            "Record a lasting development worth keeping for the rest of this branch: the direction of "
+            "travel, an established fact, or a change to a character and the reason for it. Leave empty "
+            "unless something genuinely new constrains future replies."
+        ),
+        "field_type": "direction_note",
+        "required": False,
+        "injection_label": "Story direction",
+        "sort_order": 6,
+        "enabled": False,
+    },
 ]
 
 DEFAULT_ENABLED_TOOLS = {
@@ -201,6 +215,9 @@ DEFAULT_SETTINGS = {
     "agent_shared_system_prompt": "",
     "feedback_enabled": 0,
     "director_individual_fragments": 0,
+    "direction_notes_mode": "off",
+    "direction_notes_inject": 1,
+    "direction_notes_recipient": "both",
     "workflows_globally_enabled": 1,
 }
 

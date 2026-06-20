@@ -347,7 +347,7 @@ export function validateMoodFragment(data) {
   return { valid: true };
 }
 
-const FRAGMENT_FIELD_TYPES = ["string", "array", "progressive", "feedback"];
+const FRAGMENT_FIELD_TYPES = ["string", "array", "progressive", "feedback", "direction_note"];
 
 /**
  * Validate an interactive fragment.

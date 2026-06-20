@@ -47,6 +47,7 @@ from backend.inference import (
     AbortToken,
     CachedBase,
     build_direct_scene_tool,
+    build_direction_note_tool,
     build_feedback_tool,
     enabled_schemas,
 )
@@ -181,6 +182,8 @@ class CapturingClient:
                 return "editor"
             if name == "give_feedback":
                 return "feedback"
+            if name == "record_direction_note":
+                return "direction_note"
             if name in ("direct_scene", "rewrite_user_prompt"):
                 return f"director:{name}"
             return name or "editor"
@@ -228,6 +231,23 @@ class CapturingClient:
                             "id": "f1",
                             "type": "function",
                             "function": {"name": "give_feedback", "arguments": '{"next_actions": "Ask her name."}'},
+                        }
+                    ],
+                },
+            }
+            return
+
+        if label == "direction_note":
+            yield {
+                "type": "done",
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "p1",
+                            "type": "function",
+                            "function": {"name": "record_direction_note", "arguments": '{"notes": []}'},
                         }
                     ],
                 },
@@ -284,20 +304,25 @@ async def _run_turn(
     agent_client: CapturingClient | None = None,
     agent_prefix: list[dict] | None = None,
     feedback_fragments: list[dict] | None = None,
+    direction_note_fragments: list[dict] | None = None,
 ) -> tuple[_KVCacheTracker, CapturingClient, CapturingClient | None]:
     tracker = _KVCacheTracker(conversation_id=conversation_id)
     director = {"active_moods": [], "progressive_fields": {}}
     enabled_tools = dict(settings["enabled_tools"])
-    # Writer-only fragments shape direct_scene; feedback fragments are passed in
-    # alongside them so _run_pipeline's split sees both. The caller mirrors what
-    # _prepare_turn does in production: when feedback is enabled the give_feedback
-    # schema rides the shared blob (schema_overrides) and its enable bit is set.
+    # Writer-only fragments shape direct_scene; feedback and direction-note fragments
+    # are passed in alongside them so _run_pipeline's split sees all three. The caller
+    # mirrors _prepare_turn: when a post-writer tool is active its schema rides the
+    # shared blob (schema_overrides) and its enable bit is set.
     feedback_fragments = feedback_fragments or []
-    interactive_fragments = [*_INTERACTIVE_FRAGMENTS, *feedback_fragments]
+    direction_note_fragments = direction_note_fragments or []
+    interactive_fragments = [*_INTERACTIVE_FRAGMENTS, *feedback_fragments, *direction_note_fragments]
     schema_overrides = {"direct_scene": build_direct_scene_tool(_INTERACTIVE_FRAGMENTS)}
     if bool(settings.get("feedback_enabled", 0)) and feedback_fragments:
         schema_overrides["give_feedback"] = build_feedback_tool(feedback_fragments)
         enabled_tools["give_feedback"] = True
+    if settings.get("direction_notes_mode", "off") in ("pre_writer", "post_turn") and direction_note_fragments:
+        schema_overrides["record_direction_note"] = build_direction_note_tool(direction_note_fragments)
+        enabled_tools["record_direction_note"] = True
 
     gen = _run_pipeline(
         client,
@@ -502,6 +527,59 @@ async def test_feedback_step_reuses_shared_blob_no_cache_bust():
         "the writer's — it must replay writer_user_msg + reply so it reuses "
         "prefix + current-turn exchange, not just base.prefix. Shared only "
         f"{_common_prefix_len(writer_msgs, fb_msgs)}/{len(writer_msgs)}c with the writer."
+    )
+
+
+async def test_direction_note_step_reuses_shared_blob_no_cache_bust():
+    """The post-turn direction-note step must not diverge the tools blob: with the
+    feature on, ``record_direction_note`` rides the shared per-turn blob and the
+    ponder reuses the same cached base as director/writer/editor, replaying the
+    writer exchange rather than forking off ``base.prefix``."""
+    prefix = _make_prefix("You are a vivid roleplay narrator.", n_pairs=4)
+    tracker, client, _ = await _run_turn(
+        prefix=prefix,
+        settings=_base_settings(direction_notes_mode="post_turn"),
+        conversation_id="conv-dirnote-kv",
+        client=CapturingClient("writer-model"),
+        direction_note_fragments=[
+            {
+                "id": "trajectory",
+                "field_type": "direction_note",
+                "description": "Where the story is heading.",
+                "injection_label": "Direction of travel",
+                "sort_order": 0,
+                "required": False,
+                "enabled": True,
+            }
+        ],
+    )
+
+    _reconcile_tracker_with_client(tracker, client)
+
+    entries = {e["label"]: e for e in tracker._entries}
+    assert "direction_note" in entries, "direction-note step did not fire (mode=post_turn, agent on)"
+
+    wire = _wire_tools_by_label(client)
+    all_blobs = {b for blobs in wire.values() for b in blobs}
+    assert len(all_blobs) == 1, (
+        "CACHE BUST: the direction-note step diverged the tools blob. Distinct blob sizes: "
+        + json.dumps(sorted(len(b) for b in all_blobs))
+    )
+
+    the_blob = next(iter(all_blobs))
+    assert '"record_direction_note"' in the_blob, "record_direction_note schema is missing from the shared tools blob"
+
+    assert wire["direction_note"] == wire["writer"] == wire["editor"], (
+        "direction_note/writer/editor tools blobs differ -- the notes step is not reusing the frozen shared base."
+    )
+
+    prefix_bytes = _serialize_messages(prefix)
+    perm_msgs = entries["direction_note"]["msgs_serialized"]
+    writer_msgs = entries["writer"]["msgs_serialized"]
+    assert len(writer_msgs) > len(prefix_bytes), "writer stack should include the current-turn user message"
+    assert perm_msgs.startswith(writer_msgs), (
+        "CACHE BUST: the post_turn notes step forked the message stack instead of extending "
+        "the writer's -- it must replay writer_user_msg + reply."
     )
 
 

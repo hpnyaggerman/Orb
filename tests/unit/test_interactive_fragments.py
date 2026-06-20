@@ -515,7 +515,7 @@ class TestSeedInteractiveFragments:
 
     @pytest.mark.parametrize("frag", SEED_INTERACTIVE_FRAGMENTS, ids=lambda f: f.get("id", "?"))
     def test_field_type_is_valid(self, frag):
-        assert frag["field_type"] in ("string", "array", "progressive", "feedback")
+        assert frag["field_type"] in ("string", "array", "progressive", "feedback", "direction_note")
 
     def test_seed_ids_match_original_hardcoded_params(self):
         ids = {f["id"] for f in SEED_INTERACTIVE_FRAGMENTS}
@@ -525,5 +525,6 @@ class TestSeedInteractiveFragments:
             "next_event",
             "detected_repetitions",
             "suggested_actions",
+            "story_direction",
         }
         assert ids == expected

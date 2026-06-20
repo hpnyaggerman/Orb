@@ -19,7 +19,7 @@ from ..core import ChatMessage, Macros
 from ..database.models import PhraseGroup
 from ..inference import LLMClient, _KVCacheTracker
 from .config import _resolve_pipeline_config, _split_interactive_fragments
-from .passes.director import director_stage
+from .passes.director import direction_note_step, director_stage
 from .passes.editor import editor_stage
 from .passes.writer import writer_stage
 from .state import LorebookTurn, TurnState
@@ -41,6 +41,17 @@ def _make_result(state: TurnState, staged: list[dict] | None = None, staged_stat
     state.staged_attachments = staged or []
     state.staged_message_state = staged_state or {}
     return {"event": "_result", "data": state.as_result_event_data()}
+
+
+async def _consume_direction_note_step(gen: AsyncIterator[dict], state: TurnState, pass_label: str) -> AsyncIterator[dict]:
+    """Drain a direction-note step: stream its reasoning under *pass_label*, keep the notes."""
+    async for ev in gen:
+        if ev["type"] == "reasoning":
+            yield {"event": "reasoning", "data": {"pass": pass_label, "delta": ev["delta"]}}
+        elif ev["type"] == "done":
+            state.direction_notes = ev["result"].notes
+            if state.direction_notes:
+                yield {"event": "direction_notes", "data": {"notes": state.direction_notes}}
 
 
 async def _run_pipeline(
@@ -100,8 +111,9 @@ async def _run_pipeline(
         schema_overrides=schema_overrides,
     )
 
-    # feedback fragments are handled post-writer; the rest shape the writer prompt.
-    writer_fragments, feedback_fragments = _split_interactive_fragments(interactive_fragments)
+    # feedback fragments are handled post-writer and direction-note fragments by the
+    # direction-note step; the rest shape the writer prompt.
+    writer_fragments, feedback_fragments, direction_note_fragments = _split_interactive_fragments(interactive_fragments)
 
     # Mutable state threaded through the three passes; seeded from director + user message.
     state = TurnState(
@@ -128,6 +140,32 @@ async def _run_pipeline(
     # Both clients share one abort token, so checking either is equivalent.
     if client.is_aborted:
         return
+
+    # --- Direction-note step (pre-writer placement) ---
+    # Reflects on the scene direction the director just set, so it requires
+    # direct_scene (which is what produces that direction).
+    if (
+        settings.get("direction_notes_mode") == "pre_writer"
+        and cfg.agent_on
+        and direction_note_fragments
+        and cfg.enabled_tools.get("direct_scene")
+    ):
+        async for ev in _consume_direction_note_step(
+            direction_note_step(
+                cfg.agent_lane.client,
+                cfg.agent_lane.base,
+                settings=settings,
+                direction_note_fragments=direction_note_fragments,
+                active_notes=director.get("direction_notes") or [],
+                placement="pre_writer",
+                inj_block=state.scene_direction,
+                kv_tracker=kv_tracker,
+                reasoning_on=cfg.director_reasoning_on,
+            ),
+            state,
+            "director",
+        ):
+            yield ev
 
     # --- Writer pass ---
     async for ev in writer_stage(
@@ -185,5 +223,34 @@ async def _run_pipeline(
 
     # Fold any hook-rewritten draft back into state before emitting _result.
     state.resp_text = post.draft
+
+    # --- Direction-note step (post-turn placement) ---
+    # Sees the finished reply. Skipped on an empty draft (no message to anchor notes
+    # to) and on a stop arriving after the last pre-editor abort check.
+    if (
+        cfg.agent_on
+        and settings.get("direction_notes_mode") == "post_turn"
+        and direction_note_fragments
+        and state.resp_text.strip()
+        and not client.is_aborted
+    ):
+        async for ev in _consume_direction_note_step(
+            direction_note_step(
+                cfg.agent_lane.client,
+                cfg.agent_lane.base,
+                settings=settings,
+                direction_note_fragments=direction_note_fragments,
+                active_notes=director.get("direction_notes") or [],
+                placement="post_turn",
+                reply_text=state.resp_text,
+                writer_user_msg=state.writer_content,
+                kv_tracker=kv_tracker,
+                reasoning_on=cfg.editor_reasoning_on,
+            ),
+            state,
+            "editor",
+        ):
+            yield ev
+
     yield _make_result(state, post.staged_attachments, post.staged_message_state)
     kv_tracker.log_summary()

@@ -12,6 +12,7 @@ from .client import AbortToken, LLMClient, parse_tool_calls, reasoning_cfg
 from .endpoint_profiles import ModelProfile, is_forced_tool_choice, profile_for
 from .kv_tracker import _KVCacheTracker
 from .prompt_builder import (
+    build_direction_note_prompt,
     build_director_scene_step_prompt,
     build_director_tool_prompt,
     build_editor_prompt,
@@ -20,15 +21,18 @@ from .prompt_builder import (
     build_style_injection,
     compute_style_injection_block,
     format_message_with_attachments,
+    render_direction_notes_block,
 )
 from .tool_registry import (
     BUILTIN_TOOL_NAMES,
     GIVE_FEEDBACK_CHOICE,
     POST_WRITER_TOOLS,
     PRE_WRITER_TOOLS,
+    RECORD_DIRECTION_NOTE_CHOICE,
     STANDALONE_TOOLS,
     TOOLS,
     build_direct_scene_tool,
+    build_direction_note_tool,
     build_feedback_tool,
     enabled_schemas,
     register_tool,
@@ -52,19 +56,23 @@ __all__ = [
     "build_director_tool_prompt",
     "build_editor_prompt",
     "build_feedback_prompt",
+    "build_direction_note_prompt",
     "build_prefix",
     "build_style_injection",
     "compute_style_injection_block",
     "format_message_with_attachments",
+    "render_direction_notes_block",
     # tool_registry
     "BUILTIN_TOOL_NAMES",
     "GIVE_FEEDBACK_CHOICE",
     "POST_WRITER_TOOLS",
     "PRE_WRITER_TOOLS",
+    "RECORD_DIRECTION_NOTE_CHOICE",
     "STANDALONE_TOOLS",
     "TOOLS",
     "build_direct_scene_tool",
     "build_feedback_tool",
+    "build_direction_note_tool",
     "enabled_schemas",
     "register_tool",
 ]
