@@ -54,7 +54,7 @@ export const S = {
   toolCallsOpen: false,
   injectionBlockOpen: false,
   contextSizeOpen: true,
-  reasoningEnabled: { director: true, writer: false, editor: false, scripter: false },
+  reasoningEnabled: { director: false, writer: false, editor: false, scripter: false },
   pendingRefineDiff: null, // {original, ops} set on writer_rewrite, cleared on next stream
   showEditorDiff: true, // when false, editor-pass diff highlights + "clear diff" button are suppressed
   editorAuditToggles: {

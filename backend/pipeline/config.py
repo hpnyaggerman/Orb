@@ -93,7 +93,7 @@ def _resolve_pipeline_config(
     return _PipelineConfig(
         agent_on=agent_on,
         enabled_tools=enabled_tools,
-        director_reasoning_on=bool(reasoning_passes.get("director", True)),
+        director_reasoning_on=bool(reasoning_passes.get("director", False)),
         writer_reasoning_on=bool(reasoning_passes.get("writer", False)),
         editor_reasoning_on=bool(reasoning_passes.get("editor", False)),
         audit_enabled=audit_enabled,

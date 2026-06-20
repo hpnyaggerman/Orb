@@ -16,7 +16,7 @@ async def get_settings() -> SettingsRow:
         s = dict(rows[0])
         s["enabled_tools"] = json.loads(s.get("enabled_tools") or "{}")
         s["reasoning_enabled_passes"] = json.loads(
-            s.get("reasoning_enabled_passes") or '{"director":true,"writer":false,"editor":false}'
+            s.get("reasoning_enabled_passes") or '{"director":false,"writer":false,"editor":false}'
         )
         # Remove stale scripter key from reasoning_enabled_passes if present.
         s["reasoning_enabled_passes"].pop("scripter", None)
