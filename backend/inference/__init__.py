@@ -12,6 +12,7 @@ from .client import AbortToken, LLMClient, parse_tool_calls, reasoning_cfg
 from .endpoint_profiles import ModelProfile, is_forced_tool_choice, profile_for
 from .kv_tracker import _KVCacheTracker
 from .prompt_builder import (
+    build_director_scene_step_prompt,
     build_director_tool_prompt,
     build_editor_prompt,
     build_feedback_prompt,
@@ -47,6 +48,7 @@ __all__ = [
     "CachedBase",
     "_KVCacheTracker",
     # prompt_builder
+    "build_director_scene_step_prompt",
     "build_director_tool_prompt",
     "build_editor_prompt",
     "build_feedback_prompt",

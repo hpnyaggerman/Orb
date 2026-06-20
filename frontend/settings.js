@@ -87,6 +87,7 @@ export async function loadSettings() {
   // Editor Feedback: a feature flag (post-writer user-facing note). Gated here
   // and again by at least one enabled feedback-type interactive fragment server-side.
   S.feedbackEnabled = Boolean(S.settings.feedback_enabled);
+  S.directorIndividualFragments = Boolean(S.settings.director_individual_fragments);
 
   if (S.settings.length_guard_max_words) S.lengthGuardMaxWords = S.settings.length_guard_max_words;
   if (S.settings.length_guard_max_paragraphs) S.lengthGuardMaxParagraphs = S.settings.length_guard_max_paragraphs;
@@ -299,6 +300,12 @@ export async function toggleFeedbackEnabled(on) {
   await persistSettings({ feedback_enabled: on });
 }
 
+export async function toggleDirectorIndividualFragments(on) {
+  S.directorIndividualFragments = on;
+  renderToolsPanel();
+  await persistSettings({ director_individual_fragments: on });
+}
+
 export async function toggleShowEditorDiff(on) {
   S.showEditorDiff = on;
   renderMessages();
@@ -377,12 +384,14 @@ export async function toggleWorkflowEnabled(wid, on) {
   renderInspectorSecondary();
 }
 
-// Master row plus one row per manifest workflow, prepended above the config cards in
-// the Secondary tab. Empty when no workflow exists so the panel's "no workflows"
-// fallback still shows. Each per-workflow checkbox reflects effective state -- so the
-// master being off shows every row unchecked, greyed, and disabled (the dependent-
-// disable pattern) while the stored per-workflow value is preserved (the master
-// writes a separate column).
+// One card per manifest workflow, under a master switch, in the Secondary tab.
+// Empty when no workflow exists so the panel's "no workflows" fallback still shows.
+// Each per-workflow checkbox reflects effective state -- so the master being off
+// shows every card unchecked, greyed, and disabled (the dependent-disable pattern)
+// while the stored per-workflow value is preserved (the master writes a separate
+// column). A workflow that ships a config panel folds it into the same card (one
+// entry, not a separate toggle and settings card) -- the registered renderer returns
+// the card body (description + any controls), shown only while the workflow is on.
 function buildWorkflowToggleRows() {
   if (!S.workflowManifest.length) return "";
   const g = S.settings?.workflows_globally_enabled;
@@ -390,18 +399,31 @@ function buildWorkflowToggleRows() {
 
   const masterRow = `<div class="tool-card ${globalOn ? "tool-on" : ""}">
     <div class="tool-card-header">
-      <span class="tool-card-name">Enable workflows</span>
+      <span class="tool-card-name">Secondary Workflows</span>
       <label class="tog" onclick="event.stopPropagation()">
         <input type="checkbox" ${globalOn ? "checked" : ""} onchange="toggleWorkflowsGlobal(this.checked)">
         <span class="tog-slider"></span>
       </label>
     </div>
-    <div class="tool-card-desc">Master switch for secondary workflows. Off suspends every workflow's hooks and production controls; existing attachments stay viewable.</div>
+    <div class="tool-card-desc">Turns all the workflows below on or off at once.</div>
   </div>`;
+
+  const panels = new Map(S.workflowToolsPanelRenderers.map(({ workflowId, render }) => [workflowId, render]));
 
   const workflowRows = S.workflowManifest
     .map((w) => {
       const effOn = effectiveWorkflowEnabled(w.id);
+      let body = "";
+      if (!globalOn) {
+        body = '<div class="tool-card-desc"><em>Workflows globally off.</em></div>';
+      } else if (effOn && panels.has(w.id)) {
+        try {
+          const piece = panels.get(w.id)();
+          if (typeof piece === "string") body = piece;
+        } catch (e) {
+          console.error("workflow tools-panel renderer threw:", e);
+        }
+      }
       return `<div class="tool-card ${effOn ? "tool-on" : ""}"${globalOn ? "" : ' style="opacity:0.5"'}>
     <div class="tool-card-header">
       <span class="tool-card-name">${esc(w.display_name || w.id)}</span>
@@ -410,7 +432,7 @@ function buildWorkflowToggleRows() {
         <span class="tog-slider"></span>
       </label>
     </div>
-    ${globalOn ? "" : '<div class="tool-card-desc"><em>Workflows globally off.</em></div>'}
+    ${body}
   </div>`;
     })
     .join("");
@@ -420,6 +442,7 @@ function buildWorkflowToggleRows() {
 
 export function renderToolsPanel() {
   $("agent-enable-chk").checked = S.agentEnabled;
+  $("agent-master-card").classList.toggle("tool-on", S.agentEnabled);
   $("tools-panel-btn").style.opacity = S.agentEnabled ? "1" : "0.5";
 
   // Agentic Lorebook depends on the Director (direct_scene). When the Director
@@ -517,23 +540,24 @@ export function renderToolsPanel() {
     <div class="tool-card-desc">After each reply, surfaces a note to you (e.g. what you could do next). Runs only when at least one interactive fragment has its Field Type set to "feedback".</div>
   </div>`;
 
-  $("tools-list").innerHTML = toolCards + lengthGuardCard + feedbackCard;
+  const ifpOn = S.directorIndividualFragments;
+  const individualFragmentsCard = `<div class="tool-card ${ifpOn ? "tool-on" : ""}">
+    <div class="tool-card-header">
+      <span class="tool-card-name">Individual Fragment Processing</span>
+      <label class="tog" onclick="event.stopPropagation()">
+        <input type="checkbox" ${ifpOn ? "checked" : ""} onchange="toggleDirectorIndividualFragments(this.checked)">
+        <span class="tog-slider"></span>
+      </label>
+    </div>
+    <div class="tool-card-desc">Director fills each interactive fragment in its own LLM call. More focused output; higher latency.</div>
+  </div>`;
+
+  $("tools-list").innerHTML = toolCards + lengthGuardCard + feedbackCard + individualFragmentsCard;
 
   const secEl = $("tools-list-secondary");
   if (secEl) {
-    let secHtml = "";
-    for (const { workflowId, render } of S.workflowToolsPanelRenderers) {
-      if (!effectiveWorkflowEnabled(workflowId)) continue;
-      try {
-        const piece = render();
-        if (typeof piece === "string" && piece) secHtml += piece;
-      } catch (e) {
-        console.error("workflow tools-panel renderer threw:", e);
-      }
-    }
-    const toggleRows = buildWorkflowToggleRows();
     secEl.innerHTML =
-      toggleRows + secHtml ||
+      buildWorkflowToggleRows() ||
       `<div style="color:var(--text-muted);font-size:12px;padding:8px 0;">No workflows registered.</div>`;
   }
 }

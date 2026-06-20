@@ -125,15 +125,18 @@
     </div>
   </div>
   <div id="tools-panel"><div class="tools-inner">
-    <div class="inspector-title">Global</div>
+    <div class="inspector-title">Workflows</div>
     <div class="tab-row">
       <button type="button" class="tab-button tab-button-active" id="tools-tab-main" onclick="setToolsTab('main')">Main</button>
       <button type="button" class="tab-button" id="tools-tab-secondary" onclick="setToolsTab('secondary')">Secondary</button>
     </div>
     <div id="tools-pane-main">
-      <div class="agent-master-row">
-        <span class="agent-master-label">Agent Enabled</span>
-        <label class="tog"><input type="checkbox" id="agent-enable-chk" checked onchange="setAgentEnabled(this.checked)"><span class="tog-slider"></span></label>
+      <div class="tool-card" id="agent-master-card">
+        <div class="tool-card-header">
+          <span class="tool-card-name">Main Workflows</span>
+          <label class="tog"><input type="checkbox" id="agent-enable-chk" checked onchange="setAgentEnabled(this.checked)"><span class="tog-slider"></span></label>
+        </div>
+        <div class="tool-card-desc">Enables the tools below.</div>
       </div>
       <div style="font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.5px;color:var(--text-secondary);margin-bottom:8px;">Available Tools</div>
       <div id="tools-list"></div>

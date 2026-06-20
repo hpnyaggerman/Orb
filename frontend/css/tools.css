@@ -34,23 +34,6 @@ input[type="range"]::-moz-range-track {
   height: 6px; background: var(--bg-elevated); border-radius: var(--radius);
 }
 
-.agent-master-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 12px;
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  margin-bottom: 16px;
-}
-
-.agent-master-label {
-  font-size: 13px;
-  font-weight: 500;
-  color: var(--text-primary);
-}
-
 .tool-card {
   padding: 10px 12px;
   border-radius: var(--radius);
