@@ -31,6 +31,7 @@ from .context import (
 from .orchestrator import _run_pipeline
 from .passes.director import progressive
 from .passes.director.prompt_rewrite import disable_rewrite
+from .passes.editor.editor import AUDIT_BASELINE_WINDOW
 from .persistence import _consume_pipeline, _conversation_log_writer
 
 logger = logging.getLogger(__name__)
@@ -423,7 +424,9 @@ async def _regenerate_with_steering(
 
         # From history, not extended_history: the reply being replaced is excluded
         # from the audit so the new draft isn't penalised for resembling it.
-        editor_audit_msgs = [msg["content"] for msg in reversed(history) if msg.get("role") == "assistant"][:3]
+        editor_audit_msgs = [msg["content"] for msg in reversed(history) if msg.get("role") == "assistant"][
+            :AUDIT_BASELINE_WINDOW
+        ]
 
         async for event in _generate_reply(
             ctx,

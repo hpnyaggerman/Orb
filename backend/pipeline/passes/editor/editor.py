@@ -45,6 +45,10 @@ logger = logging.getLogger(__name__)
 
 MAX_EDITOR_ITERATIONS = 3
 
+# How many recent assistant messages the cross-message repetition scanners
+# (phrase + structural) compare the draft against.
+AUDIT_BASELINE_WINDOW = 20
+
 
 # ── Feedback gating + tool override ───────────────────────────────────────────
 
@@ -190,15 +194,15 @@ def _build_audit_text(draft: str, previous_assistant_msgs: list[str]) -> str:
 
 
 def _baseline_window(base: CachedBase, audit_context_msgs: list[str] | None) -> list[str]:
-    """The recent assistant-message window (newest first, up to 3) the
-    repetition scanners compare the draft against.
+    """The recent assistant-message window (newest first, up to
+    AUDIT_BASELINE_WINDOW) the repetition scanners compare the draft against.
 
     Callers may pass an explicit list via *audit_context_msgs* (e.g.
     super-regenerate, which excludes the message being replaced); when None the
     window is derived from the cached prefix.
     """
     if audit_context_msgs is not None:
-        return audit_context_msgs[:3]
+        return audit_context_msgs[:AUDIT_BASELINE_WINDOW]
     window: list[str] = []
     for msg in reversed(base.prefix):
         if msg.get("role") == "assistant":
@@ -208,7 +212,7 @@ def _baseline_window(base: CachedBase, audit_context_msgs: list[str] | None) -> 
             content = msg.get("content", "")
             if isinstance(content, str):
                 window.append(content)
-                if len(window) >= 3:
+                if len(window) >= AUDIT_BASELINE_WINDOW:
                     break
     return window
 
