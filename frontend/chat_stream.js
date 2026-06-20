@@ -29,7 +29,11 @@ import {
 } from "./chat_inspector.js";
 import { clearInspectedMessage } from "./chat_messages.js";
 import { _mergeWorkflowRejections } from "./chat_workflow.js";
-import { optimisticDropDirectionNotesFrom, renderDirectionNotesPanel } from "./direction_notes_panel.js";
+import {
+  clearDirectionNotesRegenCut,
+  optimisticDropDirectionNotesFrom,
+  renderDirectionNotesPanel,
+} from "./direction_notes_panel.js";
 import { isUtilityPanelOpen } from "./panels.js";
 import { refreshCharacters } from "./library.js";
 // Imported directly rather than via settings.js to avoid an import cycle
@@ -336,7 +340,9 @@ export async function afterStream() {
   }
   clearInspectedMessage();
   // The active branch moved (new reply or a regenerated sibling), so the notes
-  // panel's path-scoped set is stale; refetch it if the user has it open.
+  // panel's path-scoped set is stale; refetch it if the user has it open. Clear the
+  // regen cut first so the refetch reflects the now-committed server state unfiltered.
+  clearDirectionNotesRegenCut();
   if (isUtilityPanelOpen("direction-notes-panel")) renderDirectionNotesPanel();
   scrollToBottom(true);
   refreshCharacters();

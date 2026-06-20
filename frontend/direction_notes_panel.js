@@ -11,6 +11,12 @@ import { $, convUrl, esc, toast } from "./utils.js";
 // Last fetched notes, so the edit modal can seed its textarea by id without escaping round-trips.
 let notes = [];
 
+// Message id whose turn is being regenerated, set while a regen / super-regen / magic-rewrite
+// stream is in flight and cleared by afterStream once the new branch commits. Until then the
+// server's active path still includes this message, so a refetch would resurrect the notes it
+// recorded; applyRegenCut filters them out of every render during the window.
+let regenCutMsgId = null;
+
 export function toggleDirectionNotesPanel() {
   if (isUtilityPanelOpen("direction-notes-panel")) {
     closeUtilityPanel("direction-notes-panel", "direction-notes-panel-btn");
@@ -54,7 +60,7 @@ export async function renderDirectionNotesPanel() {
     return;
   }
   try {
-    notes = await api.get(convUrl(S.activeConvId, "direction-notes"));
+    notes = applyRegenCut(await api.get(convUrl(S.activeConvId, "direction-notes")));
   } catch (e) {
     el.innerHTML = `<div class="notes-empty">${esc(e.message)}</div>`;
     return;
@@ -62,19 +68,34 @@ export async function renderDirectionNotesPanel() {
   renderRows();
 }
 
-// Regenerating message msgId replaces it with a new sibling, so msgId (and any of
-// its descendants) leaves the active branch along with the notes recorded on it.
-// The new branch only commits when the stream ends, so reflect the drop right away
-// from the cached set -- keep only notes whose authoring message precedes msgId on
-// the active path. afterStream refetches the committed state once the reply lands.
-export function optimisticDropDirectionNotesFrom(msgId) {
-  if (!isUtilityPanelOpen("direction-notes-panel")) return;
+// Keep only notes whose authoring message precedes the regen cut on the current active
+// path; a no-op when no regen is in flight. Recomputed from S.messages each call (rather
+// than from a snapshot) so a mid-stream conversation switch is safe: the cut id is absent
+// from the other conversation's path, so indexOf returns -1 and the list passes through.
+function applyRegenCut(list) {
+  if (regenCutMsgId == null) return list;
   const path = S.messages.map((m) => m.id);
-  const cut = path.indexOf(msgId);
-  if (cut < 0) return;
+  const cut = path.indexOf(regenCutMsgId);
+  if (cut < 0) return list;
   const surviving = new Set(path.slice(0, cut));
-  notes = notes.filter((n) => surviving.has(n.message_id));
-  renderRows();
+  return list.filter((n) => surviving.has(n.message_id));
+}
+
+// Called by afterStream once the regenerated reply commits (or the stream aborts and the old
+// branch stays active); the next refetch then reflects the authoritative server state.
+export function clearDirectionNotesRegenCut() {
+  regenCutMsgId = null;
+}
+
+// Regenerating message msgId replaces it with a new sibling, so msgId (and any of its
+// descendants) leaves the active branch along with the notes recorded on it. Record the cut
+// so reopening the panel mid-stream re-applies it after the refetch (the server's active path
+// only switches when the stream ends), and drop the notes from the cached set right away for
+// immediate feedback when the panel is open.
+export function optimisticDropDirectionNotesFrom(msgId) {
+  regenCutMsgId = msgId;
+  notes = applyRegenCut(notes);
+  if (isUtilityPanelOpen("direction-notes-panel")) renderRows();
 }
 
 export function editDirectionNote(fid) {
