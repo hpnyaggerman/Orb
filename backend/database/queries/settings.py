@@ -226,9 +226,8 @@ async def update_settings(data: dict) -> SettingsRow:
             "agent_shared_system_prompt",
             "feedback_enabled",
             "director_individual_fragments",
-            "direction_notes_mode",
+            "direction_notes_record",
             "direction_notes_inject",
-            "direction_notes_recipient",
             "inspector_open_states",
             "workflows_globally_enabled",
         ]

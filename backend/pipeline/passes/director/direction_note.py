@@ -3,15 +3,17 @@ passes/director/direction_note.py -- Direction-note step.
 
 Asks the model, via a forced ``record_direction_note`` call, whether anything from
 this turn should persist for the rest of the branch. Runs as a standalone sub-call
-gated by ``direction_notes_mode`` and the enabled ``field_type='direction_note'``
-fragments; each filled parameter becomes one labelled note (empty when nothing is
-worth recording).
+gated by the master Writing switch and the enabled ``field_type='direction_note'``
+fragments whose timing matches this placement; each filled parameter becomes one
+labelled note (empty when nothing is worth recording).
 
-The schema rides the shared per-turn tool blob, so this step reuses the unchanged
-base and only forces the tool choice. The trailing depends on placement: the
-post-turn placement replays the writer's user message and reply to extend the warm
-writer/editor prefix; the pre-writer placement appends only the request, carrying
-this turn's scene direction inside it.
+The wire schema in the shared per-turn tool blob is the union of every direction-note
+fragment, held byte-stable so both placements reuse the cached base and only force the
+tool choice. Each call is handed just its timing group, which shapes the request text
+and the extraction. The trailing depends on placement: the post-turn placement replays
+the writer's user message and reply to extend the warm writer/editor prefix; the
+pre-writer placement appends only the request, carrying this turn's scene direction
+inside it.
 
 Errors and aborts are swallowed into an empty result. The post-turn placement runs
 immediately before the turn's ``_result`` is emitted, so a propagating exception
@@ -99,8 +101,8 @@ async def direction_note_step(
         yield {"type": "done", "result": DirectionNoteResult()}
         return
 
-    # Byte-identical to the override already in the shared base; built here only to
-    # echo the parameter order into the request.
+    # This placement's timing group only -- echoed into the request so the model is asked
+    # to fill just these categories. The wire schema in the shared base is the wider union.
     tool_schema = build_direction_note_tool(direction_note_fragments)
 
     request = build_direction_note_prompt(

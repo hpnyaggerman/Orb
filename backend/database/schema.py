@@ -39,9 +39,8 @@ CREATE TABLE IF NOT EXISTS settings (
     agent_shared_system_prompt TEXT NOT NULL DEFAULT '',
     feedback_enabled INTEGER NOT NULL DEFAULT 0,
     director_individual_fragments INTEGER NOT NULL DEFAULT 0,
-    direction_notes_mode TEXT NOT NULL DEFAULT 'off',
-    direction_notes_inject INTEGER NOT NULL DEFAULT 1,
-    direction_notes_recipient TEXT NOT NULL DEFAULT 'both',
+    direction_notes_record INTEGER NOT NULL DEFAULT 0,
+    direction_notes_inject TEXT NOT NULL DEFAULT 'off',
     inspector_open_states TEXT NOT NULL DEFAULT '{"reasoning":true,"tool_calls":false,"injection_block":false,"context_size":true}',
     workflow_config TEXT NOT NULL DEFAULT '{}',
     workflows_globally_enabled INTEGER NOT NULL DEFAULT 1,
@@ -127,7 +126,8 @@ CREATE TABLE IF NOT EXISTS interactive_fragments (
     required BOOLEAN NOT NULL DEFAULT 0,
     enabled BOOLEAN NOT NULL DEFAULT 1,
     injection_label TEXT NOT NULL,
-    sort_order INTEGER NOT NULL DEFAULT 0
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    direction_note_timing TEXT NOT NULL DEFAULT 'post_turn'
 );
 
 CREATE TABLE IF NOT EXISTS conversation_logs (

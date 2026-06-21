@@ -167,6 +167,7 @@ SEED_INTERACTIVE_FRAGMENTS = [
         "injection_label": "Story direction",
         "sort_order": 6,
         "enabled": False,
+        "direction_note_timing": "post_turn",
     },
 ]
 
@@ -215,9 +216,8 @@ DEFAULT_SETTINGS = {
     "agent_shared_system_prompt": "",
     "feedback_enabled": 0,
     "director_individual_fragments": 0,
-    "direction_notes_mode": "off",
-    "direction_notes_inject": 1,
-    "direction_notes_recipient": "both",
+    "direction_notes_record": 0,
+    "direction_notes_inject": "off",
     "workflows_globally_enabled": 1,
 }
 

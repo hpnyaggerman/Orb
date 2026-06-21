@@ -174,12 +174,12 @@ export function renderInteractiveFragments() {
       // Feedback and direction-note fragments are gated by their own feature switch;
       // grey them out (and explain why on hover) when that switch is off.
       const feedbackDisabled = f.field_type === "feedback" && !S.feedbackEnabled;
-      const directionNoteDisabled = f.field_type === "direction_note" && (S.directionNotesMode || "off") === "off";
+      const directionNoteDisabled = f.field_type === "direction_note" && !S.directionNotesRecord;
       const featureDisabled = feedbackDisabled || directionNoteDisabled;
       const itemTitle = feedbackDisabled
         ? "Editor Feedback feature is disabled — enable it in Agents panel to use this fragment"
         : directionNoteDisabled
-          ? "Direction Notes recording is off -- set it to record in the Agents panel to use this fragment"
+          ? "Direction Notes recording is off -- turn on Writing in the Agents panel to use this fragment"
           : esc(f.description);
       return `
     <div class="fragment-item${featureDisabled ? " frag-feature-disabled" : ""}" draggable="true" data-id="${esc(f.id)}" title="${itemTitle}" onclick="showInteractiveFragmentModal('${f.id}')">
@@ -330,6 +330,9 @@ export function updateInteractiveFragmentExample(fieldType) {
   set("interactive-frag-label", ex.label);
   set("interactive-frag-inj-label", ex.injection_label);
   set("interactive-frag-desc", ex.description);
+  // The recording-timing selector applies only to direction-note fragments.
+  const timingRow = document.getElementById("interactive-frag-timing-row");
+  if (timingRow) timingRow.style.display = fieldType === "direction_note" ? "" : "none";
 }
 
 export function showInteractiveFragmentModal(fragId = null) {
@@ -343,6 +346,7 @@ export function showInteractiveFragmentModal(fragId = null) {
     required: false,
     injection_label: "",
     sort_order: 0,
+    direction_note_timing: "post_turn",
   };
   const ex = INTERACTIVE_FRAGMENT_EXAMPLES[d.field_type] || INTERACTIVE_FRAGMENT_EXAMPLES.string;
 
@@ -366,6 +370,13 @@ export function showInteractiveFragmentModal(fragId = null) {
           <option value="direction_note" ${d.field_type === "direction_note" ? "selected" : ""}>direction note (persists)</option>
         </select>
       </div>
+    </div>
+    <div class="field" id="interactive-frag-timing-row" style="${d.field_type === "direction_note" ? "" : "display:none"}">
+      <label>When recorded <span style="font-size:10px;color:var(--text-muted)">(direction notes only)</span></label>
+      <select id="interactive-frag-timing-select">
+        <option value="post_turn" ${d.direction_note_timing !== "pre_writer" ? "selected" : ""}>End of turn</option>
+        <option value="pre_writer" ${d.direction_note_timing === "pre_writer" ? "selected" : ""}>Before writer</option>
+      </select>
     </div>
     <div class="field"><label>Description <span style="font-size:10px;color:var(--text-muted)">(shown to the LLM in the tool schema)</span></label>
       <textarea id="interactive-frag-desc" rows="4" placeholder="${esc(ex.description)}">${esc(d.description)}</textarea></div>
@@ -392,6 +403,7 @@ export async function saveInteractiveFragment(isEdit) {
     field_type: document.getElementById("interactive-frag-type").value,
     required: document.getElementById("interactive-frag-required").checked,
     injection_label: document.getElementById("interactive-frag-inj-label").value.trim(),
+    direction_note_timing: document.getElementById("interactive-frag-timing-select").value,
   };
   const validation = validate.validateInteractiveFragment(d);
   if (!validation.valid) {

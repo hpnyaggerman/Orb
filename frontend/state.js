@@ -48,9 +48,8 @@ export const S = {
   lastDirectionNotes: null, // {notes: [...]} recorded by the direction-note sub-step this turn (null when none)
   feedbackEnabled: false,
   directorIndividualFragments: false,
-  directionNotesMode: "off",
-  directionNotesInject: true, // inject stored direction notes into context (read side, independent of recording)
-  directionNotesRecipient: "both", // who sees injected notes: director / writer / both
+  directionNotesRecord: false, // master Writing switch; a fragment also needs its own enabled + timing
+  directionNotesInject: "off", // injection target: off | director | writer | both (read side, independent of recording)
   reasoningPassActive: 0,
   reasoningPassSelected: 0,
   reasoningUserOverride: false,

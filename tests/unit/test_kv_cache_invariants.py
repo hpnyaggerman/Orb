@@ -320,7 +320,7 @@ async def _run_turn(
     if bool(settings.get("feedback_enabled", 0)) and feedback_fragments:
         schema_overrides["give_feedback"] = build_feedback_tool(feedback_fragments)
         enabled_tools["give_feedback"] = True
-    if settings.get("direction_notes_mode", "off") in ("pre_writer", "post_turn") and direction_note_fragments:
+    if settings.get("direction_notes_record") and direction_note_fragments:
         schema_overrides["record_direction_note"] = build_direction_note_tool(direction_note_fragments)
         enabled_tools["record_direction_note"] = True
 
@@ -538,7 +538,7 @@ async def test_direction_note_step_reuses_shared_blob_no_cache_bust():
     prefix = _make_prefix("You are a vivid roleplay narrator.", n_pairs=4)
     tracker, client, _ = await _run_turn(
         prefix=prefix,
-        settings=_base_settings(direction_notes_mode="post_turn"),
+        settings=_base_settings(direction_notes_record=True),
         conversation_id="conv-dirnote-kv",
         client=CapturingClient("writer-model"),
         direction_note_fragments=[

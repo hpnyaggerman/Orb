@@ -89,9 +89,9 @@ export async function loadSettings() {
   // and again by at least one enabled feedback-type interactive fragment server-side.
   S.feedbackEnabled = Boolean(S.settings.feedback_enabled);
   S.directorIndividualFragments = Boolean(S.settings.director_individual_fragments);
-  S.directionNotesMode = S.settings.direction_notes_mode || "off";
-  S.directionNotesInject = Boolean(S.settings.direction_notes_inject ?? 1);
-  S.directionNotesRecipient = S.settings.direction_notes_recipient || "both";
+  S.directionNotesRecord = Boolean(S.settings.direction_notes_record);
+  S.directionNotesInject = S.settings.direction_notes_inject || "off";
+  updateDirectionNotesButton();
 
   if (S.settings.length_guard_max_words) S.lengthGuardMaxWords = S.settings.length_guard_max_words;
   if (S.settings.length_guard_max_paragraphs) S.lengthGuardMaxParagraphs = S.settings.length_guard_max_paragraphs;
@@ -286,22 +286,33 @@ export async function toggleDirectorIndividualFragments(on) {
   await persistSettings({ director_individual_fragments: on });
 }
 
-export async function setDirectionNotesMode(mode) {
-  S.directionNotesMode = mode;
+export async function setDirectionNotesRecord(on) {
+  S.directionNotesRecord = on;
   renderToolsPanel();
-  await persistSettings({ direction_notes_mode: mode });
+  // Direction-note fragments in the sidebar are greyed out when recording is off.
+  renderInteractiveFragments();
+  updateDirectionNotesButton();
+  await persistSettings({ direction_notes_record: on });
 }
 
 export async function setDirectionNotesInject(val) {
-  S.directionNotesInject = val === "on";
+  S.directionNotesInject = val;
   renderToolsPanel();
-  await persistSettings({ direction_notes_inject: val === "on" });
+  updateDirectionNotesButton();
+  await persistSettings({ direction_notes_inject: val });
 }
 
-export async function setDirectionNotesRecipient(val) {
-  S.directionNotesRecipient = val;
-  renderToolsPanel();
-  await persistSettings({ direction_notes_recipient: val });
+// The Notes button and its panel only matter while notes are being recorded or injected;
+// with both off the feature is dormant, so hide the entry points and close the panel.
+function updateDirectionNotesButton() {
+  const on = S.directionNotesRecord || S.directionNotesInject !== "off";
+  for (const id of ["direction-notes-panel-btn", "mobile-direction-notes-btn"]) {
+    const el = $(id);
+    if (el) el.classList.toggle("hidden", !on);
+  }
+  if (!on && isUtilityPanelOpen("direction-notes-panel")) {
+    closeUtilityPanel("direction-notes-panel", "direction-notes-panel-btn");
+  }
 }
 
 export async function toggleShowEditorDiff(on) {
@@ -550,33 +561,27 @@ export function renderToolsPanel() {
     <div class="tool-card-desc">Director fills each interactive fragment in its own LLM call. More focused output; higher latency.</div>
   </div>`;
 
-  const dnMode = S.directionNotesMode || "off";
-  const dnInject = S.directionNotesInject !== false;
-  const dnRecipient = S.directionNotesRecipient || "both";
-  const directionNotesCard = `<div class="tool-card ${dnMode !== "off" ? "tool-on" : ""}">
+  const dnRecord = S.directionNotesRecord === true;
+  const dnInject = S.directionNotesInject || "off";
+  const directionNotesCard = `<div class="tool-card ${dnRecord || dnInject !== "off" ? "tool-on" : ""}">
     <div class="tool-card-header">
       <span class="tool-card-name">Direction Notes</span>
     </div>
     <div class="dn-config">
       <label>Recording</label>
-      <select class="tool-card-select" onchange="setDirectionNotesMode(this.value)">
-        <option value="off" ${dnMode === "off" ? "selected" : ""}>Off</option>
-        <option value="pre_writer" ${dnMode === "pre_writer" ? "selected" : ""}>Before writer</option>
-        <option value="post_turn" ${dnMode === "post_turn" ? "selected" : ""}>End of turn</option>
-      </select>
-      <label>Inject into context</label>
+      <label class="tog" onclick="event.stopPropagation()">
+        <input type="checkbox" ${dnRecord ? "checked" : ""} onchange="setDirectionNotesRecord(this.checked)">
+        <span class="tog-slider"></span>
+      </label>
+      <label>Injection</label>
       <select class="tool-card-select" onchange="setDirectionNotesInject(this.value)">
-        <option value="on" ${dnInject ? "selected" : ""}>On</option>
-        <option value="off" ${!dnInject ? "selected" : ""}>Off</option>
-      </select>
-      <label>Who receives</label>
-      <select class="tool-card-select" onchange="setDirectionNotesRecipient(this.value)" ${dnInject ? "" : "disabled"}>
-        <option value="director" ${dnRecipient === "director" ? "selected" : ""}>Director</option>
-        <option value="writer" ${dnRecipient === "writer" ? "selected" : ""}>Writer</option>
-        <option value="both" ${dnRecipient === "both" ? "selected" : ""}>Director and writer</option>
+        <option value="off" ${dnInject === "off" ? "selected" : ""}>Off</option>
+        <option value="director" ${dnInject === "director" ? "selected" : ""}>Director</option>
+        <option value="writer" ${dnInject === "writer" ? "selected" : ""}>Writer</option>
+        <option value="both" ${dnInject === "both" ? "selected" : ""}>Director and writer</option>
       </select>
     </div>
-    <div class="tool-card-desc">Recording adds a note per enabled "direction_note" fragment, kept on this branch ("before writer" adds latency before the reply streams; "end of turn" records after the final reply). Injection is separate from recording. "Who receives" picks whether the director sees the notes while planning the scene, the writer while generating prose, or both.</div>
+    <div class="tool-card-desc">Recording writes a lasting note per enabled "direction_note" fragment, kept on this branch; each fragment sets when it records (before the writer, or end of turn). Injection feeds stored notes back to the director, the writer, or both, and is independent of recording.</div>
   </div>`;
 
   $("tools-list").innerHTML = toolCards + lengthGuardCard + feedbackCard + individualFragmentsCard + directionNotesCard;

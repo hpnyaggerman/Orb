@@ -5,8 +5,9 @@ the forced ``record_direction_note`` sub-call exposes one parameter per enabled 
 fragment, and each filled parameter persists one note (keyed to the turn's assistant
 message, carrying the fragment's id and label). Covers both placements, the suppressing
 gates (off / global agent toggle / no enabled fragment / empty draft), branch-dependence,
-the steered regenerates, and the read/write separation: recording (``direction_notes_mode``
-+ per-fragment ``enabled``) is independent of injection (``direction_notes_inject``).
+the steered regenerates, and the read/write separation: recording (the ``direction_notes_record``
+switch + per-fragment ``enabled`` and ``direction_note_timing``) is independent of injection
+(``direction_notes_inject``).
 """
 
 from __future__ import annotations
@@ -23,7 +24,9 @@ _NOTE = "Alice now distrusts the user, after he lied about the key."
 _HEADING = "Direction of travel"
 
 
-async def _make_fragment(fid: str = "trajectory", injection_label: str = _HEADING, enabled: bool = True) -> None:
+async def _make_fragment(
+    fid: str = "trajectory", injection_label: str = _HEADING, enabled: bool = True, timing: str = "post_turn"
+) -> None:
     """Create one enabled ``field_type="direction_note"`` interactive fragment."""
     await dbmod.create_interactive_fragment(
         {
@@ -33,6 +36,7 @@ async def _make_fragment(fid: str = "trajectory", injection_label: str = _HEADIN
             "field_type": "direction_note",
             "injection_label": injection_label,
             "enabled": enabled,
+            "direction_note_timing": timing,
         }
     )
 
@@ -66,7 +70,7 @@ async def test_post_turn_fires_and_persists(client, db, llm_mock):
     cid = "conv-dn-post"
     await dbmod.create_conversation(cid, "dn", "Bot", "a scenario")
     await _make_fragment()
-    await client.put("/api/settings", json={"enable_agent": True, "direction_notes_mode": "post_turn"})
+    await client.put("/api/settings", json={"enable_agent": True, "direction_notes_record": True})
 
     llm_mock.enqueue_writer("She nods slowly.")
     llm_mock.enqueue_direction_note(_record_call(trajectory=_NOTE))
@@ -87,10 +91,10 @@ async def test_post_turn_fires_and_persists(client, db, llm_mock):
 async def test_pre_writer_runs_before_writer(client, db, llm_mock):
     cid = "conv-dn-pre"
     await dbmod.create_conversation(cid, "dn", "Bot", "a scenario")
-    await _make_fragment()
+    await _make_fragment(timing="pre_writer")
     await client.put(
         "/api/settings",
-        json={"enable_agent": True, "direction_notes_mode": "pre_writer", "enabled_tools": {"direct_scene": True}},
+        json={"enable_agent": True, "direction_notes_record": True, "enabled_tools": {"direct_scene": True}},
     )
 
     llm_mock.enqueue_director([{"type": "function", "function": {"name": "direct_scene", "arguments": {"moods": []}}}])
@@ -108,12 +112,12 @@ async def test_pre_writer_runs_before_writer(client, db, llm_mock):
 async def test_pre_writer_skipped_without_direct_scene(client, db, llm_mock):
     cid = "conv-dn-pre-skip"
     await dbmod.create_conversation(cid, "dn", "Bot", "a scenario")
-    await _make_fragment()
+    await _make_fragment(timing="pre_writer")
     # pre_writer reflects on the director's scene direction, so without direct_scene
     # the sub-call must not run.
     await client.put(
         "/api/settings",
-        json={"enable_agent": True, "direction_notes_mode": "pre_writer", "enabled_tools": {"direct_scene": False}},
+        json={"enable_agent": True, "direction_notes_record": True, "enabled_tools": {"direct_scene": False}},
     )
 
     llm_mock.enqueue_writer("A reply.")
@@ -129,7 +133,7 @@ async def test_off_does_not_run(client, db, llm_mock):
     cid = "conv-dn-off"
     await dbmod.create_conversation(cid, "dn", "Bot", "a scenario")
     await _make_fragment()
-    await client.put("/api/settings", json={"enable_agent": True, "direction_notes_mode": "off"})
+    await client.put("/api/settings", json={"enable_agent": True, "direction_notes_record": False})
 
     llm_mock.enqueue_writer("A reply.")
     llm_mock.enqueue_direction_note(_record_call(trajectory=_NOTE))  # must stay unconsumed
@@ -146,7 +150,7 @@ async def test_no_enabled_fragment_does_not_run(client, db, llm_mock):
     await dbmod.create_conversation(cid, "dn", "Bot", "a scenario")
     # Recording on, but no direction_note fragment exists: nothing to fill, so the
     # sub-call is skipped entirely (mirrors the feedback step with no feedback fragment).
-    await client.put("/api/settings", json={"enable_agent": True, "direction_notes_mode": "post_turn"})
+    await client.put("/api/settings", json={"enable_agent": True, "direction_notes_record": True})
 
     llm_mock.enqueue_writer("A reply.")
     llm_mock.enqueue_direction_note(_record_call(trajectory=_NOTE))
@@ -161,7 +165,7 @@ async def test_obeys_global_agent_toggle(client, db, llm_mock):
     cid = "conv-dn-agent-off"
     await dbmod.create_conversation(cid, "dn", "Bot", "a scenario")
     await _make_fragment()
-    await client.put("/api/settings", json={"enable_agent": False, "direction_notes_mode": "post_turn"})
+    await client.put("/api/settings", json={"enable_agent": False, "direction_notes_record": True})
 
     llm_mock.enqueue_writer("A reply.")
     llm_mock.enqueue_direction_note(_record_call(trajectory=_NOTE))
@@ -176,7 +180,7 @@ async def test_empty_draft_persists_nothing(client, db, llm_mock):
     cid = "conv-dn-empty"
     await dbmod.create_conversation(cid, "dn", "Bot", "a scenario")
     await _make_fragment()
-    await client.put("/api/settings", json={"enable_agent": True, "direction_notes_mode": "post_turn"})
+    await client.put("/api/settings", json={"enable_agent": True, "direction_notes_record": True})
 
     llm_mock.enqueue_writer("")  # reasoning-only turn: no assistant message persisted
     llm_mock.enqueue_direction_note(_record_call(trajectory=_NOTE))
@@ -192,7 +196,7 @@ async def test_notes_are_branch_dependent(client, db, llm_mock):
     cid = "conv-dn-branch"
     await dbmod.create_conversation(cid, "dn", "Bot", "a scenario")
     await _make_fragment()
-    await client.put("/api/settings", json={"enable_agent": True, "direction_notes_mode": "post_turn"})
+    await client.put("/api/settings", json={"enable_agent": True, "direction_notes_record": True})
 
     llm_mock.enqueue_writer("The door creaks open.")
     llm_mock.enqueue_direction_note(_record_call(trajectory=_NOTE))
@@ -216,7 +220,7 @@ async def test_magic_rewrite_records_note_on_new_branch(client, db, llm_mock):
     cid = "conv-dn-magic"
     await dbmod.create_conversation(cid, "dn", "Bot", "a scenario")
     await _make_fragment()
-    await client.put("/api/settings", json={"enable_agent": True, "direction_notes_mode": "post_turn"})
+    await client.put("/api/settings", json={"enable_agent": True, "direction_notes_record": True})
 
     llm_mock.enqueue_writer("The hall is silent.")
     llm_mock.enqueue_direction_note(_record_call(trajectory=_NOTE))
@@ -244,7 +248,7 @@ async def test_super_regenerate_records_note_on_new_branch(client, db, llm_mock)
     cid = "conv-dn-super"
     await dbmod.create_conversation(cid, "dn", "Bot", "a scenario")
     await _make_fragment()
-    await client.put("/api/settings", json={"enable_agent": True, "direction_notes_mode": "post_turn"})
+    await client.put("/api/settings", json={"enable_agent": True, "direction_notes_record": True})
 
     llm_mock.enqueue_writer("She waits by the gate.")
     llm_mock.enqueue_direction_note(_record_call(trajectory=_NOTE))
@@ -268,7 +272,12 @@ async def test_injection_is_independent_of_recording(client, db, llm_mock):
     # direct_scene on so a director_done injection block is produced each turn.
     await client.put(
         "/api/settings",
-        json={"enable_agent": True, "direction_notes_mode": "post_turn", "enabled_tools": {"direct_scene": True}},
+        json={
+            "enable_agent": True,
+            "direction_notes_record": True,
+            "direction_notes_inject": "both",
+            "enabled_tools": {"direct_scene": True},
+        },
     )
 
     # Turn 1 records a note.
@@ -276,14 +285,14 @@ async def test_injection_is_independent_of_recording(client, db, llm_mock):
     llm_mock.enqueue_direction_note(_record_call(trajectory=_NOTE))
     await _drain(handle_turn(cid, "hello"))
 
-    # Turn 2, inject on (default): the stored note appears in the injection block.
+    # Turn 2, inject on: the stored note appears in the injection block.
     llm_mock.enqueue_writer("Shadows lengthen.")
     events2 = await _drain(handle_turn(cid, "again"))
     block2 = await _injection_block(events2)
     assert _HEADING in block2 and _NOTE in block2
 
     # Turn 3, inject off: the note is withheld from the prompt, yet recording still runs.
-    await client.put("/api/settings", json={"direction_notes_inject": False})
+    await client.put("/api/settings", json={"direction_notes_inject": "off"})
     llm_mock.enqueue_writer("A new arrival.")
     llm_mock.enqueue_direction_note(_record_call(trajectory="A stranger entered."))
     events3 = await _drain(handle_turn(cid, "more"))
@@ -297,7 +306,7 @@ async def test_disabling_fragment_stops_new_notes_keeps_old(client, db, llm_mock
     await dbmod.create_conversation(cid, "dn", "Bot", "a scenario")
     await _make_fragment("alpha", "Alpha heading")
     await _make_fragment("beta", "Beta heading")
-    await client.put("/api/settings", json={"enable_agent": True, "direction_notes_mode": "post_turn"})
+    await client.put("/api/settings", json={"enable_agent": True, "direction_notes_record": True})
 
     # Turn 1: both fragments record.
     llm_mock.enqueue_writer("Opening.")
@@ -339,9 +348,9 @@ async def _record_then_next_turn(client, llm_mock, cid: str, recipient: str) -> 
         "/api/settings",
         json={
             "enable_agent": True,
-            "direction_notes_mode": "post_turn",
+            "direction_notes_record": True,
             "enabled_tools": {"direct_scene": True},
-            "direction_notes_recipient": recipient,
+            "direction_notes_inject": recipient,
         },
     )
     direct_scene = [{"type": "function", "function": {"name": "direct_scene", "arguments": {"moods": []}}}]
@@ -380,7 +389,7 @@ async def test_fragment_routes_list_edit_delete(client, db, llm_mock):
     cid = "conv-dn-routes"
     await dbmod.create_conversation(cid, "dn", "Bot", "a scenario")
     await _make_fragment()
-    await client.put("/api/settings", json={"enable_agent": True, "direction_notes_mode": "post_turn"})
+    await client.put("/api/settings", json={"enable_agent": True, "direction_notes_record": True})
     llm_mock.enqueue_writer("A reply.")
     llm_mock.enqueue_direction_note(_record_call(trajectory=_NOTE))
     await _drain(handle_turn(cid, "hello"))
@@ -416,3 +425,32 @@ async def test_get_for_path_empty_and_membership(client, db, llm_mock):
     assert await dbmod.get_direction_notes_for_path(cid, []) == []
     rows = await dbmod.get_direction_notes_for_path(cid, [uid, on_path])
     assert [r["content"] for r in rows] == ["on path"]
+
+
+async def test_per_fragment_timing_runs_both_steps(client, db, llm_mock):
+    cid = "conv-dn-timing"
+    await dbmod.create_conversation(cid, "dn", "Bot", "a scenario")
+    await _make_fragment("early", "Early heading", timing="pre_writer")
+    await _make_fragment("late", "Late heading", timing="post_turn")
+    await client.put(
+        "/api/settings",
+        json={"enable_agent": True, "direction_notes_record": True, "enabled_tools": {"direct_scene": True}},
+    )
+
+    llm_mock.enqueue_director([{"type": "function", "function": {"name": "direct_scene", "arguments": {"moods": []}}}])
+    llm_mock.enqueue_direction_note(_record_call(early="recorded early"))
+    llm_mock.enqueue_writer("A reply lands.")
+    llm_mock.enqueue_direction_note(_record_call(late="recorded late"))
+
+    events = await _drain(handle_turn(cid, "hello"))
+
+    # A pre-writer step (early) and a post-turn step (late) both fire, on either side of the writer.
+    order = [p for p, _ in llm_mock.calls]
+    dn_positions = [i for i, p in enumerate(order) if p == "direction_note"]
+    assert len(dn_positions) == 2
+    assert dn_positions[0] < order.index("writer") < dn_positions[1]
+
+    # Both notes persist, and the final event carries the running total across both steps.
+    assert set(await _notes_on_active_path(cid)) == {"recorded early", "recorded late"}
+    final = [e["data"]["notes"] for e in events if e.get("event") == "direction_notes"][-1]
+    assert {n["content"] for n in final} == {"recorded early", "recorded late"}

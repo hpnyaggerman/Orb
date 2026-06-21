@@ -49,9 +49,8 @@ class SettingsUpdate(BaseModel):
     agent_shared_system_prompt: Optional[str] = None
     feedback_enabled: Optional[bool] = None
     director_individual_fragments: Optional[bool] = None
-    direction_notes_mode: Optional[Literal["off", "pre_writer", "post_turn"]] = None
-    direction_notes_inject: Optional[bool] = None
-    direction_notes_recipient: Optional[Literal["director", "writer", "both"]] = None
+    direction_notes_record: Optional[bool] = None
+    direction_notes_inject: Optional[Literal["off", "director", "writer", "both"]] = None
     inspector_open_states: Optional[dict] = None
     workflows_globally_enabled: Optional[bool] = None
 
@@ -137,6 +136,7 @@ class InteractiveFragmentCreate(BaseModel):
     enabled: bool = True
     injection_label: str
     sort_order: int = 0
+    direction_note_timing: Literal["pre_writer", "post_turn"] = "post_turn"
 
 
 class InteractiveFragmentUpdate(BaseModel):
@@ -147,6 +147,7 @@ class InteractiveFragmentUpdate(BaseModel):
     enabled: Optional[bool] = None
     injection_label: Optional[str] = None
     sort_order: Optional[int] = None
+    direction_note_timing: Optional[Literal["pre_writer", "post_turn"]] = None
 
 
 class WorldCreate(BaseModel):
