@@ -242,7 +242,7 @@ export function formatProseWithDiff(ops) {
       html += `<span class="diff-change">${_applyInlineFormatting(esc(op.text))}</span>`;
     }
   }
-  return html.replace(/\n/g, "<br>");
+  return html.replace(/\n{2,}/g, '<br><span class="pbreak"></span>').replace(/\n/g, "<br>");
 }
 
 // Icons for the code-block toolbar (word-wrap toggle + copy). Inline SVG so the
@@ -343,7 +343,9 @@ function _formatProse(text) {
         /^(#{1,6}) (.+)$/gm,
         (_, hashes, content) => `<strong class="md-h${hashes.length}">${content}</strong>`,
       );
-      return escaped.replace(/\n/g, "<br>");
+      // Double+ linebreak: one <br> plus a half-line spacer so the paragraph gap
+      // is 1.5x a single break (not 2x). Single \n stays a plain <br>.
+      return escaped.replace(/\n{2,}/g, '<br><span class="pbreak"></span>').replace(/\n/g, "<br>");
     })
     .join("");
 }
