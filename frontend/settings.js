@@ -291,6 +291,8 @@ export async function setDirectionNotesRecord(on) {
   renderToolsPanel();
   // Direction-note fragments in the sidebar are greyed out when recording is off.
   renderInteractiveFragments();
+  // The per-message add-note button is gated on this switch, so repaint the messages too.
+  renderMessages();
   updateDirectionNotesButton();
   await persistSettings({ direction_notes_record: on });
 }

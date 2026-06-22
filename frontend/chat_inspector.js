@@ -4,6 +4,7 @@
 // keep working.
 import { api } from "./api.js";
 import { renderContextSize, renderMessages } from "./chat_core.js";
+import { USER_NOTE_ID } from "./direction_notes_panel.js";
 import { closeUtilityPanel, isUtilityPanelOpen, openUtilityPanel } from "./panels.js";
 import { S, effectiveWorkflowEnabled } from "./state.js";
 import { $, esc } from "./utils.js";
@@ -379,16 +380,19 @@ export function buildFeedbackHtml(values) {
 
 // One labelled row per note, in the order recorded this turn (fragment order), reusing
 // the feedback block's styling so the look matches the rest of the Inspector. Notes
-// arrive as {interactive_fragment_label, content}.
+// arrive as {interactive_fragment_id, interactive_fragment_label, content}; user-authored
+// ones are tagged so they read the same here as in the Notes panel.
 export function buildDirectionNotesHtml(notes) {
   if (!Array.isArray(notes) || !notes.length) return "";
   const body = notes
-    .map(
-      (n) => `<div class="feedback-row">
-        <span class="feedback-row-label">${esc(n.interactive_fragment_label || "")}</span>
+    .map((n) => {
+      const isUser = n.interactive_fragment_id === USER_NOTE_ID;
+      const badge = isUser ? ` <span class="notes-row-user-badge">You</span>` : "";
+      return `<div class="feedback-row${isUser ? " user-note" : ""}">
+        <span class="feedback-row-label">${esc(n.interactive_fragment_label || "")}${badge}</span>
         <div class="feedback-row-value">${esc(String(n.content))}</div>
-      </div>`,
-    )
+      </div>`;
+    })
     .join("");
   return `<div class="inspector-block">
     <h4>Direction Notes (this turn)</h4>

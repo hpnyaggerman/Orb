@@ -454,3 +454,43 @@ async def test_per_fragment_timing_runs_both_steps(client, db, llm_mock):
     assert set(await _notes_on_active_path(cid)) == {"recorded early", "recorded late"}
     final = [e["data"]["notes"] for e in events if e.get("event") == "direction_notes"][-1]
     assert {n["content"] for n in final} == {"recorded early", "recorded late"}
+
+
+async def test_user_note_route_creates_and_lists(client, db, llm_mock):
+    cid = "conv-dn-user"
+    await dbmod.create_conversation(cid, "dn", "Bot", "a scenario")
+    # A user note is authored through the route, not the model's step: no fragment and no
+    # recording needed. A plain turn just gives it an assistant message to anchor to.
+    await client.put("/api/settings", json={"enable_agent": True})
+    llm_mock.enqueue_writer("She waits.")
+    await _drain(handle_turn(cid, "hello"))
+    asst = await _last_assistant(cid)
+
+    created = await client.post(
+        f"/api/conversations/{cid}/direction-notes",
+        json={"message_id": asst["id"], "label": "My label", "content": "The user owns the iron key."},
+    )
+    assert created.status_code == 200
+
+    rows = await dbmod.get_direction_notes_for_message(asst["id"])
+    assert len(rows) == 1
+    assert rows[0]["interactive_fragment_id"] == "human"
+    assert rows[0]["interactive_fragment_label"] == "My label"
+    assert rows[0]["content"] == "The user owns the iron key."
+
+    # It lands on the active path and the list route stamps it with the turn, like a model note.
+    listing = (await client.get(f"/api/conversations/{cid}/direction-notes")).json()
+    assert [(n["interactive_fragment_id"], n["content"]) for n in listing] == [("human", "The user owns the iron key.")]
+    assert "turn_index" in listing[0]
+
+    # A message from no conversation (or another) is rejected; empty content is rejected.
+    assert (
+        await client.post(
+            f"/api/conversations/{cid}/direction-notes", json={"message_id": 999999, "label": "x", "content": "y"}
+        )
+    ).status_code == 404
+    assert (
+        await client.post(
+            f"/api/conversations/{cid}/direction-notes", json={"message_id": asst["id"], "label": "x", "content": "  "}
+        )
+    ).status_code == 400

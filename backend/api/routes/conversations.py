@@ -14,6 +14,7 @@ from ...database import (
     add_conversation_log,
     add_message,
     create_conversation,
+    create_direction_notes,
     delete_conversation,
     delete_direction_note,
     fork_conversation,
@@ -53,11 +54,17 @@ from ..schemas import (
     CompressRequest,
     ConversationCreate,
     ConversationUpdate,
+    DirectionNoteCreate,
     DirectionNoteUpdate,
     SummarizeRequest,
 )
 
 logger = logging.getLogger(__name__)
+
+# Sentinel interactive_fragment_id stamped on user-authored direction notes; the model's
+# record_direction_note step only ever emits real fragment ids, so this never collides with
+# one. The frontend keys its distinct styling on the same value -- keep the two in sync.
+_USER_NOTE_FRAGMENT_ID = "human"
 
 router = APIRouter()
 
@@ -515,6 +522,28 @@ async def api_list_direction_notes(cid: str):
         }
         for r in rows
     ]
+
+
+@router.post("/api/conversations/{cid}/direction-notes")
+async def api_create_direction_note(cid: str, data: DirectionNoteCreate):
+    content = data.content.strip()
+    if not content:
+        raise HTTPException(status_code=400, detail="Note content is empty")
+    msg = await get_message_by_id(data.message_id)
+    if not msg or msg.get("conversation_id") != cid:
+        raise HTTPException(status_code=404, detail="Message not found")
+    ids = await create_direction_notes(
+        cid,
+        data.message_id,
+        [
+            {
+                "interactive_fragment_id": _USER_NOTE_FRAGMENT_ID,
+                "interactive_fragment_label": data.label.strip() or "Note",
+                "content": content,
+            }
+        ],
+    )
+    return {"id": ids[0]}
 
 
 @router.put("/api/conversations/{cid}/direction-notes/{fid}")

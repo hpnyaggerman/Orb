@@ -8,6 +8,10 @@ import { closeUtilityPanel, isUtilityPanelOpen, openUtilityPanel } from "./panel
 import { S } from "./state.js";
 import { $, convUrl, esc, toast } from "./utils.js";
 
+// interactive_fragment_id stamped on user-authored notes (vs the model's real fragment ids).
+// The backend create route writes the same sentinel; keep the two in sync.
+export const USER_NOTE_ID = "human";
+
 // Last fetched notes, so the edit modal can seed its textarea by id without escaping round-trips.
 let notes = [];
 
@@ -36,10 +40,12 @@ function renderRows() {
   // branch); within a turn, fragment order. Each note carries its fragment's label so
   // the source is obvious without bucketing notes away from their chronology.
   el.innerHTML = notes
-    .map(
-      (n) => `<div class="notes-row">
+    .map((n) => {
+      const isUser = n.interactive_fragment_id === USER_NOTE_ID;
+      const badge = isUser ? ` <span class="notes-row-user-badge">You</span>` : "";
+      return `<div class="notes-row${isUser ? " user-note" : ""}">
       <div class="notes-row-meta">
-        <span class="notes-row-frag">${esc(n.interactive_fragment_label || "(unnamed)")}</span>
+        <span class="notes-row-frag">${esc(n.interactive_fragment_label || "(unnamed)")}${badge}</span>
         <span class="notes-row-turn">Turn ${n.turn_index}</span>
       </div>
       <div class="notes-row-content">${esc(n.content)}</div>
@@ -47,8 +53,8 @@ function renderRows() {
         <button class="btn btn-sm" onclick="editDirectionNote(${n.id})">Edit</button>
         <button class="btn btn-sm btn-danger" onclick="deleteDirectionNote(${n.id})">Delete</button>
       </div>
-    </div>`,
-    )
+    </div>`;
+    })
     .join("");
 }
 
@@ -96,6 +102,42 @@ export function optimisticDropDirectionNotesFrom(msgId) {
   regenCutMsgId = msgId;
   notes = applyRegenCut(notes);
   if (isUtilityPanelOpen("direction-notes-panel")) renderRows();
+}
+
+// Per-message entry point (the message toolbar's note button). Opens the panel so the new
+// note is in view after saving; the note is stamped to msgId's turn.
+export function addUserDirectionNote(msgId) {
+  if (!isUtilityPanelOpen("direction-notes-panel")) {
+    openUtilityPanel("direction-notes-panel", "direction-notes-panel-btn", renderDirectionNotesPanel);
+  }
+  showModal(`
+    <h2>Add Direction Note</h2>
+    <div class="field"><label>Label</label>
+      <input id="user-note-label" type="text" value="Note" maxlength="80"></div>
+    <div class="field"><label>Note</label>
+      <textarea id="user-note-content" rows="5" placeholder="A lasting fact or direction to keep on this branch..."></textarea></div>
+    <div class="modal-actions">
+      <div style="flex:1"></div>
+      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn btn-accent" onclick="saveUserDirectionNote(${msgId})">Save</button>
+    </div>`);
+}
+
+export async function saveUserDirectionNote(msgId) {
+  const label = document.getElementById("user-note-label").value.trim() || "Note";
+  const content = document.getElementById("user-note-content").value.trim();
+  if (!content) {
+    toast("Note cannot be empty", true);
+    return;
+  }
+  try {
+    await api.post(convUrl(S.activeConvId, "direction-notes"), { message_id: msgId, label, content });
+    closeModal();
+    await renderDirectionNotesPanel();
+    toast("Note added");
+  } catch (e) {
+    toast(e.message, true);
+  }
 }
 
 export function editDirectionNote(fid) {

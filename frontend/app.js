@@ -181,9 +181,11 @@ import {
   toggleWorkflowsGlobal,
 } from "./settings.js";
 import {
+  addUserDirectionNote,
   deleteDirectionNote,
   editDirectionNote,
   saveDirectionNote,
+  saveUserDirectionNote,
   toggleDirectionNotesPanel,
 } from "./direction_notes_panel.js";
 import { S } from "./state.js";
@@ -247,8 +249,10 @@ Object.assign(window, {
   setDirectionNotesRecord,
   setDirectionNotesInject,
   toggleDirectionNotesPanel,
+  addUserDirectionNote,
   editDirectionNote,
   saveDirectionNote,
+  saveUserDirectionNote,
   deleteDirectionNote,
   toggleShowEditorDiff,
   toggleAuditType,

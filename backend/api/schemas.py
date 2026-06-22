@@ -59,6 +59,14 @@ class DirectionNoteUpdate(BaseModel):
     content: str
 
 
+class DirectionNoteCreate(BaseModel):
+    # message_id anchors the note to a turn (its turn_index is derived at read time);
+    # the route rejects an id that is not an assistant message in this conversation.
+    message_id: int
+    label: str
+    content: str
+
+
 class WorkflowConfigUpdate(BaseModel):
     # Required (no default): a body lacking "config" is a 422, not a silent
     # clear; an explicit {"config": {}} is the intentional reset-to-defaults.
