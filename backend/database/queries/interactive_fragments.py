@@ -21,7 +21,7 @@ async def get_interactive_fragment(fid: str) -> InteractiveFragmentRow | None:
 async def create_interactive_fragment(data: dict) -> InteractiveFragmentRow | None:
     async with get_db() as db:
         await db.execute(
-            "INSERT INTO interactive_fragments (id, label, description, field_type, required, enabled, injection_label, sort_order) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO interactive_fragments (id, label, description, field_type, required, enabled, injection_label, sort_order, direction_note_timing) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 data["id"],
                 data["label"],
@@ -31,6 +31,7 @@ async def create_interactive_fragment(data: dict) -> InteractiveFragmentRow | No
                 1 if data.get("enabled", True) else 0,
                 data["injection_label"],
                 data.get("sort_order", 0),
+                data.get("direction_note_timing", "post_turn"),
             ),
         )
         await db.commit()
@@ -47,6 +48,7 @@ async def update_interactive_fragment(fid: str, data: dict) -> InteractiveFragme
             "enabled",
             "injection_label",
             "sort_order",
+            "direction_note_timing",
         ]
         sets, vals = _build_set_clause(allowed, data)
         if sets:

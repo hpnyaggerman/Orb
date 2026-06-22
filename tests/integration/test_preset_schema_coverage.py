@@ -457,6 +457,7 @@ SIGNATURE_ALLOWLIST = frozenset(
         "model_configs",
         # pure log / attachment tables: not part of any domain's user-facing identity.
         "conversation_logs",
+        "direction_notes",
         "user_attachments",
         "workflow_attachments",
     }

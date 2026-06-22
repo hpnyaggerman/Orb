@@ -24,7 +24,9 @@ from ....inference import (
     compute_style_injection_block,
     parse_tool_calls,
     reasoning_cfg,
+    render_direction_notes_block,
 )
+from ...predicates import direction_note_to_director, direction_note_to_writer
 from . import progressive
 from .prompt_rewrite import (
     apply_rewrite,
@@ -129,6 +131,7 @@ async def director_pass(
     lorebook_block: str = "",
     lorebook_catalog: str = "",
     progressive_state: dict | None = None,
+    direction_notes_block: str = "",
 ) -> AsyncIterator[dict]:
     """Yield reasoning chunks during each tool call, then a single done dict.
 
@@ -171,6 +174,12 @@ async def director_pass(
 
     per_fragment_on = bool(settings.get("director_individual_fragments", 0))
 
+    # Prepended to direct_scene prompts as "___"-fenced sections (like the lorebook),
+    # so the director decides the scene with the world facts and the established
+    # direction notes in view. Notes go only into direct_scene, never rewrite_user_prompt.
+    lorebook_prefix = ("___\n\n" + lorebook_block + "\n\n") if lorebook_block else ""
+    notes_prefix = ("___\n\n" + direction_notes_block + "\n\n") if direction_notes_block else ""
+
     t0 = time.monotonic()
     for name in tool_names:
         if client.is_aborted:
@@ -199,7 +208,7 @@ async def director_pass(
                     progressive_prior=(progressive_state or {}).get(stage["id"]) if stage else None,
                     lorebook_catalog=lorebook_catalog if stage is None else "",
                 )
-                step_tail = ("___\n\n" + lorebook_block + "\n\n" if lorebook_block else "") + step_tail
+                step_tail = lorebook_prefix + notes_prefix + step_tail
                 content = build_multimodal_content(step_tail, attachments)
                 trailing = [{"role": "user", "content": content}]
                 logger.info(
@@ -253,7 +262,7 @@ async def director_pass(
             tool_schema=tool_schema,
             lorebook_catalog=lorebook_catalog,
         )
-        tail = ("___\n\n" + lorebook_block + "\n\n" if lorebook_block else "") + tool_tail
+        tail = lorebook_prefix + (notes_prefix if name == "direct_scene" else "") + tool_tail
         content = build_multimodal_content(tail, attachments)
         trailing: list[ChatMessage] = [{"role": "user", "content": content}]
         logger.info(
@@ -335,6 +344,12 @@ async def director_stage(
     # filter below.
     prior_progressive = progressive.select(director.get("progressive_fields", {}), writer_fragments)
 
+    # Render the stored direction notes once; the director receives them in its
+    # direct_scene prompt when it is a chosen recipient (so it steers consistent with
+    # the direction it set earlier), the writer in its Scene Direction when it is (below).
+    direction_notes = director.get("direction_notes") or []
+    notes_block = macros.resolve_message(render_direction_notes_block(direction_notes)) if direction_notes else ""
+
     # --- Director pass ---
     has_pre_writer_tools = any(cfg.enabled_tools.get(n, False) for n in PRE_WRITER_TOOLS)
     if cfg.agent_on and has_pre_writer_tools:
@@ -354,6 +369,7 @@ async def director_stage(
             lorebook_block=lorebook.block,
             lorebook_catalog=lorebook.catalog,
             progressive_state=prior_progressive,
+            direction_notes_block=notes_block if direction_note_to_director(settings) else "",
         ):
             if event["type"] == "reasoning":
                 state.reasoning_director += event["delta"]
@@ -396,6 +412,14 @@ async def director_stage(
             prior_progressive,
         )
     )
+    # Direction notes ride the writer's Scene Direction when the writer is a chosen
+    # recipient -- independent of direct_scene and of whether recording is on -- so they
+    # are appended here rather than routed through compute_style_injection_block (which
+    # clears its inputs when direct_scene is off). scene_direction keeps the pre-append
+    # text for the pre-writer notes step.
+    state.scene_direction = state.inj_block
+    if notes_block and direction_note_to_writer(settings):
+        state.inj_block = (state.inj_block + "\n\n" + notes_block).strip()
 
     yield {
         "event": "director_done",

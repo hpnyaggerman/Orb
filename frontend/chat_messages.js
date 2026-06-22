@@ -11,6 +11,8 @@ import {
   setMessages,
 } from "./chat_core.js";
 import { renderInspector } from "./chat_inspector.js";
+import { renderDirectionNotesPanel } from "./direction_notes_panel.js";
+import { isUtilityPanelOpen } from "./panels.js";
 import {
   afterStream,
   agentPayload,
@@ -163,6 +165,7 @@ export async function switchBranch(msgId) {
     S.directorState = await api.get(convUrl(S.activeConvId, "director"));
     renderMessages();
     await inspectMessage(msgId);
+    if (isUtilityPanelOpen("direction-notes-panel")) await renderDirectionNotesPanel();
 
     if (anchorMsgId && anchorOffset !== null) {
       const newAnchorEl = ct.querySelector(`[data-msg-id="${anchorMsgId}"]`);

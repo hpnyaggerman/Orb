@@ -38,6 +38,13 @@ from .queries.conversations import (
     touch_conversation,
     update_conversation,
 )
+from .queries.direction_notes import (
+    create_direction_notes,
+    delete_direction_note,
+    get_direction_notes_for_message,
+    get_direction_notes_for_path,
+    update_direction_note,
+)
 from .queries.director_state import get_director_state, update_director_state
 from .queries.endpoints import (
     create_endpoint,
@@ -148,6 +155,7 @@ __all__ = [
     "create_lorebook_entry",
     "create_model_config",
     "create_mood_fragment",
+    "create_direction_notes",
     "create_user_persona",
     "create_world",
     "delete_character_card",
@@ -158,6 +166,7 @@ __all__ = [
     "delete_message_with_descendants",
     "delete_model_config",
     "delete_mood_fragment",
+    "delete_direction_note",
     "delete_phrase_group",
     "delete_user_persona",
     "delete_world",
@@ -186,6 +195,8 @@ __all__ = [
     "get_mood_fragments",
     "get_moods_before_turn",
     "get_path_to_leaf",
+    "get_direction_notes_for_message",
+    "get_direction_notes_for_path",
     "get_phrase_bank",
     "get_phrase_bank_rows",
     "get_settings",
@@ -228,6 +239,7 @@ __all__ = [
     "update_message_content",
     "update_model_config",
     "update_mood_fragment",
+    "update_direction_note",
     "update_phrase_group",
     "update_settings",
     "update_user_persona",
