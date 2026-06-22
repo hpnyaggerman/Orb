@@ -155,16 +155,17 @@ SEED_INTERACTIVE_FRAGMENTS = [
         "enabled": False,
     },
     {
-        "id": "story_direction",
-        "label": "Story Direction",
+        "id": "characterization",
+        "label": "Characterization",
         "description": (
-            "Record a lasting development worth keeping for the rest of this branch: the direction of "
-            "travel, an established fact, or a change to a character and the reason for it. Leave empty "
-            "unless something genuinely new constrains future replies."
+            "Record a substantial, long-lasting change that this turn's events have caused in a "
+            "character's established characterization: how they behave, relate, or see the world. "
+            "Name the character, the change, and its cause. If this turn produced no such change, "
+            "leave empty."
         ),
         "field_type": "direction_note",
         "required": False,
-        "injection_label": "Story direction",
+        "injection_label": "Characterization",
         "sort_order": 6,
         "enabled": False,
         "direction_note_timing": "post_turn",

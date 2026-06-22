@@ -131,9 +131,10 @@ GIVE_FEEDBACK_CHOICE = {"type": "function", "function": {"name": "give_feedback"
 
 
 _RECORD_DIRECTION_NOTE_DESCRIPTION = (
-    "Record lasting director notes that should persist for the rest of this story branch. "
-    "Each parameter is one category of note; fill only the categories that have something "
-    "new worth remembering this turn, and leave the rest empty."
+    "Record lasting director notes that persist for the rest of the roleplay -- once recorded, a "
+    "note returns on every later reply and steers the story from here on. Each parameter is one "
+    "category of note; fill only the categories that have something genuinely new and lasting to "
+    "record this turn, and leave the rest empty."
 )
 
 

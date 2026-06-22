@@ -339,12 +339,12 @@ def build_feedback_prompt(
 
 
 DIRECTION_NOTE_PREAMBLE = (
-    "[OOC: Pause the roleplay and step out of character. For each category below, decide whether "
-    "anything from what just happened should be remembered for the rest of this story branch: a "
-    "lasting change to a character, an established fact, or the direction of travel -- and the "
-    "reason behind it. Keep the story unpredictable; record only what genuinely constrains or "
-    "steers future replies. Fill a category's parameter only when it has something new worth "
-    "recording this turn, and leave the rest empty."
+    "[OOC: Pause the roleplay and step out of character. The categories below are standing records "
+    "of lasting direction for this roleplay, and your task now is to update them. Work through each "
+    "one and record into it anything from what just happened that must hold for the rest of the "
+    "roleplay. Whatever you record is permanent: it returns on every later reply and steers the "
+    "rest of the story, so a category takes only what genuinely must constrain what follows -- if "
+    "nothing this turn belongs in a category, leave it empty."
 )
 
 

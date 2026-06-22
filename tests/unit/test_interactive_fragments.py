@@ -525,6 +525,6 @@ class TestSeedInteractiveFragments:
             "next_event",
             "detected_repetitions",
             "suggested_actions",
-            "story_direction",
+            "characterization",
         }
         assert ids == expected

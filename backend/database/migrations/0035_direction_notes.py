@@ -37,15 +37,16 @@ def migrate(conn: sqlite3.Connection) -> None:
     # no-op on fresh ones, which seeded it before migrations ran. The row is pinned here so a
     # later edit to the seed cannot change what an existing install received.
     frag_ids = {row[0] for row in conn.execute("SELECT id FROM interactive_fragments").fetchall()}
-    if "story_direction" not in frag_ids:
+    if "characterization" not in frag_ids:
         conn.execute(
             "INSERT INTO interactive_fragments "
             "(id, label, description, field_type, required, enabled, injection_label, sort_order, direction_note_timing) "
-            "VALUES ('story_direction', 'Story Direction', ?, 'direction_note', 0, 0, 'Story direction', 6, 'post_turn')",
+            "VALUES ('characterization', 'Characterization', ?, 'direction_note', 0, 0, 'Characterization', 6, 'post_turn')",
             (
-                "Record a lasting development worth keeping for the rest of this branch: the direction of "
-                "travel, an established fact, or a change to a character and the reason for it. Leave empty "
-                "unless something genuinely new constrains future replies.",
+                "Record a substantial, long-lasting change that this turn's events have caused in a "
+                "character's established characterization: how they behave, relate, or see the world. "
+                "Name the character, the change, and its cause. If this turn produced no such change, "
+                "leave empty.",
             ),
         )
-        print("[migrations] 0035: seeded the default 'story_direction' direction_note fragment")
+        print("[migrations] 0035: seeded the default 'characterization' direction_note fragment")
