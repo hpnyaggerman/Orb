@@ -1,0 +1,45 @@
+.pf-settings-btn {
+  margin-top: 6px;
+}
+
+.pf-config,
+.pf-spec {
+  margin-top: 10px;
+}
+
+.pf-cfg-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0;
+}
+
+.pf-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 6px 0;
+}
+
+.pf-row input[type="text"],
+.pf-elem {
+  flex: 0 0 30%;
+  min-width: 0;
+}
+
+.pf-row textarea {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.pf-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.pf-note {
+  opacity: 0.7;
+  font-style: italic;
+}
