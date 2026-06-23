@@ -25,8 +25,8 @@ export function initConfigPanel() {
 }
 
 export function configCardRenderer() {
-  return `<div class="tool-card-desc">Enforce a recorded prose format on replies via an LLM judge/enforce loop.</div>
-    <button class="pf-settings-btn" onclick="window.pfOpenSettings()">Settings</button>`;
+  return `<div class="tool-card-desc">Hold replies to a recorded prose format with an LLM judge/enforce pass.</div>
+    <button class="btn btn-sm pf-settings-btn" onclick="window.pfOpenSettings()">Settings</button>`;
 }
 
 function triggerUrl() {
@@ -40,19 +40,22 @@ async function openSettings() {
 }
 
 function modalShell() {
-  return `<h2>Prose Format (LLM)</h2>
-    <div class="pf-config">
-      <h3>Enforcement</h3>
-      <label class="pf-cfg-row">Max enforce iterations
-        <input type="number" id="pf-cfg-iters" min="0" step="1" value="1" onchange="window.pfSaveGlobal()"></label>
-      <label class="pf-cfg-row">Prompt mode
-        <select id="pf-cfg-mode" onchange="window.pfSaveGlobal()">
-          <option value="minimal">Minimal</option>
-          <option value="extend">Full context</option>
-        </select></label>
-      <label class="pf-cfg-row"><input type="checkbox" id="pf-cfg-auto" onchange="window.pfSaveGlobal()"> Auto-analyze new conversations</label>
-      <label class="pf-cfg-row"><input type="checkbox" id="pf-cfg-reasoning" onchange="window.pfSaveGlobal()"> Show model reasoning</label>
+  return `<h2>Prose Format</h2>
+    <p class="modal-subtitle">An LLM judge finds where a reply breaks this conversation's recorded format; an enforcer makes the minimal fixes. Dormant until a conversation is analyzed.</p>
+    <div class="pf-section-title">Enforcement</div>
+    <div class="field">
+      <label for="pf-cfg-iters">Max enforce iterations</label>
+      <input type="number" id="pf-cfg-iters" min="0" step="1" value="1" onchange="window.pfSaveGlobal()">
     </div>
+    <div class="field">
+      <label for="pf-cfg-mode">Prompt mode</label>
+      <select id="pf-cfg-mode" onchange="window.pfSaveGlobal()">
+        <option value="minimal">Minimal (draft + format only)</option>
+        <option value="extend">Full context (whole conversation)</option>
+      </select>
+    </div>
+    <label class="modal-checkbox-label pf-check"><input type="checkbox" id="pf-cfg-auto" onchange="window.pfSaveGlobal()"> Auto-analyze a conversation once</label>
+    <label class="modal-checkbox-label pf-check"><input type="checkbox" id="pf-cfg-reasoning" onchange="window.pfSaveGlobal()"> Show model reasoning in the inspector</label>
     <div class="pf-spec" id="pf-spec">Loading...</div>
     <div class="modal-actions"><button class="btn" onclick="closeModal()">Close</button></div>`;
 }
@@ -136,9 +139,9 @@ function renderSpec() {
   const schemaRows = spec
     .map(
       (r, i) => `<div class="pf-row">
-      <input type="text" data-pf-name data-i="${i}" value="${esc(r.name)}" placeholder="element">
-      <textarea data-pf-desc data-i="${i}" rows="2" placeholder="how the analyzer should describe this element">${esc(r.description)}</textarea>
-      <button onclick="window.pfDelRow(${i})">Remove</button>
+      <input class="pf-name" type="text" data-pf-name data-i="${i}" value="${esc(r.name)}" placeholder="element">
+      <textarea class="pf-field" data-pf-desc data-i="${i}" rows="2" placeholder="how the analyzer should describe this element">${esc(r.description)}</textarea>
+      <button class="btn btn-xs btn-danger pf-del" onclick="window.pfDelRow(${i})">Remove</button>
     </div>`,
     )
     .join("");
@@ -146,20 +149,20 @@ function renderSpec() {
     .map(
       (r, i) => `<div class="pf-row">
       <span class="pf-elem">${esc(r.name) || "(unnamed)"}</span>
-      <textarea data-pf-val data-i="${i}" rows="2" placeholder="recorded format (filled by Analyze)">${esc(r.value)}</textarea>
+      <textarea class="pf-field" data-pf-val data-i="${i}" rows="2" placeholder="recorded format (filled by Analyze)">${esc(r.value)}</textarea>
     </div>`,
     )
     .join("");
-  host.innerHTML = `<h3>Elements (analyzer guidance)</h3>
-    ${schemaRows}
-    <button onclick="window.pfAddRow()">+ Add element</button>
-    <h3>Recorded format (what gets enforced)</h3>
-    ${valueRows}
+  host.innerHTML = `<div class="pf-section-title">Elements (analyzer guidance)</div>
+    <div class="pf-rows">${schemaRows}</div>
+    <button class="btn btn-sm pf-add" onclick="window.pfAddRow()">+ Add element</button>
+    <div class="pf-section-title">Recorded format (what gets enforced)</div>
+    <div class="pf-rows">${valueRows}</div>
     <div class="pf-actions">
-      <button onclick="window.pfAnalyze()">Analyze now</button>
-      <button onclick="window.pfSaveSpec()">Save</button>
-      <button onclick="window.pfReset()">Reset to defaults</button>
-      <span id="pf-status"></span>
+      <button class="btn btn-sm" onclick="window.pfAnalyze()">Analyze now</button>
+      <button class="btn btn-sm" onclick="window.pfReset()">Reset elements to default</button>
+      <span id="pf-status" class="pf-status"></span>
+      <button class="btn btn-sm btn-accent" onclick="window.pfSaveSpec()">Save</button>
     </div>`;
 }
 
