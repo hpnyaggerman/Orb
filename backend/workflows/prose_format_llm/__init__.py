@@ -107,7 +107,17 @@ PATCH_TOOL = _array_tool(
 # returns a non-empty config slot verbatim (no per-key merge with defaults), so a
 # slot must never be written partially; the frontend always sends all keys, and
 # this full default set covers the empty-slot path.
-_CONFIG_DEFAULTS = {"max_iterations": 1, "prompt_mode": "minimal", "auto_analyze": False, "reasoning": False}
+# ``reasoning`` = the model thinks before each tool call (applies to every agent,
+# every path); ``stream_reasoning`` = surface that thinking on the inspector rail
+# (only the in-turn paths have a stream to surface on). They are independent: a
+# model can reason without the reasoning being shown.
+_CONFIG_DEFAULTS = {
+    "max_iterations": 1,
+    "prompt_mode": "minimal",
+    "auto_analyze": False,
+    "reasoning": False,
+    "stream_reasoning": False,
+}
 
 _CONFIG_SCHEMA = {
     "type": "object",
@@ -116,6 +126,7 @@ _CONFIG_SCHEMA = {
         "prompt_mode": {"type": "string", "enum": ["minimal", "extend"], "default": "minimal"},
         "auto_analyze": {"type": "boolean", "default": False},
         "reasoning": {"type": "boolean", "default": False},
+        "stream_reasoning": {"type": "boolean", "default": False},
     },
 }
 

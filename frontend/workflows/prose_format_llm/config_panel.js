@@ -55,7 +55,8 @@ function modalShell() {
       </select>
     </div>
     <label class="modal-checkbox-label pf-check"><input type="checkbox" id="pf-cfg-auto" onchange="window.pfSaveGlobal()"> Auto-analyze a conversation once</label>
-    <label class="modal-checkbox-label pf-check"><input type="checkbox" id="pf-cfg-reasoning" onchange="window.pfSaveGlobal()"> Show model reasoning in the inspector</label>
+    <label class="modal-checkbox-label pf-check"><input type="checkbox" id="pf-cfg-reasoning" onchange="window.pfSaveGlobal()"> Reasoning -- let every agent think before acting</label>
+    <label class="modal-checkbox-label pf-check"><input type="checkbox" id="pf-cfg-stream" onchange="window.pfSaveGlobal()"> Stream that reasoning to the inspector rail (needs reasoning on)</label>
     <div class="pf-spec" id="pf-spec">Loading...</div>
     <div class="modal-actions"><button class="btn" onclick="closeModal()">Close</button></div>`;
 }
@@ -72,10 +73,12 @@ async function loadGlobal() {
   const mode = document.getElementById("pf-cfg-mode");
   const auto = document.getElementById("pf-cfg-auto");
   const reasoning = document.getElementById("pf-cfg-reasoning");
+  const stream = document.getElementById("pf-cfg-stream");
   if (iters) iters.value = Number.isInteger(cfg.max_iterations) ? cfg.max_iterations : 1;
   if (mode) mode.value = cfg.prompt_mode === "extend" ? "extend" : "minimal";
   if (auto) auto.checked = !!cfg.auto_analyze;
   if (reasoning) reasoning.checked = !!cfg.reasoning;
+  if (stream) stream.checked = !!cfg.stream_reasoning;
 }
 
 // The config slot is replaced wholesale on write, so every key must be sent or an
@@ -87,6 +90,7 @@ async function saveGlobal() {
     prompt_mode: document.getElementById("pf-cfg-mode")?.value === "extend" ? "extend" : "minimal",
     auto_analyze: !!document.getElementById("pf-cfg-auto")?.checked,
     reasoning: !!document.getElementById("pf-cfg-reasoning")?.checked,
+    stream_reasoning: !!document.getElementById("pf-cfg-stream")?.checked,
   };
   try {
     await api.put("/workflows/" + WORKFLOW_ID + "/config", { config });
