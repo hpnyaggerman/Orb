@@ -1,9 +1,9 @@
 """LLM prose-format workflow.
 
-Enforces a conversation's prose-markup convention (how narration, speech, etc.
-are delimited) on the writer's finished draft, using three forced-tool LLM
-paths: an analyzer that records the convention, a judge that locates
-violations, and an enforcer that patches them. It does the same job as the
+Enforces a conversation's prose convention -- each element's markup, plus
+narration's tense and narrative person -- on the writer's finished draft, using
+three forced-tool LLM paths: an analyzer that records the convention, a judge
+that locates violations, and an enforcer that patches them. It does the same job as the
 deterministic ``format_consistency`` workflow but covers the open-ended
 violation space regex cannot; deploy it as a replacement by toggling
 ``format_consistency`` off.
@@ -31,7 +31,11 @@ TOOL_PATCH = "prose_format_patch"
 # convention it observes; until it does, the conversation is unarmed and the
 # loop stays dormant.
 DEFAULT_SCHEMA = {
-    "narration": "How narration is denoted (e.g. text wrapped in asterisks).",
+    "narration": (
+        "How narration is written: (1) markup/delimiters (e.g. wrapped in asterisks), "
+        "(2) tense (past or present), and (3) narrative person (first/second/third). "
+        "Tense and person are narration-only -- they never apply to dialogue."
+    ),
     "speech": "How spoken dialogue is denoted (e.g. text wrapped in double quotes).",
     "internal_monologue": "How a character's unspoken thought is denoted.",
     "quotation": "How quoted or cited text inside speech or narration is denoted.",
@@ -77,29 +81,29 @@ ANALYZE_TOOL = _array_tool(
     "One record per element you can characterize from the prose; omit elements with no evidence.",
     {
         "category": "The element name, exactly as listed in the request.",
-        "denotation": "A short description of how that element is marked in this conversation's prose.",
+        "denotation": "How that element is written here: markup, and for narration also its tense and narrative person.",
     },
 )
 
 REPORT_TOOL = _array_tool(
     TOOL_REPORT,
-    "Report spans of the draft that violate the recorded prose format.",
+    "Report whole fragments of the draft that violate the recorded prose format.",
     "violations",
-    "One entry per offending span; report nothing for a clean draft.",
+    "One entry per offending fragment -- the whole fragment, even with several issues; nothing for a clean draft.",
     {
-        "excerpt": "The offending text, copied verbatim from the draft.",
-        "category": "The single element name the span violates, exactly as listed.",
+        "excerpt": "The whole offending fragment, copied verbatim from the draft.",
+        "category": "The element name the fragment belongs to, exactly as listed.",
     },
 )
 
 PATCH_TOOL = _array_tool(
     TOOL_PATCH,
-    "Apply minimal search/replace edits that bring flagged spans into the recorded format.",
+    "Apply one search/replace edit per flagged fragment to bring it into the recorded format.",
     "patches",
-    "One patch per flagged span.",
+    "One patch per flagged fragment.",
     {
-        "search": "The exact text to replace, copied verbatim from the draft.",
-        "replace": "That same text rewritten to the recorded format, wording unchanged.",
+        "search": "The whole fragment to replace, copied verbatim from the draft.",
+        "replace": "That fragment rewritten to the recorded format (markup, and for narration tense/person); events unchanged.",
     },
 )
 
