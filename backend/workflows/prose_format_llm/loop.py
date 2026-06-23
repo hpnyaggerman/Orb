@@ -146,13 +146,15 @@ def _spec_messages(ctx, mode, preamble, spec_block, instruction, draft):
     return prefix, tail
 
 
-def make_judge_fn(ctx, spec, mode, reasoning_on):
+def make_judge_fn(ctx, spec, mode, reasoning_on, stream):
     """A factory returning a fresh judge async generator per call (one per loop
-    iteration). It re-yields the model's reasoning, then yields a terminal
+    iteration). ``reasoning_on`` makes the model think; ``stream`` independently
+    decides whether that thinking is surfaced to the rail (via ``pass_id``). Yields
+    the model's reasoning when streamed, then a terminal
     ``{"type":"result","violations":[...]}`` of validated violations."""
     spec_block = render_spec_block(spec)
     filled_keys = list(spec.keys())
-    pass_id = f"{WORKFLOW_ID}:judge" if reasoning_on else None
+    pass_id = f"{WORKFLOW_ID}:judge" if stream else None
 
     async def judge_fn(draft):
         prefix, tail = _spec_messages(ctx, mode, JUDGE_PREAMBLE, spec_block, judge_instruction(TOOL_REPORT), draft)
@@ -167,11 +169,12 @@ def make_judge_fn(ctx, spec, mode, reasoning_on):
     return judge_fn
 
 
-def make_enforce_fn(ctx, spec, mode, reasoning_on):
-    """A factory returning a fresh enforcer async generator per call. It re-yields
-    reasoning, then yields a terminal ``{"type":"result","patches":[...]}``."""
+def make_enforce_fn(ctx, spec, mode, reasoning_on, stream):
+    """A factory returning a fresh enforcer async generator per call.
+    ``reasoning_on`` makes the model think; ``stream`` gates surfacing (``pass_id``).
+    Yields reasoning when streamed, then a terminal ``{"type":"result","patches":[...]}``."""
     spec_block = render_spec_block(spec)
-    pass_id = f"{WORKFLOW_ID}:enforce" if reasoning_on else None
+    pass_id = f"{WORKFLOW_ID}:enforce" if stream else None
 
     async def enforce_fn(draft, violations):
         instruction = enforce_instruction(violations, TOOL_PATCH)

@@ -60,7 +60,7 @@ async def pre_pipeline(ctx):
         return
 
     reasoning_on = bool(cfg.get("reasoning", False))
-    pass_id = f"{WORKFLOW_ID}:analyze" if reasoning_on else None
+    pass_id = f"{WORKFLOW_ID}:analyze" if cfg.get("stream_reasoning") else None
     values: dict = {}
     async for ev in run_analyzer(
         ctx, state.get("schema", {}), pass_id=pass_id, kv_tracker=ctx.kv_tracker, reasoning_on=reasoning_on
@@ -88,10 +88,11 @@ async def post_pipeline(ctx):
     n = _as_n(cfg.get("max_iterations", 1))
     mode = cfg.get("prompt_mode") or "minimal"
     reasoning_on = bool(cfg.get("reasoning", False))
+    stream = bool(cfg.get("stream_reasoning", False))
     spec = filled_elements(state)
 
-    judge_fn = make_judge_fn(ctx, spec, mode, reasoning_on)
-    enforce_fn = make_enforce_fn(ctx, spec, mode, reasoning_on)
+    judge_fn = make_judge_fn(ctx, spec, mode, reasoning_on, stream)
+    enforce_fn = make_enforce_fn(ctx, spec, mode, reasoning_on, stream)
 
     def is_aborted():
         return ctx.client.is_aborted
@@ -127,10 +128,15 @@ async def on_demand(ctx, body):
         return _state_payload(new)
 
     if action == "analyze":
-        # On-demand has no SSE stream, so no pass_id/kv_tracker. Leaves
-        # auto_analyzed untouched -- this is the manual refresh, not the auto attempt.
+        # Reasoning (the "think" knob) applies to every agent, this one included.
+        # On-demand has no SSE stream, so the reasoning is never surfaced here
+        # regardless of stream_reasoning (pass_id stays None) -- the model still
+        # thinks when reasoning is on. auto_analyzed is left untouched: this is the
+        # manual refresh, not the one auto attempt.
+        cfg = await get_workflow_config(WORKFLOW_ID)
+        reasoning_on = bool(cfg.get("reasoning", False))
         values: dict = {}
-        async for ev in run_analyzer(ctx, state.get("schema", {}), pass_id=None, kv_tracker=None, reasoning_on=False):
+        async for ev in run_analyzer(ctx, state.get("schema", {}), pass_id=None, kv_tracker=None, reasoning_on=reasoning_on):
             if ev.get("type") == "result":
                 values = ev["values"]
         merged = {**state, "values": {**state.get("values", {}), **values}}
