@@ -494,3 +494,65 @@ async def test_user_note_route_creates_and_lists(client, db, llm_mock):
             f"/api/conversations/{cid}/direction-notes", json={"message_id": asst["id"], "label": "x", "content": "  "}
         )
     ).status_code == 400
+
+
+async def test_per_fragment_records_one_call_per_fragment(client, db, llm_mock):
+    cid = "conv-dn-perfrag"
+    await dbmod.create_conversation(cid, "dn", "Bot", "a scenario")
+    await _make_fragment("alpha", "Alpha heading")
+    await _make_fragment("beta", "Beta heading")
+    # director_individual_fragments splits the post-turn group into one record call per
+    # fragment. direct_scene off so only the notes step runs (no director per-fragment noise).
+    await client.put(
+        "/api/settings",
+        json={
+            "enable_agent": True,
+            "direction_notes_record": True,
+            "director_individual_fragments": True,
+            "enabled_tools": {"direct_scene": False},
+        },
+    )
+
+    llm_mock.enqueue_writer("A reply lands.")
+    # Each call runs against the union wire schema, so a reply may carry both parameters;
+    # extraction keeps only the call's own fragment. Queue the same reply for both calls.
+    both = _record_call(alpha="a-note", beta="b-note")
+    llm_mock.enqueue_direction_note(both)
+    llm_mock.enqueue_direction_note(both)
+
+    await _drain(handle_turn(cid, "hello"))
+
+    # One record sub-call per fragment, not a single combined call.
+    assert [p for p, _ in llm_mock.calls].count("direction_note") == 2
+    # Each call contributed only its own fragment's value, under that fragment's heading.
+    rows = await dbmod.get_direction_notes_for_message((await _last_assistant(cid))["id"])
+    assert {r["interactive_fragment_label"]: r["content"] for r in rows} == {
+        "Alpha heading": "a-note",
+        "Beta heading": "b-note",
+    }
+
+
+async def test_per_fragment_call_can_record_nothing(client, db, llm_mock):
+    cid = "conv-dn-perfrag-decline"
+    await dbmod.create_conversation(cid, "dn", "Bot", "a scenario")
+    await _make_fragment("alpha", "Alpha heading")
+    await _make_fragment("beta", "Beta heading")
+    await client.put(
+        "/api/settings",
+        json={
+            "enable_agent": True,
+            "direction_notes_record": True,
+            "director_individual_fragments": True,
+            "enabled_tools": {"direct_scene": False},
+        },
+    )
+
+    llm_mock.enqueue_writer("A reply lands.")
+    # Only one reply queued: the first per-fragment call records, the second dequeues the mock's
+    # empty default (nothing worth keeping) and contributes no note, leaving the first intact.
+    llm_mock.enqueue_direction_note(_record_call(alpha="a-note", beta="b-note"))
+
+    await _drain(handle_turn(cid, "hello"))
+
+    assert [p for p, _ in llm_mock.calls].count("direction_note") == 2
+    assert len(await _notes_on_active_path(cid)) == 1

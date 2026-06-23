@@ -7,6 +7,8 @@ import pytest
 from backend.database import SEED_INTERACTIVE_FRAGMENTS
 from backend.inference import (
     build_direct_scene_tool,
+    build_direction_note_prompt,
+    build_direction_note_tool,
     build_feedback_tool,
     build_style_injection,
     compute_style_injection_block,
@@ -525,6 +527,17 @@ class TestSeedInteractiveFragments:
             "next_event",
             "detected_repetitions",
             "suggested_actions",
-            "story_direction",
+            "characterization",
         }
         assert ids == expected
+
+
+# build_direction_note_prompt: the [OOC: aside opened in the preamble must close at the end.
+def test_direction_note_prompt_closes_ooc_aside():
+    """Opens ``[OOC:`` in the preamble and must close at the very end, so the whole
+    instruction is bracketed and the delimiters stay balanced (regression guard)."""
+    frag = {"id": "characterization", "injection_label": "Characterization", "description": "x"}
+    prompt = build_direction_note_prompt([], [frag], tool_schema=build_direction_note_tool([frag]))
+    assert prompt.startswith("[OOC:")
+    assert prompt.endswith("]")
+    assert prompt.count("[") == prompt.count("]")
