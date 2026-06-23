@@ -15,38 +15,45 @@ from typing import Any, Mapping, Sequence
 ANALYZER_SAMPLE_WINDOW = 8
 
 ANALYZER_PREAMBLE = (
-    "You are a prose-format analyzer for a roleplay chat. From a conversation's assistant prose, "
-    "you infer how each listed prose element is marked (its delimiters/convention) and record a "
-    "short description of it. Judge only from the text shown, not from the element's guidance."
+    "You are a prose-format analyzer for a roleplay chat. From the conversation's assistant prose, "
+    "you record how each listed element is written, following each element's own guidance -- its "
+    "markup/delimiters, and for narration also its tense (past/present) and narrative person "
+    "(first/second/third). Record only what the prose actually shows."
 )
 
 JUDGE_PREAMBLE = (
     "You are a prose-format judge for a roleplay chat. Given the recorded prose format and a draft "
-    "reply, you locate spans of the draft that break the recorded format. You only locate and "
-    "categorize -- you never rewrite, suggest fixes, or explain."
+    "reply, you locate whole fragments of the draft that break the recorded format. You only locate "
+    "and categorize -- you never rewrite, suggest fixes, or explain."
 )
 
 ENFORCER_PREAMBLE = (
-    "You are a prose-format enforcer for a roleplay chat. You apply the smallest edits that bring "
-    "flagged spans into the recorded format, changing only markup -- never the wording, meaning, or "
-    "content of the prose."
+    "You are a prose-format enforcer for a roleplay chat. You rewrite each flagged fragment to match "
+    "its recorded format, correcting every deviation at once while keeping the story's events unchanged."
 )
 
 _ANALYZE_TASK = (
-    "For each element below, describe how it is denoted in the prose above. Skip any element you see "
-    "no evidence for. Call {tool} with one record per element you can characterize.\n\nElements:\n{schema}"
+    "For each element below, record how it is written in the prose above, following the element's "
+    "guidance. Skip any element you see no evidence for. Call {tool} with one record per element you "
+    "can characterize.\n\nElements:\n{schema}"
 )
 
 _JUDGE_TASK = (
-    "Find every span of the draft that breaks the recorded prose format. For each, give the exact "
-    "offending text (copied verbatim from the draft) and the single element name it violates. Do not "
-    "report compliant text. Call {tool}."
+    "Find every fragment of the draft that breaks its recorded format. A fragment is one contiguous "
+    "block of a single element (a whole narration passage, a line of dialogue). Report each offending "
+    "fragment ONCE -- the entire fragment as the excerpt, its element name as the category -- even when "
+    "it breaks the format several ways at once (for narration: markup, tense, and narrative person "
+    "together). Never split one fragment into separate entries per issue. Tense and narrative person "
+    "are narration-only; never flag them in dialogue. Do not report compliant fragments. Call {tool}."
 )
 
 _ENFORCE_TASK = (
-    "Each flagged span below violates the recorded format. For each, emit a patch whose 'search' is "
-    "the span copied verbatim from the draft and whose 'replace' is that span rewritten to the "
-    "recorded format, with every word preserved. Call {tool}.\n\nFlagged spans:\n{violations}"
+    "Each flagged fragment below breaks its recorded format. For each, emit one patch: 'search' is the "
+    "fragment copied verbatim from the draft; 'replace' is that fragment rewritten to its recorded "
+    "format -- fixing markup and, for narration, its tense and narrative person, all together. Changing "
+    "verb tense and pronouns/person is expected; keep every event, detail, and line of dialogue, and "
+    "leave dialogue's own tense and person untouched. Add nothing, drop nothing. Call {tool}."
+    "\n\nFlagged fragments:\n{violations}"
 )
 
 

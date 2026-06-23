@@ -3,8 +3,9 @@
 Deliberately a separate copy of the editor's ``apply_patches`` rather than a
 shared import: the editor's lives in ``backend/pipeline/``, a higher layer this
 workflow may not import. It also omits the editor's quote/asterisk
-normalization fallbacks on purpose -- this workflow exists to fix quote/asterisk
-markup, so normalizing during the match would hide the very drift it must catch.
+normalization fallbacks on purpose -- among other things this workflow fixes
+quote/asterisk markup, so normalizing during the match would hide the very
+markup drift it must catch.
 Keep both facts in mind before "DRY-ing" this away.
 """
 
