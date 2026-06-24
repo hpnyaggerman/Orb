@@ -1,6 +1,6 @@
 """LLM client substitute for integration tests of the streaming pipeline.
 
-The real ``backend.llm_client.LLMClient`` reaches the OpenAI-compatible
+The real ``backend.inference.client.LLMClient`` reaches the OpenAI-compatible
 endpoint over httpx. Concurrency tests do not need that round-trip; they
 need a deterministic, in-process stand-in whose timing the test
 controls. ``FakeLLMClient`` provides that: its ``complete()`` is an
@@ -20,9 +20,35 @@ import asyncio
 import copy
 from typing import Any, AsyncIterator
 
+from backend.inference import AbortToken
 
 _EDITOR_FUNCTION_NAMES = {"editor_apply_patch", "editor_rewrite"}
 _DIRECTOR_FUNCTION_NAMES = {"direct_scene", "rewrite_user_prompt"}
+_FEEDBACK_FUNCTION_NAMES = {"give_feedback"}
+
+
+def _validate_tool_calls(tool_calls: Any) -> None:
+    """Assert *tool_calls* is the OpenAI ``message.tool_calls`` shape.
+
+    ``parse_tool_calls`` (backend.inference.client) reads ``tc["function"]["name"]``
+    and falls back to ``""`` when the function or name is missing, so a
+    malformed enqueue would parse to a named-but-empty (or empty-list) tool
+    call and the director turn would no-op silently. Raising here turns that
+    into a loud failure at the call site that built the bad shape.
+    """
+    if not isinstance(tool_calls, list):
+        raise TypeError(f"tool_calls must be a list, got {type(tool_calls).__name__}")
+    for i, tc in enumerate(tool_calls):
+        if not isinstance(tc, dict):
+            raise TypeError(f"tool_calls[{i}] must be a dict, got {type(tc).__name__}")
+        fn = tc.get("function")
+        if not isinstance(fn, dict):
+            raise ValueError(f"tool_calls[{i}] missing a 'function' dict: {tc!r}")
+        name = fn.get("name")
+        if not isinstance(name, str) or not name:
+            raise ValueError(f"tool_calls[{i}].function.name must be a non-empty string: {tc!r}")
+        if "arguments" not in fn:
+            raise ValueError(f"tool_calls[{i}].function missing 'arguments': {tc!r}")
 
 
 class PassGate:
@@ -57,13 +83,26 @@ def _pass_from_tool_choice(tool_choice: Any) -> str:
             return "editor"
         if name in _DIRECTOR_FUNCTION_NAMES:
             return "director"
+        if name in _FEEDBACK_FUNCTION_NAMES:
+            return "feedback"
         # Any other forced function name belongs to a workflow tool: the
         # toolkit's forced_tool_call helper passes the same dict shape via
         # TOOLS[<wid_registered_name>]["choice"], but the name is not one of
         # the four core pass tools.
         if name:
             return "workflow"
-    return "director"
+    # No production pass emits any other shape (writer -> None/"none", editor ->
+    # "auto"/forced dict, director/workflow -> forced dict with a name). An
+    # earlier version returned "director" here as a catch-all, which silently
+    # mis-routed an unrecognized tool_choice to the director queue -- a wrong
+    # tool_choice convention would then bind responses to the wrong pass and the
+    # test would pass for the wrong reason. Fail loudly instead so such a change
+    # surfaces as a dispatch error, not a confusing assertion downstream.
+    raise ValueError(
+        f"Unroutable tool_choice {tool_choice!r}: no pass owns this shape. "
+        "If production added a new tool_choice convention, extend "
+        "_pass_from_tool_choice to map it explicitly."
+    )
 
 
 class FakeLLMClient:
@@ -77,9 +116,23 @@ class FakeLLMClient:
     """
 
     def __init__(self) -> None:
-        self._queues: dict[str, list[dict]] = {"director": [], "writer": [], "editor": [], "workflow": []}
-        self._gates: dict[str, list[PassGate]] = {"director": [], "writer": [], "editor": [], "workflow": []}
-        self._abort = asyncio.Event()
+        self._queues: dict[str, list[dict]] = {
+            "director": [],
+            "writer": [],
+            "editor": [],
+            "feedback": [],
+            "workflow": [],
+        }
+        self._gates: dict[str, list[PassGate]] = {
+            "director": [],
+            "writer": [],
+            "editor": [],
+            "feedback": [],
+            "workflow": [],
+        }
+        # Mirror LLMClient: the turn's clients share one abort token, so an
+        # abort signalled on any of them is visible to all.
+        self.abort_token = AbortToken()
         # Public assertion surface: tests inspect ``calls`` directly for
         # dispatch order and invocation counts, so its shape is part of
         # the mock's contract -- do not rename or restructure.
@@ -96,9 +149,13 @@ class FakeLLMClient:
 
         The director pass calls ``parse_tool_calls`` on the result, so
         *tool_calls* must follow the OpenAI ``message.tool_calls`` shape
-        (``{"id", "type": "function", "function": {"name", "arguments"}}``);
-        a mismatch yields silent empty parsing rather than a test failure.
+        (``{"id", "type": "function", "function": {"name", "arguments"}}``).
+        A malformed shape would otherwise parse to an empty tool-call list
+        downstream and the test would silently exercise a no-op director turn
+        rather than the scene it meant to stage -- so validate the shape here
+        and raise at enqueue time, where the offending call site is obvious.
         """
+        _validate_tool_calls(tool_calls)
         self._queues["director"].append({"tool_calls": tool_calls})
 
     def enqueue_writer(self, text: str) -> None:
@@ -110,6 +167,14 @@ class FakeLLMClient:
         message with no tool calls, which causes the editor loop to stop.
         """
         self._queues["editor"].append({"message": decision or {"tool_calls": []}})
+
+    def enqueue_feedback(self, tool_calls: list[dict]) -> None:
+        """Queue a feedback response. Like the director, the feedback pass calls
+        ``parse_tool_calls`` on the result, so *tool_calls* must follow the
+        OpenAI ``message.tool_calls`` shape.
+        """
+        _validate_tool_calls(tool_calls)
+        self._queues["feedback"].append({"tool_calls": tool_calls})
 
     def enqueue_workflow(self, message: dict) -> None:
         self._queues["workflow"].append({"message": message})
@@ -129,11 +194,11 @@ class FakeLLMClient:
         """Mirror ``LLMClient.abort()``: makes in-flight ``complete()``
         calls exit at their next gate or yield boundary.
         """
-        self._abort.set()
+        self.abort_token.abort()
 
     @property
     def is_aborted(self) -> bool:
-        return self._abort.is_set()
+        return self.abort_token.is_aborted
 
     async def complete(
         self,
@@ -161,7 +226,7 @@ class FakeLLMClient:
             gate.reached.set()
             await gate.release.wait()
 
-        if self._abort.is_set():
+        if self.abort_token.is_aborted:
             return
 
         if pass_name == "writer":
@@ -182,10 +247,26 @@ class FakeLLMClient:
             yield {"type": "done", "message": payload.get("message", {})}
             return
 
+        if pass_name == "feedback":
+            payload = self._queues["feedback"].pop(0) if self._queues["feedback"] else {"tool_calls": []}
+            yield {
+                "type": "done",
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": payload.get("tool_calls", []),
+                },
+            }
+            return
+
         payload = self._queues["director"].pop(0) if self._queues["director"] else {"tool_calls": []}
         yield {
             "type": "done",
-            "message": {"role": "assistant", "content": "", "tool_calls": payload.get("tool_calls", [])},
+            "message": {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": payload.get("tool_calls", []),
+            },
         }
 
 

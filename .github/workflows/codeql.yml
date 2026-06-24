@@ -1,0 +1,96 @@
+# CodeQL security scanning for OrbFrontend/Orb
+#
+# Scans Python (backend), JavaScript (frontend), and the GitHub Actions
+# workflows themselves. Uses the security-extended suite, which adds the
+# deeper taint/dataflow queries most relevant to "does this code send user
+# data somewhere it shouldn't" — e.g. user input flowing into outbound
+# network requests, file writes, or subprocess calls.
+
+name: "CodeQL"
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  schedule:
+    # Re-scan weekly so newly-published CodeQL queries catch issues in
+    # code that hasn't changed. Mondays at 07:00 UTC.
+    - cron: "0 7 * * 1"
+
+# Least privilege: the job gets nothing by default, then we grant only
+# what each step needs. This is itself part of the supply-chain hardening —
+# a compromised step can't read your repo contents or push code.
+permissions: {}
+
+jobs:
+  analyze:
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-latest
+
+    permissions:
+      security-events: write   # upload scan results to the Security tab
+      contents: read           # check out the code
+      actions: read            # required for the 'actions' language analysis
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - language: python
+            build-mode: none
+          - language: javascript-typescript
+            build-mode: none
+          - language: actions
+            build-mode: none
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: ${{ matrix.language }}
+          build-mode: ${{ matrix.build-mode }}
+          # security-extended = the standard security queries PLUS extra
+          # lower-severity / higher-recall ones. Best fit for an
+          # "I want to demonstrate there's nothing nasty" goal.
+          # Swap to "security-and-quality" if you also want code-quality lint.
+          queries: security-extended
+
+      - name: Perform CodeQL Analysis
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: "/language:${{ matrix.language }}"
+          # Wait until GitHub has finished ingesting the uploaded SARIF so the
+          # alert-gate job below reads an up-to-date alert state (this is the
+          # action's default; pinned explicitly because the gate depends on it).
+          wait-for-processing: true
+
+  # The analyze jobs go green whenever the scan completes, even with findings,
+  # so the badge stayed green while alerts were open. This job reads the
+  # repository's open code-scanning alerts after analysis and fails when any
+  # remain — turning the CodeQL badge red until the Security tab is clean.
+  alert-gate:
+    name: Fail on open code scanning alerts
+    needs: analyze
+    runs-on: ubuntu-latest
+
+    permissions:
+      security-events: read   # read the code-scanning alerts API
+
+    steps:
+      - name: Check for open alerts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          open=$(gh api --paginate \
+            "repos/$REPO/code-scanning/alerts?state=open&per_page=100" \
+            --jq '.[].number' | wc -l)
+          if [ "$open" -gt 0 ]; then
+            echo "::error::$open open code scanning alert(s); see the Security tab."
+            exit 1
+          fi
+          echo "No open code scanning alerts."

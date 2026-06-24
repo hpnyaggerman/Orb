@@ -14,7 +14,6 @@ import pytest
 from backend.workflows.image_gen import comfy, prompt_assembly
 from backend.workflows.image_gen.comfy import ComfyError
 
-
 # --- prompt assembly ---------------------------------------------------------
 
 

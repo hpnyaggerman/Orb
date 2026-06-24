@@ -1,34 +1,49 @@
 from __future__ import annotations
 
 import json
+import uuid
 from datetime import datetime, timezone
+from typing import cast
 
 from ..connection import _build_set_clause, get_db
+from ..models import ConversationListRow, ConversationRow
 
 
-async def list_conversations() -> list[dict]:
+async def list_conversations() -> list[ConversationListRow]:
     async with get_db() as db:
         rows = list(
             await db.execute_fetchall(
                 """
+            WITH RECURSIVE active_path(conv_id, id, parent_id) AS (
+                SELECT c.id, m.id, m.parent_id
+                FROM conversations c
+                JOIN messages m ON m.id = c.active_leaf_id
+                UNION ALL
+                SELECT ap.conv_id, m.id, m.parent_id
+                FROM active_path ap
+                JOIN messages m ON m.id = ap.parent_id
+            ),
+            active_counts(conv_id, cnt) AS (
+                SELECT conv_id, COUNT(*) FROM active_path GROUP BY conv_id
+            )
             SELECT c.*,
                    (SELECT m.content FROM messages m
                     WHERE m.conversation_id = c.id
                     ORDER BY m.id DESC LIMIT 1) AS last_message_preview,
-                   (SELECT COUNT(*) FROM messages m
-                    WHERE m.conversation_id = c.id) AS message_count
+                   COALESCE(ac.cnt, 0) AS message_count
             FROM conversations c
-            ORDER BY COALESCE(c.updated_at, c.created_at) DESC
+            LEFT JOIN active_counts ac ON ac.conv_id = c.id
+            ORDER BY max(COALESCE(c.last_accessed_at, ''), COALESCE(c.updated_at, ''), c.created_at) DESC
         """
             )
         )
-        return [dict(r) for r in rows]
+        return [cast(ConversationListRow, dict(r)) for r in rows]
 
 
-async def get_conversation(cid: str) -> dict | None:
+async def get_conversation(cid: str) -> ConversationRow | None:
     async with get_db() as db:
         rows = list(await db.execute_fetchall("SELECT * FROM conversations WHERE id = ?", (cid,)))
-        return dict(rows[0]) if rows else None
+        return cast(ConversationRow, dict(rows[0])) if rows else None
 
 
 async def create_conversation(
@@ -38,14 +53,15 @@ async def create_conversation(
     char_scenario: str,
     post_history_instructions: str = "",
     character_card_id: str | None = None,
-) -> dict:
+    persona_lock_id: int | None = None,
+) -> ConversationRow:
     async with get_db() as db:
         now = datetime.now(timezone.utc).isoformat()
         await db.execute(
             """INSERT INTO conversations
                (id, title, character_card_id, character_name, character_scenario,
-                post_history_instructions, created_at, updated_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                post_history_instructions, persona_lock_id, created_at, updated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 cid,
                 title,
@@ -53,6 +69,7 @@ async def create_conversation(
                 char_name,
                 char_scenario,
                 post_history_instructions,
+                persona_lock_id,
                 now,
                 now,
             ),
@@ -67,6 +84,29 @@ async def create_conversation(
         return result
 
 
+async def fork_conversation(source: ConversationRow, new_title: str) -> str:
+    """Create an empty conversation seeded from ``source``'s character framing.
+
+    Carries the title-independent identity fields (character name/scenario,
+    post-history instructions, card id, persona pin) that both the Compress
+    History and Checkpoint flows start a fork with, and returns the new
+    conversation id.
+    Messages, branches, director state and logs are *not* copied -- the caller
+    appends whatever slice of the source it intends to carry.
+    """
+    new_cid = str(uuid.uuid4())
+    await create_conversation(
+        cid=new_cid,
+        title=new_title,
+        char_name=source.get("character_name", "") or "",
+        char_scenario=source.get("character_scenario", "") or "",
+        post_history_instructions=source.get("post_history_instructions", "") or "",
+        character_card_id=source.get("character_card_id"),
+        persona_lock_id=source.get("persona_lock_id"),
+    )
+    return new_cid
+
+
 async def delete_conversation(cid: str) -> bool:
     async with get_db() as db:
         cur = await db.execute("DELETE FROM conversations WHERE id = ?", (cid,))
@@ -75,21 +115,26 @@ async def delete_conversation(cid: str) -> bool:
 
 
 async def touch_conversation(cid: str) -> bool:
-    """Update conversation's updated_at to current time."""
+    """Mark a conversation accessed (opened/selected) — bumps last_accessed_at,
+    not updated_at. updated_at means content changed; opening isn't an edit."""
     async with get_db() as db:
         now = datetime.now(timezone.utc).isoformat()
-        cur = await db.execute("UPDATE conversations SET updated_at = ? WHERE id = ?", (now, cid))
+        cur = await db.execute("UPDATE conversations SET last_accessed_at = ? WHERE id = ?", (now, cid))
         await db.commit()
         return cur.rowcount > 0
 
 
-async def update_conversation(cid: str, data: dict) -> dict | None:
+async def update_conversation(cid: str, data: dict) -> ConversationRow | None:
     async with get_db() as db:
-        allowed = ["title"]
+        allowed = ["title", "persona_lock_id"]
         sets, vals = _build_set_clause(allowed, data)
         if sets:
-            sets.append("updated_at = ?")
-            vals.append(datetime.now(timezone.utc).isoformat())
+            # updated_at is the conversation's "last activity" date (shown in the
+            # history modal). Pinning/changing a persona is metadata, not chat
+            # activity, so a persona_lock_id-only update must not bump it.
+            if any(k in data for k in allowed if k != "persona_lock_id"):
+                sets.append("updated_at = ?")
+                vals.append(datetime.now(timezone.utc).isoformat())
             vals.append(cid)
             await db.execute(
                 f"UPDATE conversations SET {', '.join(sets)} WHERE id = ?",
@@ -122,18 +167,16 @@ async def set_workflow_state(conv_id: str, workflow_id: str, payload: dict | Non
     payload=None removes the slot. Empty dict stores {}. No-op if conversation
     missing (UPDATE matches zero rows).
 
-    Caller must hold ``backend.locks.workflow_state_lock(conv_id, workflow_id)``
+    Caller must hold ``backend.core.locks.workflow_state_lock(conv_id, workflow_id)``
     across the read-then-write the payload was computed from. Acquisition
-    sites: ``backend.main.api_trigger_workflow`` and the pre/post pipeline
-    hook loops in ``backend.orchestrator``. Direct use outside those paths
+    sites: ``backend.api.routes.workflows.api_trigger_workflow`` and the pre/post pipeline
+    hook loops in ``backend.pipeline.workflow_bridge``. Direct use outside those paths
     re-introduces the read-modify-write clobber.
     """
     async with get_db() as db:
         if payload is None:
             await db.execute(
-                "UPDATE conversations "
-                "SET workflow_state = json_remove(COALESCE(workflow_state, '{}'), '$.' || ?) "
-                "WHERE id = ?",
+                "UPDATE conversations SET workflow_state = json_remove(COALESCE(workflow_state, '{}'), '$.' || ?) WHERE id = ?",
                 (workflow_id, conv_id),
             )
         else:

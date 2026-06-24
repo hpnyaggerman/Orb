@@ -1,20 +1,22 @@
 from __future__ import annotations
 
 import json
+from typing import cast
 
 from ..connection import _build_set_clause, get_db
+from ..models import SettingsRow
 from ..seeds import DEFAULT_SETTINGS
 
 
-async def get_settings() -> dict:
+async def get_settings() -> SettingsRow:
     async with get_db() as db:
         rows = list(await db.execute_fetchall("SELECT * FROM settings WHERE id = 1"))
         if not rows:
-            return DEFAULT_SETTINGS
+            return cast(SettingsRow, DEFAULT_SETTINGS)
         s = dict(rows[0])
         s["enabled_tools"] = json.loads(s.get("enabled_tools") or "{}")
         s["reasoning_enabled_passes"] = json.loads(
-            s.get("reasoning_enabled_passes") or '{"director":true,"writer":false,"editor":false}'
+            s.get("reasoning_enabled_passes") or '{"director":false,"writer":false,"editor":false}'
         )
         # Remove stale scripter key from reasoning_enabled_passes if present.
         s["reasoning_enabled_passes"].pop("scripter", None)
@@ -27,6 +29,7 @@ async def get_settings() -> dict:
             or '{"banned_phrases":true,"repetitive_openers":true,"repetitive_templates":true,'
             '"contrastive_negation":true,"phrase_repetition":true,"structural_repetition":true}'
         )
+        s["workflow_enabled"] = json.loads(s.get("workflow_enabled") or "{}")
         # Overlay endpoint_url, api_key, model_name, and hyperparameters from the
         # active endpoint's active model config so callers always get live values
         # rather than the stale flat columns.
@@ -111,7 +114,7 @@ async def get_settings() -> dict:
                                 s[f"agent_{field}"] = amc[field]
                         if amc.get("system_prompt") is not None:
                             s["agent_system_prompt"] = amc["system_prompt"]
-        return s
+        return cast(SettingsRow, s)
 
 
 # Empty slot returns {} here; per-workflow default fallback lives in the
@@ -141,7 +144,7 @@ async def set_workflow_config(workflow_id: str, payload: dict) -> None:
 
     Empty dict clears the slot (json_remove); non-empty stores it (json_set).
 
-    Caller must hold ``backend.locks.workflow_config_lock()`` across the
+    Caller must hold ``backend.core.locks.workflow_config_lock()`` across the
     read-then-write the payload was computed from. Direct use without the
     lock is safe for blind-replace writes -- a single ``json_set`` is
     atomic at the SQL layer -- but RMW sequences (``get_workflow_config``
@@ -152,9 +155,7 @@ async def set_workflow_config(workflow_id: str, payload: dict) -> None:
     async with get_db() as db:
         if not payload:
             await db.execute(
-                "UPDATE settings "
-                "SET workflow_config = json_remove(COALESCE(workflow_config, '{}'), '$.' || ?) "
-                "WHERE id = 1",
+                "UPDATE settings SET workflow_config = json_remove(COALESCE(workflow_config, '{}'), '$.' || ?) WHERE id = 1",
                 (workflow_id,),
             )
         else:
@@ -167,7 +168,28 @@ async def set_workflow_config(workflow_id: str, payload: dict) -> None:
         await db.commit()
 
 
-async def update_settings(data: dict) -> dict:
+async def set_workflow_enabled(workflow_id: str, enabled: bool) -> None:
+    """Set one workflow's on/off flag via a per-key JSON1 write.
+
+    Writes only the named key in the ``workflow_enabled`` map, never the whole
+    column, so two tabs flipping different workflows cannot clobber each other.
+    The ``json_set`` is a single atomic statement at the SQL layer with no
+    Python-side read-modify-write window, so it needs no application lock --
+    unlike ``set_workflow_config``, whose callers compute the payload from a
+    prior read. A missing key reads back as enabled, so this is the only writer
+    the per-workflow toggle ever needs.
+    """
+    async with get_db() as db:
+        await db.execute(
+            "UPDATE settings "
+            "SET workflow_enabled = json_set(COALESCE(workflow_enabled, '{}'), '$.' || ?, json(?)) "
+            "WHERE id = 1",
+            (workflow_id, json.dumps(bool(enabled))),
+        )
+        await db.commit()
+
+
+async def update_settings(data: dict) -> SettingsRow:
     async with get_db() as db:
         allowed = [
             "endpoint_url",
@@ -187,6 +209,9 @@ async def update_settings(data: dict) -> dict:
             "enable_agent",
             "length_guard_max_words",
             "length_guard_max_paragraphs",
+            "length_guard_enabled",
+            "length_guard_enforce",
+            "agentic_lorebook_enabled",
             "reasoning_enabled_passes",
             "active_persona_id",
             "character_library_view",
@@ -199,7 +224,10 @@ async def update_settings(data: dict) -> dict:
             "agent_same_as_writer",
             "agent_endpoint_id",
             "agent_shared_system_prompt",
+            "feedback_enabled",
+            "director_individual_fragments",
             "inspector_open_states",
+            "workflows_globally_enabled",
         ]
         sets, vals = _build_set_clause(
             allowed,

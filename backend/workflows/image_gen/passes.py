@@ -16,7 +16,11 @@ from typing import Any, AsyncIterator, Sequence
 
 from backend.workflows.toolkit import forced_tool_call
 
-from .prompt_assembly import analyze_instruction, compose_instruction, render_scene_block
+from .prompt_assembly import (
+    analyze_instruction,
+    compose_instruction,
+    render_scene_block,
+)
 
 logger = logging.getLogger(__name__)
 

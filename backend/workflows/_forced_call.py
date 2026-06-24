@@ -15,8 +15,13 @@ import logging
 from types import MappingProxyType
 from typing import Any, AsyncIterator, Mapping, Sequence
 
-from backend.llm_client import parse_tool_calls, reasoning_cfg
-from backend.tool_defs import TOOLS, STANDALONE_TOOLS, enabled_schemas
+from ..inference import (
+    STANDALONE_TOOLS,
+    TOOLS,
+    enabled_schemas,
+    parse_tool_calls,
+    reasoning_cfg,
+)
 
 logger = logging.getLogger(__name__)
 

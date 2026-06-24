@@ -1,30 +1,33 @@
+import { initAudioPlayer } from "./audio_transport.js";
 import {
   applyCompression,
   cancelCompression,
-  cancelForkEdit,
   cancelEdit,
   cancelEditPending,
+  cancelForkEdit,
   cancelTitleEdit,
   clearRefineDiff,
   continueFromUser,
+  createCheckpoint,
   deleteConversationFromModal,
   deleteMessage,
   generateCompressionSummary,
-  handleChatKeyNav,
   handleMagicKey,
   handleTitleEditKey,
+  hideAvatarPopup,
+  initAutoscroll,
+  initChatKeyNav,
   initChatSwipeNav,
   initWorkflowMutationListener,
-  hideAvatarPopup,
   loadConversations,
   loadWorkflowManifest,
   newConvForChar,
   regenerate,
   renderMessages,
-  resetChatUI,
-  saveForkEdit,
   saveEdit,
   saveEditPending,
+  saveForkEdit,
+  saveInspectorOpenStates,
   saveTitleEdit,
   selectChar,
   selectConversation,
@@ -36,10 +39,10 @@ import {
   showAvatarPopup,
   showCompressModal,
   showConvHistoryModal,
-  startForkEdit,
   startEdit,
   startEditPending,
   startEditTitle,
+  startForkEdit,
   stopGeneration,
   submitMagicRewrite,
   superRegenerate,
@@ -47,8 +50,8 @@ import {
   toggleInspector,
   toggleMagicInput,
   toggleReasoningPass,
-  saveInspectorOpenStates,
 } from "./chat.js";
+import { initComposer, triggerAttachImage } from "./chat_composer.js";
 import {
   addAltGreeting,
   charTagInput,
@@ -56,22 +59,22 @@ import {
   charTagRemoveChip,
   createCharacter,
   deleteCharacter,
-  deleteDirectorFragment,
+  deleteInteractiveFragment,
   deleteMoodFragment,
   exportCharacter,
   handleImportFile,
   importInternetChar,
   loadCharacters,
-  loadMoreInternet,
-  loadDirectorFragments,
+  loadInteractiveFragments,
   loadMoodFragments,
+  loadMoreInternet,
   onCharBrowserSearch,
   randomizeInternet,
   refreshCharacters,
   renderCharacters,
   saveCharEdit,
-  saveDirectorFragment,
   saveImportedChar,
+  saveInteractiveFragment,
   saveMoodFragment,
   searchInternet,
   setCharBrowserSort,
@@ -80,24 +83,29 @@ import {
   showCharacterBrowserModal,
   showCharCreateModal,
   showCharEditModal,
-  showDirectorFragmentModal,
+  showInteractiveFragmentModal,
   showMoodFragmentModal,
-  toggleDirectorFragmentEnabled,
+  toggleInteractiveFragmentEnabled,
   toggleMoodFragmentEnabled,
   toggleTagSelection,
   triggerAvatarCrop,
   triggerImport,
+  updateInteractiveFragmentExample,
 } from "./library.js";
 import {
   closeLorebook,
+  collapseWorlds,
   createWorld,
   deleteWorld,
+  expandWorlds,
   lbAddEntry,
+  lbBackToList,
   lbChipInput,
   lbChipKeydown,
   lbDeleteEntry,
   lbDiscardChanges,
   lbDraftChange,
+  lbEntrySearch,
   lbImportJson,
   lbRemoveChip,
   lbSaveEntry,
@@ -105,6 +113,7 @@ import {
   lbToggleConstant,
   lbToggleEntry,
   loadWorlds,
+  onWorldSearch,
   openLorebook,
   renameWorld,
   renderWorldsSidebar,
@@ -113,7 +122,28 @@ import {
   toggleWorldEnabled,
 } from "./lorebooks.js";
 import { closeMobileHeaderActions, initMobileUi, toggleMobileHeaderActions, toggleMobileSidebar } from "./mobile.js";
-import { closeCropModal, closeModal, runConfirmCb, showConfirmModal, switchTab } from "./modal.js";
+import {
+  closeCropModal,
+  closeModal,
+  closeSubModal,
+  runConfirmCb,
+  runSubConfirmCb,
+  showConfirmModal,
+  switchTab,
+} from "./modal.js";
+import {
+  applyPreset,
+  deletePreset,
+  doCreateSnapshot,
+  downloadPreset,
+  handlePresetImportFile,
+  onPresetDomainChange,
+  refreshPresetLibrary,
+  restorePreset,
+  showPresetsModal,
+  showSnapshotModal,
+  triggerPresetImport,
+} from "./presets.js";
 import {
   activatePersona,
   applyTheme,
@@ -128,26 +158,31 @@ import {
   saveSetting,
   saveUserProfile,
   setAgentEnabled,
+  setPersonaCharacterLock,
+  setPersonaConversationLock,
   showAddPhraseGroupModal,
   showPersonaEditModal,
   showPhraseBankModal,
   showUserModal,
+  toggleAgenticLorebook,
+  toggleAuditType,
+  toggleDirectorIndividualFragments,
+  toggleFeedbackEnabled,
   toggleHideUntilBaked,
   toggleLengthGuard,
   toggleLengthGuardEnforce,
   togglePreventPromptOverrides,
-  toggleAuditType,
   toggleShowEditorDiff,
   toggleToolEnabled,
   toggleToolsPanel,
+  toggleWorkflowEnabled,
+  toggleWorkflowsGlobal,
 } from "./settings.js";
 import { S } from "./state.js";
 import { initTabLock, setLockStateChangeCallback } from "./tabLock.js";
-import { $, formatBytes } from "./utils.js";
-import { validate } from "./validate.js";
+import { $ } from "./utils.js";
 import { loadWorkflowModules } from "./workflow_loader.js";
 import { initWorkflowTextInteraction } from "./workflow_text_interaction.js";
-import { initAudioPlayer } from "./audio_transport.js";
 
 // ── Sidebar toggle
 function toggleSection(header) {
@@ -164,115 +199,19 @@ function closeBurger() {
   $("burger-dropdown").classList.remove("open");
 }
 
-function triggerAttachImage() {
-  $("attach-image-input").click();
-}
-
 document.addEventListener("click", (e) => {
   if (!e.target.closest("#burger-btn") && !e.target.closest("#burger-dropdown")) closeBurger();
 });
-
-// Attachments handling
-function handleAttachmentSelect(e) {
-  const files = Array.from(e.target.files);
-  if (files.length === 0) return;
-
-  const validation = validate.validateImageFiles(files, 10, 10 * 1024 * 1024, 20 * 1024 * 1024);
-  if (!validation.valid) {
-    toast(validation.error, true);
-    e.target.value = "";
-    return;
-  }
-
-  for (const file of files) {
-    const fileValidation = validate.validateImageFile(file, 10 * 1024 * 1024, [
-      "image/png",
-      "image/jpeg",
-      "image/webp",
-      "image/gif",
-    ]);
-    if (!fileValidation.valid) {
-      toast(fileValidation.error, true);
-      continue;
-    }
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      const b64 = event.target.result.split(",")[1]; // strip data:image/...;base64,
-      S.attachments.push({
-        b64,
-        mime: file.type,
-        filename: file.name,
-        size: file.size,
-      });
-      updateAttachmentPreview();
-    };
-    reader.readAsDataURL(file);
-  }
-  e.target.value = ""; // allow re-selecting same file
-}
-
-function updateAttachmentPreview() {
-  const container = $("attachment-preview");
-  container.innerHTML = "";
-  S.attachments.forEach((att, idx) => {
-    const item = document.createElement("div");
-    item.className = "attachment-item";
-    const img = document.createElement("img");
-    img.src = `data:${att.mime};base64,${att.b64}`;
-    const info = document.createElement("div");
-    info.className = "attachment-info";
-    const name = document.createElement("div");
-    name.className = "attachment-name";
-    name.textContent = att.filename || "image";
-    const size = document.createElement("div");
-    size.className = "attachment-size";
-    size.textContent = formatBytes(att.size);
-    info.appendChild(name);
-    info.appendChild(size);
-    const removeBtn = document.createElement("button");
-    removeBtn.className = "attachment-remove";
-    removeBtn.innerHTML = "×";
-    removeBtn.title = "Remove";
-    removeBtn.onclick = () => {
-      S.attachments.splice(idx, 1);
-      updateAttachmentPreview();
-    };
-    item.appendChild(img);
-    item.appendChild(info);
-    item.appendChild(removeBtn);
-    container.appendChild(item);
-  });
-}
-
-// File input change listener
-$("attach-image-input").addEventListener("change", handleAttachmentSelect);
-
-// ── Input events
-$("chat-input").addEventListener("input", function () {
-  this.style.height = "auto";
-  this.style.height = Math.min(this.scrollHeight, 150) + "px";
-});
-$("chat-input").addEventListener("keydown", function (e) {
-  if (e.key === "Enter" && !e.shiftKey) {
-    e.preventDefault();
-    const validation = validate.validateChatInput(this.value);
-    if (!validation.valid) {
-      toast(validation.error, true);
-      return;
-    }
-    sendMessage();
-  }
-});
-
-document.addEventListener("keydown", handleChatKeyNav);
 
 // ── Expose to inline handlers
 Object.assign(window, {
   // modal
   closeModal,
+  closeSubModal,
   switchTab,
   showConfirmModal,
   runConfirmCb,
+  runSubConfirmCb,
   // theme
   applyTheme,
   // settings / user
@@ -285,6 +224,8 @@ Object.assign(window, {
   deletePersona,
   editPersona,
   activatePersona,
+  setPersonaConversationLock,
+  setPersonaCharacterLock,
   // tools
   toggleToolsPanel,
   setAgentEnabled,
@@ -292,23 +233,41 @@ Object.assign(window, {
   toggleLengthGuard,
   saveLengthGuardConfig,
   toggleLengthGuardEnforce,
+  toggleAgenticLorebook,
+  toggleFeedbackEnabled,
+  toggleDirectorIndividualFragments,
   toggleShowEditorDiff,
   toggleAuditType,
   toggleHideUntilBaked,
   togglePreventPromptOverrides,
+  toggleWorkflowsGlobal,
+  toggleWorkflowEnabled,
   // phrase bank
   showPhraseBankModal,
   showAddPhraseGroupModal,
+  // presets / backups
+  showPresetsModal,
+  showSnapshotModal,
+  onPresetDomainChange,
+  doCreateSnapshot,
+  triggerPresetImport,
+  handlePresetImportFile,
+  downloadPreset,
+  applyPreset,
+  restorePreset,
+  deletePreset,
+  refreshPresetLibrary,
   // mood fragments
   showMoodFragmentModal,
   saveMoodFragment,
   deleteMoodFragment,
   toggleMoodFragmentEnabled,
-  // director fragments
-  showDirectorFragmentModal,
-  saveDirectorFragment,
-  deleteDirectorFragment,
-  toggleDirectorFragmentEnabled,
+  // interactive fragments
+  showInteractiveFragmentModal,
+  saveInteractiveFragment,
+  deleteInteractiveFragment,
+  toggleInteractiveFragmentEnabled,
+  updateInteractiveFragmentExample,
   // characters
   selectChar,
   triggerImport,
@@ -344,6 +303,7 @@ Object.assign(window, {
   deleteConversationFromModal,
   showConvHistoryModal,
   showCompressModal,
+  createCheckpoint,
   generateCompressionSummary,
   cancelCompression,
   applyCompression,
@@ -389,7 +349,6 @@ Object.assign(window, {
   toggleBurger,
   closeBurger,
   triggerAttachImage,
-  updateAttachmentPreview,
   showAvatarPopup,
   hideAvatarPopup,
   // worlds / lorebook
@@ -401,9 +360,14 @@ Object.assign(window, {
   deleteWorld,
   openLorebook,
   closeLorebook,
+  onWorldSearch,
+  expandWorlds,
+  collapseWorlds,
+  lbEntrySearch,
   lbSelectEntry,
   lbToggleEntry,
   lbAddEntry,
+  lbBackToList,
   lbDeleteEntry,
   lbSaveEntry,
   lbDiscardChanges,
@@ -417,54 +381,11 @@ Object.assign(window, {
   S,
 });
 
-// ── Smart autoscroll: disable on upward scroll, re-enable when back at bottom
-function initAutoscroll() {
-  const ct = $("chat-messages");
-  if (!ct) return;
-  const THRESHOLD = 20;
-  let scrollDebounce = null;
-
-  // Wheel: immediately cut autoscroll on any upward scroll intent
-  ct.addEventListener(
-    "wheel",
-    (e) => {
-      if (e.deltaY < 0) S.autoscrollEnabled = false;
-    },
-    { passive: true },
-  );
-
-  // Touch: disable on upward swipe
-  let touchStartY = 0;
-  ct.addEventListener(
-    "touchstart",
-    (e) => {
-      touchStartY = e.touches[0].clientY;
-    },
-    { passive: true },
-  );
-  ct.addEventListener(
-    "touchmove",
-    (e) => {
-      if (e.touches[0].clientY > touchStartY) S.autoscrollEnabled = false;
-    },
-    { passive: true },
-  );
-
-  // Re-enable only once the user has scrolled back to the bottom (debounced to
-  // avoid false positives from rapid programmatic scroll events during streaming)
-  ct.addEventListener("scroll", () => {
-    if (S._programmaticScroll) return;
-    clearTimeout(scrollDebounce);
-    scrollDebounce = setTimeout(() => {
-      const atBottom = ct.scrollHeight - ct.scrollTop - ct.clientHeight <= THRESHOLD;
-      if (atBottom) S.autoscrollEnabled = true;
-    }, 100);
-  });
-}
-
 // ── Init
 initTheme();
 initThemeList();
+initComposer();
+initChatKeyNav();
 initAutoscroll();
 initChatSwipeNav();
 initWorkflowTextInteraction();
@@ -478,6 +399,12 @@ setLockStateChangeCallback((hasMultipleTabs) => {
 });
 initWorkflowMutationListener();
 
+// On a fresh load with no conversation selected, render the JS empty state so
+// the homepage stats grid appears (index.html ships a static empty state).
+if (!S.activeConvId) {
+  renderMessages();
+}
+
 // Load data independently to prevent failures from blocking other loads
 async function initAll() {
   initMobileUi({ closeBurger });
@@ -489,9 +416,9 @@ async function initAll() {
   }
 
   try {
-    await loadDirectorFragments();
+    await loadInteractiveFragments();
   } catch (e) {
-    console.error("Failed to load director fragments:", e);
+    console.error("Failed to load interactive fragments:", e);
   }
 
   try {

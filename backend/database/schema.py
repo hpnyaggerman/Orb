@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 CREATE_TABLES_SQL = """
 CREATE TABLE IF NOT EXISTS settings (
     id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -20,22 +22,30 @@ CREATE TABLE IF NOT EXISTS settings (
     enable_agent INTEGER NOT NULL DEFAULT 1,
     length_guard_max_words INTEGER NOT NULL DEFAULT 240,
     length_guard_max_paragraphs INTEGER NOT NULL DEFAULT 4,
-    reasoning_enabled_passes TEXT NOT NULL DEFAULT '{"director":true,"writer":false,"editor":false}',
+    length_guard_enabled INTEGER NOT NULL DEFAULT 0,
+    length_guard_enforce INTEGER NOT NULL DEFAULT 0,
+    agentic_lorebook_enabled INTEGER NOT NULL DEFAULT 0,
+    reasoning_enabled_passes TEXT NOT NULL DEFAULT '{"director":false,"writer":false,"editor":false}',
     active_persona_id INTEGER REFERENCES user_personas(id) ON DELETE SET NULL,
     active_endpoint_id INTEGER REFERENCES endpoints(id) ON DELETE SET NULL,
     character_library_view TEXT NOT NULL DEFAULT 'grid',
     character_library_sort TEXT NOT NULL DEFAULT 'time-added',
     show_editor_diff INTEGER NOT NULL DEFAULT 1,
-    editor_audit_toggles TEXT NOT NULL DEFAULT '{"banned_phrases":true,"repetitive_openers":true,"repetitive_templates":true,"contrastive_negation":true,"phrase_repetition":true,"structural_repetition":true}',
+    editor_audit_toggles TEXT NOT NULL DEFAULT '{"banned_phrases":true,"repetitive_openers":true,"repetitive_templates":true,"contrastive_negation":true,"phrase_repetition":true,"structural_repetition":true,"anti_echo":true}',
     hide_streaming_until_baked INTEGER NOT NULL DEFAULT 0,
     prevent_prompt_overrides INTEGER NOT NULL DEFAULT 0,
     agent_same_as_writer INTEGER NOT NULL DEFAULT 1,
     agent_endpoint_id INTEGER REFERENCES endpoints(id) ON DELETE SET NULL,
     agent_shared_system_prompt TEXT NOT NULL DEFAULT '',
+    feedback_enabled INTEGER NOT NULL DEFAULT 0,
+    director_individual_fragments INTEGER NOT NULL DEFAULT 0,
     inspector_open_states TEXT NOT NULL DEFAULT '{"reasoning":true,"tool_calls":false,"injection_block":false,"context_size":true}',
     workflow_config TEXT NOT NULL DEFAULT '{}',
+    workflows_globally_enabled INTEGER NOT NULL DEFAULT 1,
+    workflow_enabled TEXT NOT NULL DEFAULT '{}',
     attachment_cache_budget_bytes INTEGER NOT NULL DEFAULT 524288000,
-    attachment_access_counter INTEGER NOT NULL DEFAULT 0
+    attachment_access_counter INTEGER NOT NULL DEFAULT 0,
+    generated_chars INTEGER DEFAULT NULL
 );
 
 CREATE TABLE IF NOT EXISTS mood_fragments (
@@ -56,8 +66,10 @@ CREATE TABLE IF NOT EXISTS conversations (
     post_history_instructions TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
     updated_at TEXT,
+    last_accessed_at TEXT,
     active_leaf_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
-    workflow_state TEXT DEFAULT NULL
+    workflow_state TEXT DEFAULT NULL,
+    persona_lock_id INTEGER REFERENCES user_personas(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS character_cards (
@@ -81,7 +93,8 @@ CREATE TABLE IF NOT EXISTS character_cards (
     world_id TEXT DEFAULT NULL REFERENCES worlds(id) ON DELETE SET NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
-    workflow_state TEXT DEFAULT NULL
+    workflow_state TEXT DEFAULT NULL,
+    persona_lock_id INTEGER REFERENCES user_personas(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS messages (
@@ -103,7 +116,7 @@ CREATE TABLE IF NOT EXISTS director_state (
     progressive_fields TEXT NOT NULL DEFAULT '{}'
 );
 
-CREATE TABLE IF NOT EXISTS director_fragments (
+CREATE TABLE IF NOT EXISTS interactive_fragments (
     id TEXT PRIMARY KEY,
     label TEXT NOT NULL,
     description TEXT NOT NULL,
@@ -128,7 +141,8 @@ CREATE TABLE IF NOT EXISTS conversation_logs (
     message_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
     reasoning_director TEXT,
     reasoning_writer TEXT,
-    reasoning_editor TEXT
+    reasoning_editor TEXT,
+    feedback TEXT NOT NULL DEFAULT '{}'
 );
 
 CREATE TABLE IF NOT EXISTS phrase_bank (
@@ -235,3 +249,29 @@ CREATE TABLE IF NOT EXISTS lorebook_entries (
 );
 
 """
+
+
+def table_create_sql(table: str) -> str:
+    """Return the ``CREATE TABLE IF NOT EXISTS <table> ( ... )`` block for *table*,
+    sliced out of ``CREATE_TABLES_SQL``.
+
+    This is the single source of truth for a table's canonical fresh-install shape.
+    Rebuild migrations (e.g. 0027) and the schema-equivalence gate both derive the
+    canonical DDL from here rather than pasting a copy, so a rebuild can never drift
+    from the shape the equivalence check enforces. Parentheses are balanced (column
+    ``REFERENCES`` and ``CHECK`` clauses nest), so the block ends at the matching
+    close paren, not the first one.
+    """
+    m = re.search(rf"CREATE TABLE IF NOT EXISTS {re.escape(table)}\s*\(", CREATE_TABLES_SQL)
+    if not m:
+        raise KeyError(f"no CREATE TABLE block for {table!r} in CREATE_TABLES_SQL")
+    depth = 0
+    for i in range(m.end() - 1, len(CREATE_TABLES_SQL)):
+        ch = CREATE_TABLES_SQL[i]
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            depth -= 1
+            if depth == 0:
+                return CREATE_TABLES_SQL[m.start() : i + 1]
+    raise ValueError(f"unbalanced parentheses extracting {table!r} from CREATE_TABLES_SQL")

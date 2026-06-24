@@ -1,9 +1,13 @@
 import { api } from "./api.js";
 import { closeModal, showConfirmModal, showModal } from "./modal.js";
+import { S } from "./state.js";
 import { $, esc, toast } from "./utils.js";
 
 // ── Module state
 let _worlds = [];
+let _worldSearch = "";
+let _worldsExpanded = false; // when true, show every world instead of just the recent few
+const RECENT_LIMIT = 5; // worlds shown by default before the user needs to search
 let _lorebookOpen = false;
 
 document.addEventListener("keydown", (e) => {
@@ -11,6 +15,7 @@ document.addEventListener("keydown", (e) => {
 });
 let _focusWorldId = null;
 const _entries = {}; // worldId -> entry[]
+let _entrySearch = ""; // substring filter over entry names and content
 let _selectedEntryId = null;
 let _dirty = false;
 let _draft = {
@@ -38,46 +43,106 @@ async function _loadEntries(worldId) {
 }
 
 // ── Sidebar rendering
+const _isWorldEnabled = (w) => w.enabled === true || w.enabled === 1;
+const _worldRecencyTs = (w) => Date.parse(w.updated_at || w.created_at || "") || 0;
+const _byRecency = (a, b) => _worldRecencyTs(b) - _worldRecencyTs(a);
+
+// Decide which worlds to render.
+//   • No search: every active world (most recent first) plus the most recent
+//     inactive ones, capped so active + recent = RECENT_LIMIT. The active count
+//     overrides the cap, so 6 active worlds all show even though that exceeds 5.
+//     Once expanded, every world shows (active first, then the rest by recency).
+//   • Searching: every name match, with active worlds floated to the top.
+function _visibleWorlds() {
+  const q = _worldSearch.trim().toLowerCase();
+  const active = _worlds.filter(_isWorldEnabled).sort(_byRecency);
+  const inactive = _worlds.filter((w) => !_isWorldEnabled(w)).sort(_byRecency);
+  if (q) {
+    const match = (w) => w.name.toLowerCase().includes(q);
+    return { shown: [...active.filter(match), ...inactive.filter(match)], hidden: 0 };
+  }
+  if (_worldsExpanded) return { shown: [...active, ...inactive], hidden: 0 };
+  const recent = inactive.slice(0, Math.max(0, RECENT_LIMIT - active.length));
+  const shown = [...active, ...recent];
+  return { shown, hidden: _worlds.length - shown.length };
+}
+
+function _worldItemHtml(w) {
+  const initials = w.name.slice(0, 2).toUpperCase();
+  const enabled = _isWorldEnabled(w);
+  const active = _lorebookOpen && _focusWorldId === w.id;
+  const toggleId = `world-toggle-${w.id}`;
+  const clickHandler = active ? "closeLorebook()" : `openLorebook('${w.id}')`;
+  return `
+  <div class="world-item${active ? " active" : ""}">
+    <div class="world-item-main" onclick="${clickHandler}">
+      <div class="world-avatar">${esc(initials)}</div>
+      <span class="world-name">${esc(w.name)}</span>
+    </div>
+    <div class="frag-toggle-wrapper" onclick="event.stopPropagation()">
+      <label class="frag-toggle" for="${toggleId}">
+        <input type="checkbox" id="${toggleId}" ${enabled ? "checked" : ""}
+               onchange="toggleWorldEnabled('${w.id}', this.checked)">
+        <span class="frag-toggle-slider"></span>
+      </label>
+    </div>
+  </div>`;
+}
+
 export function renderWorldsSidebar() {
   const el = $("worlds-list");
   if (!el) return;
+
   const countEl = $("worlds-active-count");
   if (countEl) {
-    const activeCount = _worlds.filter((w) => w.enabled === true || w.enabled === 1).length;
-    if (activeCount > 0) {
-      countEl.textContent = activeCount;
-      countEl.style.display = "";
-    } else {
-      countEl.style.display = "none";
-    }
+    const activeCount = _worlds.filter(_isWorldEnabled).length;
+    countEl.textContent = activeCount;
+    countEl.style.display = activeCount > 0 ? "" : "none";
   }
+
+  // The search box only earns its space once the list outgrows the default view.
+  const searchWrap = $("worlds-search-wrap");
+  if (searchWrap) {
+    searchWrap.style.display = _worlds.length > RECENT_LIMIT || _worldSearch.trim() ? "" : "none";
+  }
+  const searchInp = $("worlds-search");
+  if (searchInp && searchInp.value !== _worldSearch) searchInp.value = _worldSearch;
+
   if (!_worlds.length) {
-    el.innerHTML = `<div style="color:var(--text-muted);font-size:12px;padding:4px 0;">No worlds yet</div>`;
+    el.innerHTML = `<div class="worlds-empty">No worlds yet</div>`;
     return;
   }
-  el.innerHTML = _worlds
-    .map((w) => {
-      const initials = w.name.slice(0, 2).toUpperCase();
-      const enabled = w.enabled === true || w.enabled === 1;
-      const active = _lorebookOpen && _focusWorldId === w.id;
-      const toggleId = `world-toggle-${w.id}`;
-      const clickHandler = active ? "closeLorebook()" : `openLorebook('${w.id}')`;
-      return `
-      <div class="world-item${active ? " active" : ""}">
-        <div class="world-item-main" onclick="${clickHandler}">
-          <div class="world-avatar">${esc(initials)}</div>
-          <span class="world-name">${esc(w.name)}</span>
-        </div>
-        <div class="frag-toggle-wrapper" onclick="event.stopPropagation()">
-          <label class="frag-toggle" for="${toggleId}">
-            <input type="checkbox" id="${toggleId}" ${enabled ? "checked" : ""}
-                   onchange="toggleWorldEnabled('${w.id}', this.checked)">
-            <span class="frag-toggle-slider"></span>
-          </label>
-        </div>
-      </div>`;
-    })
-    .join("");
+
+  const { shown, hidden } = _visibleWorlds();
+  if (!shown.length) {
+    el.innerHTML = `<div class="worlds-empty">No worlds match “${esc(_worldSearch.trim())}”</div>`;
+    return;
+  }
+
+  let html = shown.map(_worldItemHtml).join("");
+  if (!_worldSearch.trim()) {
+    if (hidden > 0) {
+      html += `<button type="button" class="worlds-more" onclick="expandWorlds()">+${hidden} more — show all</button>`;
+    } else if (_worldsExpanded && _worlds.length > RECENT_LIMIT) {
+      html += `<button type="button" class="worlds-more" onclick="collapseWorlds()">Show less</button>`;
+    }
+  }
+  el.innerHTML = html;
+}
+
+export function onWorldSearch(value) {
+  _worldSearch = value;
+  renderWorldsSidebar();
+}
+
+export function expandWorlds() {
+  _worldsExpanded = true;
+  renderWorldsSidebar();
+}
+
+export function collapseWorlds() {
+  _worldsExpanded = false;
+  renderWorldsSidebar();
 }
 
 // ── Activate and prioritize a world (called when loading a character with a linked lorebook)
@@ -200,18 +265,31 @@ export async function toggleWorldEnabled(worldId, enabled) {
 }
 
 export async function deleteWorld(worldId) {
+  const linked = (S.allCharacters || S.characters || []).filter((c) => c.world_id === worldId);
+  let extraHtml = "";
+  if (linked.length) {
+    const names = linked.map((c) => `<li>${esc(c.name)}</li>`).join("");
+    extraHtml = `
+      <p style="margin-bottom:4px">Linked to ${linked.length} character${linked.length === 1 ? "" : "s"}, which will be unlinked:</p>
+      <ul style="margin:0;padding-left:20px;max-height:160px;overflow-y:auto">${names}</ul>`;
+  }
   showConfirmModal(
     {
       title: "Delete Lorebook",
       message: "⚠️ Delete this lorebook and all its entries?",
       confirmText: "Delete",
       confirmClass: "btn-danger",
+      extraHtml,
     },
     async () => {
       try {
         await api.del(`/worlds/${worldId}`);
         _worlds = _worlds.filter((w) => w.id !== worldId);
         delete _entries[worldId];
+        // Backend sets character_cards.world_id to NULL on delete; mirror that locally
+        for (const c of S.allCharacters || S.characters || []) {
+          if (c.world_id === worldId) c.world_id = null;
+        }
         if (_focusWorldId === worldId) closeLorebook();
         renderWorldsSidebar();
       } catch (e) {
@@ -226,6 +304,7 @@ export async function openLorebook(worldId) {
   _focusWorldId = worldId;
   _lorebookOpen = true;
   _selectedEntryId = null;
+  _entrySearch = "";
   _dirty = false;
   _draft = {
     name: "",
@@ -275,16 +354,22 @@ function renderLorebookDrawer() {
     return;
   }
 
-  const entries = _entries[_focusWorldId] || [];
-  const activeCount = entries.filter((e) => e.enabled === true || e.enabled === 1).length;
+  const allEntries = _entries[_focusWorldId] || [];
+  const activeCount = allEntries.filter((e) => e.enabled === true || e.enabled === 1).length;
 
-  const entryListHtml = entries
-    .map((e) => {
-      const enabled = e.enabled === true || e.enabled === 1;
-      const sel = _selectedEntryId === e.id;
-      const toggleId = `lb-entry-toggle-${e.id}`;
-      const dirtyDot = _dirty && _selectedEntryId === e.id ? `<span class="lb-dirty-dot"></span>` : "";
-      return `
+  const q = _entrySearch.trim().toLowerCase();
+  const entries = q
+    ? allEntries.filter((e) => (e.name || "").toLowerCase().includes(q) || (e.content || "").toLowerCase().includes(q))
+    : allEntries;
+
+  const entryListHtml = entries.length
+    ? entries
+        .map((e) => {
+          const enabled = e.enabled === true || e.enabled === 1;
+          const sel = _selectedEntryId === e.id;
+          const toggleId = `lb-entry-toggle-${e.id}`;
+          const dirtyDot = _dirty && _selectedEntryId === e.id ? `<span class="lb-dirty-dot"></span>` : "";
+          return `
       <div class="lb-entry-item${sel ? " active" : ""}${!enabled ? " lb-disabled" : ""}" onclick="lbSelectEntry(${e.id})">
         ${dirtyDot}
         <span class="lb-entry-name">${esc(e.name || e.keywords?.[0] || "")}</span>
@@ -296,12 +381,15 @@ function renderLorebookDrawer() {
           </label>
         </div>
       </div>`;
-    })
-    .join("");
+        })
+        .join("")
+    : `<div class="lb-empty-state">${q ? "No matching entries" : "No entries yet"}</div>`;
 
   const editorHtml = _selectedEntryId
     ? _buildEditorHtml()
     : `<div class="lb-empty-state">Select an entry to edit</div>`;
+
+  const prevScrollTop = drawer.querySelector(".lb-entries-scroll")?.scrollTop ?? 0;
 
   drawer.innerHTML = `
     <div class="lb-header">
@@ -315,6 +403,11 @@ function renderLorebookDrawer() {
           <button class="btn btn-sm lb-rename-btn" onclick="showRenameWorldModal('${_focusWorldId}')" title="Rename lorebook">✎</button>
           <span class="lb-active-count">${activeCount} active</span>
         </div>
+        <div class="lb-entry-search">
+          <input id="lb-entry-search-inp" class="lb-entry-search-inp" type="text"
+                 placeholder="Search entries…" value="${esc(_entrySearch)}"
+                 oninput="lbEntrySearch(this.value)">
+        </div>
         <div class="lb-entries-scroll">
           ${entryListHtml}
         </div>
@@ -323,10 +416,13 @@ function renderLorebookDrawer() {
 <button class="btn btn-sm btn-block" style="color:var(--red);margin-top:4px" onclick="deleteWorld('${_focusWorldId}')">Delete Lorebook</button>
         </div>
       </div>
-      <div class="lb-editor" id="lb-editor">
+      <div class="lb-editor" id="lb-editor" data-has-selection="${!!_selectedEntryId}">
         ${editorHtml}
       </div>
     </div>`;
+
+  const scrollEl = drawer.querySelector(".lb-entries-scroll");
+  if (scrollEl) scrollEl.scrollTop = prevScrollTop;
 
   if (_selectedEntryId) _renderKeywordChips();
 }
@@ -483,6 +579,19 @@ export function lbRemoveChip(i) {
   setTimeout(() => $("lb-chip-text")?.focus(), 0);
 }
 
+// ── Entry search
+export function lbEntrySearch(value) {
+  _entrySearch = value;
+  const inp = $("lb-entry-search-inp");
+  const caret = inp?.selectionStart ?? value.length;
+  renderLorebookDrawer();
+  const newInp = $("lb-entry-search-inp");
+  if (newInp) {
+    newInp.focus();
+    newInp.setSelectionRange(caret, caret);
+  }
+}
+
 // ── Entry selection with dirty guard
 export function lbSelectEntry(entryId) {
   if (_selectedEntryId === entryId) return;
@@ -499,6 +608,28 @@ export function lbSelectEntry(entryId) {
     return;
   }
   _doSelectEntry(entryId);
+}
+
+// ── Deselect the current entry, returning to the entry list
+export function lbBackToList() {
+  if (_dirty) {
+    showConfirmModal(
+      {
+        title: "Unsaved changes",
+        message: "Discard changes to this entry and go back?",
+        confirmText: "Discard & go back",
+        confirmClass: "btn-danger",
+      },
+      () => {
+        _selectedEntryId = null;
+        _dirty = false;
+        renderLorebookDrawer();
+      },
+    );
+    return;
+  }
+  _selectedEntryId = null;
+  renderLorebookDrawer();
 }
 
 function _doSelectEntry(entryId) {

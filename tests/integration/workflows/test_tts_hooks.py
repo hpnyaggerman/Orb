@@ -20,6 +20,8 @@ from backend.database import (
     get_messages,
     get_workflow_attachment_by_id,
 )
+from backend.inference import LLMClient, _KVCacheTracker
+from backend.pipeline.orchestrator import _run_pipeline
 from backend.workflows import (
     PostCtx,
     RegenCtx,
@@ -28,9 +30,6 @@ from backend.workflows import (
 )
 from backend.workflows.tts import hooks
 from backend.workflows.tts.engine.base import SynthesisResult, TTSAdapter
-from backend.kv_tracker import _KVCacheTracker
-from backend.llm_client import LLMClient
-from backend.orchestrator import _run_pipeline
 
 
 class _FakeAdapter(TTSAdapter):
@@ -124,7 +123,7 @@ async def test_run_pipeline_autogenerates_attachment_end_to_end(client, fake_ada
     async def mock_writer(c, *args, **kwargs):
         yield {"type": "content", "delta": '"Hello there."'}
 
-    with patch("backend.orchestrator._writer_pass", new=mock_writer):
+    with patch("backend.pipeline.passes.writer.writer_pass", new=mock_writer):
         events = [
             ev
             async for ev in _run_pipeline(

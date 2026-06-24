@@ -11,16 +11,16 @@ from unittest.mock import patch
 
 import pytest
 
-from backend.llm_client import LLMClient
-from backend.passes.editor.audit import AuditReport
-from backend.passes.editor.editor import editor_pass
-from backend.passes.editor.opening_monotony import MonotonyResult
-from backend.passes.editor.slop_detector import (
+from backend.analysis import AuditReport
+from backend.analysis.detectors.opening_monotony import MonotonyResult
+from backend.analysis.detectors.slop_detector import (
+    ClicheHit,
     DetectionResult,
     FlaggedSentence,
-    ClicheHit,
 )
-from backend.passes.editor.template_repetition import TemplateResult
+from backend.analysis.detectors.template_repetition import TemplateResult
+from backend.inference import CachedBase, LLMClient, enabled_schemas
+from backend.pipeline.passes.editor.editor import editor_pass
 
 
 def _make_client() -> LLMClient:
@@ -104,7 +104,7 @@ async def test_editor_iteration_exception_propagates():
 
     audit_call_count = 0
 
-    def fake_run_contextual_audit(draft, phrase_bank, prev_msgs, audit_toggles=None):
+    def fake_run_contextual_audit(draft, phrase_bank, prev_msgs, audit_toggles=None, user_message=""):
         nonlocal audit_call_count
         audit_call_count += 1
         if audit_call_count == 1:
@@ -114,26 +114,28 @@ async def test_editor_iteration_exception_propagates():
             # Post-patch audit: 2 issues (progress made, so loop continues)
             return _make_report(2), "audit text"
         # Any further calls mean the loop kept running after the LLM failure
-        pytest.fail(
-            f"_run_contextual_audit called {audit_call_count} times; " "iteration should have aborted after LLM failure"
-        )
+        pytest.fail(f"_run_contextual_audit called {audit_call_count} times; iteration should have aborted after LLM failure")
 
     with patch(
-        "backend.passes.editor.editor._run_contextual_audit",
+        "backend.pipeline.passes.editor.editor._run_contextual_audit",
         new=fake_run_contextual_audit,
     ):
+        base = CachedBase(
+            prefix=({"role": "system", "content": "sys"},),
+            tools=tuple(enabled_schemas({"editor_apply_patch": True}, {})),
+            model="test-model",
+        )
         events = []
         with pytest.raises(RuntimeError, match="LLM API exploded"):
             async for event in editor_pass(
                 client,
-                prefix=[{"role": "system", "content": "sys"}],
+                base,
                 effective_msg="user msg",
                 draft="Sentence 0. Sentence 1.",
                 settings=settings,
                 phrase_bank=[[]],
                 audit_enabled=True,
                 length_guard=None,
-                enabled_tools={"editor_apply_patch": True},
             ):
                 events.append(event)
 

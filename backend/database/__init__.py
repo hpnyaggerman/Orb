@@ -30,19 +30,13 @@ from .queries.conversation_logs import (
 from .queries.conversations import (
     create_conversation,
     delete_conversation,
+    fork_conversation,
     get_conversation,
     get_workflow_state,
     list_conversations,
     set_workflow_state,
     touch_conversation,
     update_conversation,
-)
-from .queries.director_fragments import (
-    create_director_fragment,
-    delete_director_fragment,
-    get_director_fragment,
-    get_director_fragments,
-    update_director_fragment,
 )
 from .queries.director_state import get_director_state, update_director_state
 from .queries.endpoints import (
@@ -55,6 +49,13 @@ from .queries.endpoints import (
     get_model_configs,
     update_endpoint,
     update_model_config,
+)
+from .queries.interactive_fragments import (
+    create_interactive_fragment,
+    delete_interactive_fragment,
+    get_interactive_fragment,
+    get_interactive_fragments,
+    update_interactive_fragment,
 )
 from .queries.messages import (
     add_message,
@@ -72,10 +73,7 @@ from .queries.messages import (
     set_workflow_message_state,
     switch_to_branch,
     update_message_content,
-)
-from .queries.workflow_attachments import (
-    get_workflow_attachment_by_id,
-    insert_workflow_attachment_row,
+    user_attachment_payloads,
 )
 from .queries.mood_fragments import (
     create_mood_fragment,
@@ -95,14 +93,20 @@ from .queries.settings import (
     get_settings,
     get_workflow_config,
     set_workflow_config,
+    set_workflow_enabled,
     update_settings,
 )
+from .queries.stats import add_generated_chars, get_generated_chars, get_global_stats
 from .queries.user_personas import (
     create_user_persona,
     delete_user_persona,
     get_user_persona,
     get_user_personas,
     update_user_persona,
+)
+from .queries.workflow_attachments import (
+    get_workflow_attachment_by_id,
+    insert_workflow_attachment_row,
 )
 from .queries.worlds import (
     create_lorebook_entry,
@@ -121,7 +125,7 @@ from .queries.worlds import (
 from .seeds import (
     DEFAULT_ENABLED_TOOLS,
     DEFAULT_SETTINGS,
-    SEED_DIRECTOR_FRAGMENTS,
+    SEED_INTERACTIVE_FRAGMENTS,
     SEED_MOOD_FRAGMENTS,
     SEED_PHRASE_BANK,
 )
@@ -130,15 +134,16 @@ __all__ = [
     "DB_PATH",
     "DEFAULT_ENABLED_TOOLS",
     "DEFAULT_SETTINGS",
-    "SEED_DIRECTOR_FRAGMENTS",
+    "SEED_INTERACTIVE_FRAGMENTS",
     "SEED_MOOD_FRAGMENTS",
     "SEED_PHRASE_BANK",
     "add_conversation_log",
+    "add_generated_chars",
     "add_message",
     "add_phrase_group",
     "create_character_card",
     "create_conversation",
-    "create_director_fragment",
+    "create_interactive_fragment",
     "create_endpoint",
     "create_lorebook_entry",
     "create_model_config",
@@ -147,7 +152,7 @@ __all__ = [
     "create_world",
     "delete_character_card",
     "delete_conversation",
-    "delete_director_fragment",
+    "delete_interactive_fragment",
     "delete_endpoint",
     "delete_lorebook_entry",
     "delete_message_with_descendants",
@@ -156,6 +161,7 @@ __all__ = [
     "delete_phrase_group",
     "delete_user_persona",
     "delete_world",
+    "fork_conversation",
     "get_active_lorebook_entries",
     "get_character_avatar",
     "get_character_card",
@@ -163,8 +169,8 @@ __all__ = [
     "get_conversation_logs",
     "get_db",
     "get_deepest_descendant",
-    "get_director_fragment",
-    "get_director_fragments",
+    "get_interactive_fragment",
+    "get_interactive_fragments",
     "get_director_log_for_message",
     "get_director_state",
     "get_endpoint",
@@ -194,6 +200,8 @@ __all__ = [
     "get_workflow_state",
     "get_world",
     "get_world_by_name",
+    "get_generated_chars",
+    "get_global_stats",
     "get_worlds",
     "init_db",
     "insert_alternate_greeting_swipes",
@@ -205,6 +213,7 @@ __all__ = [
     "set_active_leaf",
     "set_workflow_character_state",
     "set_workflow_config",
+    "set_workflow_enabled",
     "set_workflow_message_state",
     "set_workflow_state",
     "switch_to_branch",
@@ -212,7 +221,7 @@ __all__ = [
     "touch_conversation",
     "update_character_card",
     "update_conversation",
-    "update_director_fragment",
+    "update_interactive_fragment",
     "update_director_state",
     "update_endpoint",
     "update_lorebook_entry",
@@ -223,4 +232,5 @@ __all__ = [
     "update_settings",
     "update_user_persona",
     "update_world",
+    "user_attachment_payloads",
 ]

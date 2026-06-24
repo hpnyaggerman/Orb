@@ -12,33 +12,14 @@ workflow code uses on the same slot.
 from __future__ import annotations
 
 import asyncio
-from copy import deepcopy
 
-import pytest
-
-from backend.locks import workflow_config_lock
+from backend.core.locks import workflow_config_lock
 from backend.workflows import (
     Workflow,
     get_workflow_config,
     register_workflow,
     set_workflow_config,
 )
-from backend.workflows import registry as registry_module
-from backend.tool_defs import STANDALONE_TOOLS, TOOLS
-
-
-@pytest.fixture(autouse=True)
-def _restore_registry():
-    by_id_snapshot = {k: deepcopy(v) for k, v in registry_module._WORKFLOWS_BY_ID.items()}
-    tools_snapshot = dict(TOOLS)
-    standalone_snapshot = set(STANDALONE_TOOLS)
-    yield
-    registry_module._WORKFLOWS_BY_ID.clear()
-    registry_module._WORKFLOWS_BY_ID.update(by_id_snapshot)
-    TOOLS.clear()
-    TOOLS.update(tools_snapshot)
-    STANDALONE_TOOLS.clear()
-    STANDALONE_TOOLS.update(standalone_snapshot)
 
 
 async def test_put_persists_and_echoes_effective_config(client):

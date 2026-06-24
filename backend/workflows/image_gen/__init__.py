@@ -18,7 +18,12 @@ from __future__ import annotations
 from backend.workflows.contracts import ToolSpec
 from backend.workflows.registry import Workflow
 
-from .prompt_assembly import CONFIG_DEFAULTS, DEFAULT_GUIDELINE, DEFAULT_NEGATIVE, DEFAULT_QUALITY_TAGS
+from .prompt_assembly import (
+    CONFIG_DEFAULTS,
+    DEFAULT_GUIDELINE,
+    DEFAULT_NEGATIVE,
+    DEFAULT_QUALITY_TAGS,
+)
 from .tool_defs import (
     ANALYZE_SCENE_CHOICE,
     ANALYZE_SCENE_TOOL,

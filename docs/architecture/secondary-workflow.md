@@ -1,6 +1,6 @@
 # Workflow development guide
 
-Navigation map for authoring a workflow. Reader is assumed to know the rest of Orb's backend (FastAPI + aiosqlite, three-pass pipeline in `backend/orchestrator.py`) and frontend (vanilla JS modules mutating the global `S` object in `frontend/state.js`), and to be new to the workflow framework. Every section points at code; build the mental model from the cited source.
+Navigation map for authoring a workflow. Reader is assumed to know the rest of Orb's backend (FastAPI + aiosqlite, three-pass pipeline in `backend/pipeline/orchestrator.py`) and frontend (vanilla JS modules mutating the global `S` object in `frontend/state.js`), and to be new to the workflow framework. Every section points at code; build the mental model from the cited source.
 
 ---
 
@@ -14,7 +14,7 @@ A workflow is a Python record in the process-local registry -- one record per wo
 - Carry state across four DB-backed tiers (conversation, message, character, config) plus one in-memory per-turn scratch tier.
 - Ship a frontend module that registers renderers (message buttons, attachment widgets, inspector/tools-panel cards -- a config panel is just a tools-panel renderer), click/text-effect/SSE handlers.
 
-Built-in registered workflow: `tts` (`backend/workflows/tts/`, `frontend/workflows/tts/`). It binds four of the five hook types (post-pipeline, on-demand, regenerate, reroll-gen -- not pre-pipeline). For persistent state it uses the character and config tiers only. Cross-reference it as the worked example.
+Built-in registered workflows: `tts` (`backend/workflows/tts/`, `frontend/workflows/tts/`) and `format_consistency` (`backend/workflows/format_consistency/`, `frontend/workflows/format_consistency/`). `tts` binds four of the five hook types (post-pipeline, on-demand, regenerate, reroll-gen -- not pre-pipeline) and uses the character and config state tiers; cross-reference it as the full worked example. `format_consistency` is the minimal example: a single post-pipeline hook (priority `-10`, so it runs before any artifact hook like TTS and they synthesize from the normalized text) that calls the deterministic RP-markup normalizer in `backend/analysis/format_consistency.py` via the toolkit, produces no artifacts, no tools, and no config -- its former `enabled` config flag is gone, replaced by the framework per-workflow on/off toggle (sec. 3.7), so the hook simply runs whenever the workflow is enabled. Its frontend module does nothing but register a one-line Tools-panel card body (a description); the on/off toggle itself is framework-rendered for every manifest workflow.
 
 ---
 
@@ -36,9 +36,10 @@ Adjacent backend pieces a workflow author touches:
 
 | Path | Role |
 |---|---|
-| `backend/locks.py` | `workflow_state_lock`, `workflow_character_state_lock`, `workflow_config_lock`. |
-| `backend/main.py` | Workflow HTTP routes + `_workflow_root_lock`. |
-| `backend/orchestrator.py` | Pre-pipeline hook loop (`_iterate_pre_pipeline_hooks`) + post-pipeline hook loop (inline, over `iter_subscriptions(HookType.POST_PIPELINE)`) + `_stage_workflow_attachment` + `_persist_result` + `_consume_pipeline`. |
+| `backend/core/locks.py` | `workflow_state_lock`, `workflow_character_state_lock`, `workflow_config_lock`. |
+| `backend/api/routes/workflows.py` | Workflow HTTP routes. (`_workflow_root_lock` lives in `backend/api/deps.py`.) |
+| `backend/pipeline/workflow_bridge.py` | The pipeline↔workflows seam: pre-pipeline hook loop (`_iterate_pre_pipeline_hooks`) + post-pipeline hook loop (`_run_post_pipeline`, over `iter_subscriptions(HookType.POST_PIPELINE)`) + `_stage_workflow_attachment`. |
+| `backend/pipeline/persistence.py` | `_persist_result` (writes the assistant row + staged attachments / message state) + `_consume_pipeline` (drains the SSE stream, persists, emits `done`). |
 | `backend/database/queries/workflow_attachments.py` | Raw row INSERT (`insert_workflow_attachment_row`) -- no budget/eviction; the cache wraps this. |
 | `backend/database/migrations/0020_workflows.py` | Schema for `workflow_attachments` + per-scope `workflow_state` columns (conversations / messages / character_cards) + `workflow_config` + `attachment_cache_budget_bytes` + `attachment_access_counter`. |
 | `backend/database/schema.py` | Mirror of post-migration shape for fresh installs. |
@@ -112,11 +113,13 @@ Single-dispatch hooks fire from their own HTTP routes, never from the turn pipel
 
 ### 3.4 Registration sequence
 
-The package `__init__.py` imports each workflow's instance plus its hook callables and runs the three registration calls against them. Hooks are aliased on import (`_tts_*`) so that when a second workflow lands, its identically-named hooks (`post_pipeline`, etc.) will not shadow TTS's in the shared package namespace.
+The package `__init__.py` imports each workflow's instance plus its hook callables and runs the three registration calls against them. Hooks are aliased on import (`_tts_*`, `_fc_*`) because both shipped workflows define an identically-named `post_pipeline` hook -- without the alias the second import would shadow the first in the shared package namespace.
 
-Live shape -- imports and registration calls in `backend/workflows/__init__.py`:
+Live shape -- imports and registration calls in `backend/workflows/__init__.py` (two workflows; `format_consistency` binds only `POST_PIPELINE`, at a negative priority so it runs first):
 
 ```
+from .format_consistency import format_consistency_workflow           # the Workflow(...) instance
+from .format_consistency.hooks import post_pipeline as _fc_post_pipeline
 from .tts import tts_workflow                                          # the Workflow(...) instance
 from .tts.hooks import (
     on_demand as _tts_on_demand,
@@ -130,6 +133,9 @@ subscribe(tts_workflow.id, HookType.POST_PIPELINE, _tts_post_pipeline)      # st
 subscribe(tts_workflow.id, HookType.ON_DEMAND,    _tts_on_demand)
 subscribe(tts_workflow.id, HookType.REGENERATE,   _tts_regenerate)
 subscribe(tts_workflow.id, HookType.REROLL_GEN,   _tts_reroll_gen)
+
+register_workflow(format_consistency_workflow)                         # a second workflow
+subscribe(format_consistency_workflow.id, HookType.POST_PIPELINE, _fc_post_pipeline, priority=-10)
 finalize_registry()                                                    # step 3 (keep at file bottom)
 ```
 
@@ -148,6 +154,30 @@ finalize_registry()                                                    # step 3 
 ### 3.6 Manifest route
 
 `GET /api/workflows` (`main.py`). Returns a list; each entry `{id, display_name, config_schema, config_defaults}`. Frontend fetches once at boot via `loadWorkflowManifest` (`chat.js`) into `S.workflowManifest`.
+
+### 3.7 Enablement (per-workflow on/off)
+
+Every registered workflow can be switched off without code changes. Two `settings` columns hold the state (`backend/database/schema.py`); the registry `Workflow` record carries no enabled flag (it is rebuilt from code at import and would lose the bit on restart), so the `settings` row is the single source of truth.
+
+| Column | Type | Default | Meaning |
+|---|---|---|---|
+| `workflows_globally_enabled` | INTEGER | `1` | Master switch for the whole subsystem. |
+| `workflow_enabled` | TEXT (JSON `{wid: bool}`) | `'{}'` | Per-workflow override; a missing key means enabled. |
+
+`get_settings` decodes `workflow_enabled` to a dict. Effective state is the pure predicate `effective_workflow_enabled(workflow_id, settings)` (`backend/workflows/enablement.py`): `global_on AND local_on`, each defaulting to enabled when its value is absent. A non-dict `workflow_enabled` coerces to `{}` (degrade-to-enabled) rather than raising -- the predicate runs once per subscription per turn, so a decode regression must never crash the turn.
+
+Control:
+
+- Master: `PUT /api/settings` with `workflows_globally_enabled` (in `SettingsUpdate`).
+- Per-workflow: `POST /api/workflows/{wid}/enabled` (sec. 8.1). `workflow_enabled` is deliberately NOT in `SettingsUpdate` -- a full-column settings write would clobber a concurrent tab's flip of a different workflow, whereas the route's `set_workflow_enabled` does a single atomic per-key `json_set` with no read-modify-write window (hence no lock).
+
+Enforcement -- each site reads the per-turn / per-request `settings` snapshot it already holds:
+
+- PRE_PIPELINE and POST_PIPELINE fan-out skip a disabled workflow's subscription, logging `"... hook suspended (disabled)"` (sec. 7.3, 7.4).
+- `_resolve_pipeline_config` strips a disabled workflow's tool names from the per-turn tool blob via `disabled_workflow_tool_names(settings)` (`backend/pipeline/config.py`) -- a no-op today, since no disabled workflow declares tools.
+- The routes that fire a workflow hook -- `/trigger` (ON_DEMAND), `/regenerate` (REGENERATE), `/reroll-gen` and `/rehydrate` (REROLL_GEN) -- return 404 when the owning workflow is disabled, checked before the route takes its lock and before the hook runs (sec. 8.1). The hookless consumption routes (`/activate`, `/delete`, `access`) and the manifest / config / enabled routes are never gated, so a disabled workflow's existing artifacts stay viewable and re-enabling restores full function.
+
+Frontend mirror: `effectiveWorkflowEnabled(wid)` (`state.js`) applies the same truth table off `S.settings`; the four production registries are filtered by it at their read sites (sec. 11.3), and the Secondary tab renders a master switch plus one per-workflow checkbox (sec. 14.5). Both columns are in `PRESERVED_COLUMNS` (`backend/database/preset_schema.py`), so applying a configs preset never silently re-enables a locally-disabled workflow.
 
 ---
 
@@ -214,7 +244,7 @@ PRE/POST hooks are async generators yielding dict events. The rest are awaited a
 
 ## 5. Locks
 
-### 5.1 Shared in-process locks (`backend/locks.py`)
+### 5.1 Shared in-process locks (`backend/core/locks.py`)
 
 | Lock | Key | Scope |
 |---|---|---|
@@ -224,7 +254,7 @@ PRE/POST hooks are async generators yielding dict events. The rest are awaited a
 
 Non-reentrant `asyncio.Lock`s. Nesting order at every site: `workflow_state_lock` outer, `workflow_character_state_lock` inner.
 
-### 5.2 `_workflow_root_lock(root_id)` (`backend/main.py`)
+### 5.2 `_workflow_root_lock(root_id)` (`backend/api/deps.py`)
 
 Distinct, int-keyed space (`dict[int, asyncio.Lock]`), keyed on the root attachment id. Held by the five attachment-mutating routes: `/regenerate`, `/reroll-gen`, `/rehydrate`, `/activate`, `/delete`. It serializes concurrent edits to one attachment's variant group (the root row plus its sibling variants), so two callers cannot interleave a read-modify-write on the same group. It is never nested with `workflow_state_lock` or `workflow_character_state_lock` at any call site and so sits outside their ordering rule.
 
@@ -232,7 +262,7 @@ Distinct, int-keyed space (`dict[int, asyncio.Lock]`), keyed on the root attachm
 
 | Lock | Held by |
 |---|---|
-| `workflow_state_lock` (outer) + `workflow_character_state_lock` (inner) | PRE-pipeline iterator (`orchestrator.py`), POST-pipeline iterator (`orchestrator.py`), `/trigger` route (`main.py`). Workflow code doing read-modify-write on workflow_state acquires the same locks via the `toolkit` re-export (`backend/workflows/toolkit.py`). |
+| `workflow_state_lock` (outer) + `workflow_character_state_lock` (inner) | PRE-pipeline iterator (`workflow_bridge.py`), POST-pipeline iterator (`workflow_bridge.py`), `/trigger` route (`main.py`). Workflow code doing read-modify-write on workflow_state acquires the same locks via the `toolkit` re-export (`backend/workflows/toolkit.py`). |
 | `workflow_config_lock` | `PUT /api/workflows/{workflow_id}/config` (`main.py`). Workflow code doing read-modify-write on workflow_config acquires it via the `toolkit` re-export. |
 
 ---
@@ -291,13 +321,13 @@ Fresh `dict` copy of `base` with `contribution`'s True entries merged. Accepts `
 
 The only attachment writer exposed to authors. See sec. 9.
 
-### 6.7 Workflow locks (re-exports from `backend.locks`)
+### 6.7 Workflow locks (re-exports from `backend.core.locks`)
 
 `workflow_state_lock(cid, wid)`, `workflow_character_state_lock(character_id, wid)`, and `workflow_config_lock()`. Hold the matching lock across a read-modify-write on the corresponding state tier (sec. 5, sec. 10). `workflow_character_state_lock` nests inside `workflow_state_lock` (conversation lock outer, character lock inner). There is no dedicated message-state lock: serialize a message-state RMW under `workflow_state_lock(cid, wid)` of the message's owning conversation.
 
 ---
 
-## 7. In-turn integration (`backend/orchestrator.py`)
+## 7. In-turn integration (`backend/pipeline/workflow_bridge.py`)
 
 ### 7.1 Turn entry points
 
@@ -306,10 +336,11 @@ The only attachment writer exposed to authors. See sec. 9.
 | `handle_turn` | `user_message_created` | `done` |
 | `handle_regenerate` | `director_start` or, when the director block is skipped, `director_done` | `done` |
 | `handle_super_regenerate` | same as `handle_regenerate` | `done` |
+| `handle_magic_rewrite` | same as `handle_regenerate` | `done` |
 
-All three run PRE-pipeline hooks first. `handle_regenerate` / `handle_super_regenerate` skip `user_message_created` -- they do not persist a new user row. `done` fires last from `_consume_pipeline` on any turn that completes without raising -- it sits after the pipeline's `try/finally`, so a pipeline exception propagates past it.
+All four run PRE-pipeline hooks first. `handle_regenerate` / `handle_super_regenerate` / `handle_magic_rewrite` skip `user_message_created` -- they do not persist a new user row. `done` fires last from `_consume_pipeline` on any turn that completes without raising -- it sits after the pipeline's `try/finally`, so a pipeline exception propagates past it.
 
-`handle_magic_rewrite` does NOT use pre/post hooks; out of scope for workflow integration.
+`handle_magic_rewrite` is super-regenerate with a user-supplied steering message (the typed direction) in place of the canned one; it runs the same full pipeline and persists a new sibling.
 
 ### 7.2 Per-turn shared identities
 
@@ -320,7 +351,7 @@ All three run PRE-pipeline hooks first. `handle_regenerate` / `handle_super_rege
 
 ### 7.3 PRE_PIPELINE iteration (`_iterate_pre_pipeline_hooks`)
 
-For each subscription (priority-ascending):
+For each subscription (priority-ascending; a disabled workflow's subscription is skipped first, logging `"... pre-pipeline hook suspended (disabled)"` -- sec. 3.7):
 
 1. Acquire `workflow_state_lock(cid, wid)` then `workflow_character_state_lock(character_id or "", wid)`.
 2. Build `PreCtx`.
@@ -340,7 +371,7 @@ Post-loop application (entry points and analogues): `extras` non-empty triggers 
 
 ### 7.4 POST_PIPELINE iteration (inside `_run_pipeline`)
 
-For each subscription:
+For each subscription (a disabled workflow's subscription is skipped first, logging `"... post-pipeline hook suspended (disabled)"` -- sec. 3.7):
 
 1. Acquire `workflow_state_lock(conversation_id or "", wid)` + `workflow_character_state_lock(character_id or "", wid)`.
 2. Build `PostCtx`.
@@ -404,7 +435,7 @@ Runs unconditionally (subject to each step's own guard):
 
 Then, only when `resp_text.strip()`:
 
-3. `db.add_message(..., attachments=staged, ...)` -- single transaction. Internally lazy-imports `insert_workflow_attachments` from cache. Returns `(asst_id, rejected_workflow_atts)`.
+3. `db.add_message(..., attachments=staged, ...)` -- single transaction. It persists workflow attachments by calling through a registered persister seam (the database layer must not import "up" into `backend.workflows`; `attachment_cache` registers `insert_workflow_attachments` via `register_workflow_attachment_persister` at import time). Returns `(asst_id, rejected_workflow_atts)`.
 4. For each post-pipeline `set_message_state` entry, `db.set_workflow_message_state(asst_id, wid, payload)`. The assistant `mid` is first known here; unlocked because the row is not yet the active leaf and no other caller can name it.
 5. `db.set_active_leaf(conversation_id, asst_id)`.
 
@@ -434,9 +465,11 @@ Note: when `resp_text` is empty, `_persist_result` short-circuits (sec. 7.7) and
 
 ---
 
-## 8. HTTP routes (`backend/main.py`)
+## 8. HTTP routes (`backend/api/routes/`)
 
 ### 8.1 Per-route reference cards
+
+Disabled-workflow gating: the four hook-firing routes -- `/trigger`, `/regenerate`, `/reroll-gen`, `/rehydrate` -- return 404 when the owning workflow is disabled (global or per-workflow), checked before the route takes its lock and before the hook runs (sec. 3.7); `/regenerate`, `/reroll-gen`, and `/rehydrate` first load the conversation and target attachment, since that read resolves the owning workflow id. To the caller this is indistinguishable from a missing handler, and the server log disambiguates. The hookless routes (manifest, config, enabled, activate, delete, access) are never gated.
 
 #### GET `/api/workflows` (manifest)
 
@@ -449,6 +482,10 @@ Handler `api_set_workflow_config`. Body model `WorkflowConfigUpdate`: `{"config"
 #### GET `/api/workflows/{wid}/config`
 
 Handler `api_get_workflow_config`. No locks. DB: `get_workflow_config(wid)`. Response `{"config": <effective>}`. 404 if unregistered.
+
+#### POST `/api/workflows/{wid}/enabled`
+
+Handler `api_set_workflow_enabled`. Body model `WorkflowEnabledUpdate`: `{"enabled": bool}`, REQUIRED -- a body missing the key is FastAPI 422 before the handler. No lock (the per-key `set_workflow_enabled` write is atomic). DB: `set_workflow_enabled(wid, enabled)` then `get_settings()`. Response: `{"workflow_enabled": <full decoded {wid: bool} map>}`. 404 if unregistered. Ungated -- this is the control that re-enables a suspended workflow. Per-workflow on/off contract: sec. 3.7.
 
 #### POST `/api/conversations/{cid}/workflows/{wid}/trigger`
 
@@ -610,6 +647,7 @@ Validator-emitted reasons come from each gate in `validate_workflow_attachment_s
 | `workflow_message_state` | `messages.workflow_state` JSON | (mid, wid) | `workflow_state_lock(cid, wid)` of the owning conversation; no message-specific lock | toolkit get/set; orchestrator persist-time apply of post-pipeline `set_message_state` |
 | `workflow_config` | `settings.workflow_config[$.<wid>]` JSON | wid only (global) | `workflow_config_lock()` (single global) | toolkit get/set; HTTP PUT/GET |
 | `workflow_attachments` | `workflow_attachments` table | mid-anchored; root-keyed | `_workflow_root_lock(root_id)` serializes the mutating routes on a root group | cache helpers; six attachment routes (five take the lock; the access route does not) |
+| workflow enablement | `settings.workflows_globally_enabled` + `settings.workflow_enabled` JSON | global master + per `wid` | none (atomic per-key `json_set`) | `effective_workflow_enabled` (sec. 3.7); PRE/POST fan-out, hook-firing route gates, frontend `effectiveWorkflowEnabled` |
 
 POST_PIPELINE hooks commit `workflow_message_state` for the in-flight assistant message by yielding `set_message_state`; the orchestrator writes the slot in `_persist_result` once the new `mid` exists (sec 7.4, 7.7). The toolkit `set_workflow_message_state` setter still only addresses already-persisted `mid`s, since the assistant `mid` is assigned during `_persist_result`, after the POST loop.
 
@@ -636,10 +674,10 @@ Top-level `register*` and `S.workflow*` push/assign calls run on import. Manifes
 
 | Slot | Initial | Write path | Read path (built-in) |
 |---|---|---|---|
-| `workflowInspectorCardRenderers` | `[]` | `S.workflowInspectorCardRenderers.push(() => htmlString)` | `_buildSecondaryAgentsHtml` (`chat.js`) |
-| `workflowToolsPanelRenderers` | `[]` | `.push(() => htmlString)` | `renderToolsPanel` (`settings.js`) |
-| `workflowMessageButtonRenderers` | `[]` | `.push((msg) => htmlString)` | `_renderExtraButtons` (`chat.js`) |
-| `workflowEventHandlers` | `{}` | `S.workflowEventHandlers["my_event"] = (data, msgDiv) => ...` | `handleSSEEvent` default (`chat.js`) |
+| `workflowInspectorCardRenderers` | `[]` | `registerWorkflowInspectorCard(wid, () => htmlString)` -> `[{workflowId, render}]` | `_buildSecondaryAgentsHtml` (`chat.js`); skips disabled (sec. 3.7) |
+| `workflowToolsPanelRenderers` | `[]` | `registerWorkflowToolsPanelCard(wid, () => htmlString)` -> `[{workflowId, render}]` (card *body*, folded into the workflow's on/off card) | `buildWorkflowToggleRows` (`settings.js`); body shown only while enabled |
+| `workflowMessageButtonRenderers` | `[]` | `registerWorkflowMessageButton(wid, (msg) => htmlString)` -> `[{workflowId, render}]` | `_renderExtraButtons` (`chat.js`); skips disabled |
+| `workflowEventHandlers` | `{}` | `registerWorkflowEventHandler(wid, "my_event", (data, msgDiv) => ...)` -> `{[event]: {workflowId, handler}}` | `handleSSEEvent` default (`chat.js`); skips disabled |
 | `workflowAttachmentRenderers` | `{}` | `S.workflowAttachmentRenderers[wid] = (ctx) => htmlString` | `_renderWorkflowSwipeContainer` (`chat.js`) |
 | `workflowPipelines` | `[]` | via `registerWorkflowPipeline` only | SSE `reasoning` routing (`chat.js`); Inspector Secondary rail |
 | `workflowState` | `{}` | `S.workflowState[wid] = <opaque>` | author only (framework never reads) |
@@ -687,6 +725,19 @@ registerClickHandler({id, label?, priority?, claims?, onClick})
 
 All three registrars are idempotent on `id` (replace in place).
 
+Production-surface registrars (`state.js`) -- the four enablement-gated slots from sec. 11.3. Prefer these over pushing/assigning raw functions: each stamps the entry with `workflowId` so the framework can gate it (sec. 3.7). The read sites now destructure `{workflowId, render}` / `{workflowId, handler}`, so a bare function pushed directly carries no `workflowId` to gate on and no `render`/`handler` for the reader to call.
+
+```
+registerWorkflowInspectorCard(workflowId, render)        # render: () => htmlString
+registerWorkflowToolsPanelCard(workflowId, render)       # render: () => htmlString (card body)
+registerWorkflowMessageButton(workflowId, render)        # render: (msg) => htmlString
+registerWorkflowEventHandler(workflowId, event, handler) # handler: (data, msgDiv|null) => void
+```
+
+The three array registrars are idempotent on `workflowId` (re-registration replaces in place); `registerWorkflowEventHandler` is keyed by `event` (one handler per event name, last writer wins). Bad args `console.error` and skip. The consumption renderer is the deliberate exception -- assign `S.workflowAttachmentRenderers[wid] = (ctx) => htmlString` directly; it is never gated, so a disabled workflow's existing artifacts still render.
+
+`effectiveWorkflowEnabled(wid)` (`state.js`) -- the frontend mirror of the backend truth table (sec. 3.7), read off `S.settings`. Safe before settings load (defaults to enabled); a malformed map degrades to enabled.
+
 ---
 
 ## 12. SSE dispatch (`frontend/chat.js`)
@@ -713,13 +764,13 @@ Built-in cases:
 | `error` | toast |
 | `workflow_attachments_rejected` | `_mergeWorkflowRejections(msgId, null, rejected)`; no re-render |
 
-Default branch: looks up `S.workflowEventHandlers[event]`; if a function, parses `data` with `JSON.parse`, falling back to the raw string on parse failure, then invokes `handler(payload, msgDiv)` -- `payload` is the parsed JSON or raw string, `msgDiv` is the streaming message element or `null`. The call is wrapped in `try/catch`; throws are logged via `console.error` and do not abort the stream.
+Default branch: looks up `S.workflowEventHandlers[event]` (a `{workflowId, handler}` record). If its `workflowId` is effectively enabled (sec. 3.7) and `handler` is a function, parses `data` with `JSON.parse`, falling back to the raw string on parse failure, then invokes `handler(payload, msgDiv)` -- `payload` is the parsed JSON or raw string, `msgDiv` is the streaming message element or `null`. The call is wrapped in `try/catch`; throws are logged via `console.error` and do not abort the stream.
 
 No `done` case, so `done` falls through to the default branch and reaches `S.workflowEventHandlers["done"]` if a handler is registered.
 
 ### 12.3 Reserved event names (do not author-emit as custom)
 
-These 11 names are intercepted by built-in `case`s in `handleSSEEvent` before the custom-handler default branch, so registering a handler for them has no effect: `token`, `director_start`, `director_done`, `prompt_rewritten`, `writer_rewrite`, `reasoning`, `phase_status`, `editor_done`, `user_message_created`, `workflow_attachments_rejected`, `error`. Separately, event names a workflow's pipeline hooks emit are filtered server-side: the orchestrator drops any underscore-prefixed name from `post_pipeline` (`orchestrator.py`) and `pre_pipeline` output, since the `_`-prefix is reserved for internal persistence signals (`_result`, `_refined_result`, `_editor_reasoning`). These never reach the frontend.
+These 11 names are intercepted by built-in `case`s in `handleSSEEvent` before the custom-handler default branch, so registering a handler for them has no effect: `token`, `director_start`, `director_done`, `prompt_rewritten`, `writer_rewrite`, `reasoning`, `phase_status`, `editor_done`, `user_message_created`, `workflow_attachments_rejected`, `error`. Separately, event names a workflow's pipeline hooks emit are filtered server-side: the pipeline drops any underscore-prefixed name from `post_pipeline` and `pre_pipeline` output (both hook loops in `workflow_bridge.py`), since the `_`-prefix is reserved for internal persistence signals (`_result`, `_refined_result`, `_editor_reasoning`). These never reach the frontend.
 
 ### 12.4 `afterStream`
 
@@ -857,11 +908,11 @@ Source aliases: `att.b64 || att.data_b64`, `att.mime || att.mime_type` (fallback
 
 ### 14.5 Inspector + Tools cards
 
-Inspector Secondary card iteration: `_buildSecondaryAgentsHtml` (`chat.js`). Each `S.workflowInspectorCardRenderers[i]()` output is concatenated raw (no per-card wrap).
+Inspector Secondary card iteration: `_buildSecondaryAgentsHtml` (`chat.js`). Each enabled entry's `render()` output is concatenated raw (no per-card wrap); entries whose `workflowId` is disabled are skipped (sec. 3.7).
 
-Tools Secondary card iteration: `renderToolsPanel` (`settings.js`). Same shape, iterating `S.workflowToolsPanelRenderers` (a distinct array from the inspector's `S.workflowInspectorCardRenderers`).
+Tools Secondary card iteration: `buildWorkflowToggleRows` (`settings.js`, called by `renderToolsPanel`). Unlike the inspector cards, a tools-panel renderer does **not** return a standalone card -- the framework renders one card per manifest workflow (name + on/off toggle), and the matching `workflowToolsPanelRenderers` entry's `render()` supplies that card's *body* (description + any controls), folded in only while the workflow is effectively enabled. So a shipped workflow is a single entry, not a separate toggle and settings card.
 
-Per-message buttons: `_renderExtraButtons(msg)` (`chat.js`). Each `S.workflowMessageButtonRenderers[i](msg)` spliced into the toolbar between magic and delete buttons.
+Per-message buttons: `_renderExtraButtons(msg)` (`chat.js`). Each enabled entry's `render(msg)` is spliced into the toolbar between magic and delete buttons.
 
 ### 14.6 `window.workflow*` handlers (`chat.js`)
 
@@ -1075,9 +1126,9 @@ To ship a new workflow:
 ### 17.2 Frontend
 
 1. Create `frontend/workflows/<id>/index.js`. Top-level imports and registry pushes run on import.
-2. Push renderers into `S.workflowInspectorCardRenderers` / `S.workflowToolsPanelRenderers` / `S.workflowMessageButtonRenderers` as needed.
-3. Assign your attachment renderer to `S.workflowAttachmentRenderers["<id>"]` if you produce artifacts.
-4. Assign custom SSE handlers to `S.workflowEventHandlers["<custom_event>"]` for non-reserved events the backend hook yields.
+2. Register renderers via `registerWorkflowInspectorCard("<id>", ...)` / `registerWorkflowToolsPanelCard("<id>", ...)` / `registerWorkflowMessageButton("<id>", ...)` as needed (sec. 11.4). These carry your workflow id so the framework hides them while your workflow is disabled (sec. 3.7); the read sites expect the `{workflowId, render}` shape, so a bare function pushed directly will not render.
+3. Assign your attachment renderer to `S.workflowAttachmentRenderers["<id>"]` if you produce artifacts (this consumption surface is intentionally never gated).
+4. Register custom SSE handlers via `registerWorkflowEventHandler("<id>", "<custom_event>", handler)` for non-reserved events the backend hook yields.
 5. If your backend hook emits `reasoning` with a pipeline pass id, call `registerWorkflowPipeline({id: "<wid>", passes: [{id: "<wid>:<passname>"}]})`.
 6. Inject CSS via `<link>` to `/static/workflows/<id>/<file>.css` from `index.js` (guard by element id).
 7. For workflow phase pill, use `setWorkflowPhase(channel, label)` from frontend code OR yield `{event: "phase_status", data: {channel, label, state?}}` from a hook. `channel` is any string starting with `"workflow:"` (subkey it per operation, e.g. `"workflow:<id>:regen:<rootId>"`); `state == "done"` or a blank label clears it.
@@ -1117,13 +1168,13 @@ To ship a new workflow:
 
 | Task | Read |
 |---|---|
-| Add a new hook type | `contracts.py` + `registry.py` + matching dispatch: `iter_subscriptions` in `orchestrator.py` (fan-out hooks) or `get_subscription` in `main.py` (single-dispatch hooks) |
+| Add a new hook type | `contracts.py` + `registry.py` + matching dispatch: `iter_subscriptions` in `workflow_bridge.py` (fan-out pipeline hooks) or `get_subscription` in `main.py` (single-dispatch hooks) |
 | Custom SSE event from backend to frontend | yield non-reserved name from hook -> `S.workflowEventHandlers["name"]` -- sec. 12.2, 12.3 |
 | Drive in-turn status text | yield `phase_status` with `channel: "workflow:<id>"` -- sec. 12.2, 13.1 |
 | Out-of-band status text | `setWorkflowPhase("workflow:<id>:...", label)` then `clearWorkflowPhase` in finally -- sec. 13.1 |
 | Force a single tool call from a hook | `forced_tool_call(...)` -- sec. 6.4 |
 | Author-side LLM client | `ctx.client` (PreCtx/PostCtx/OnDemandCtx/RegenCtx/RerollGenCtx) -- sec. 4 |
-| Add a Tools-panel card | push into `S.workflowToolsPanelRenderers` (top-level in the workflow's `index.js`) -- sec. 11.3 |
+| Add a Tools-panel card | `registerWorkflowToolsPanelCard(wid, render)` (top-level in the workflow's `index.js`) -- sec. 11.4 |
 | Karaoke-style text highlighting | `playAudio` + `channelState` polling + `startTextEffect(...).markActive` -- sec. 15.4, 16.5 |
 | Render a custom widget for own attachments | `S.workflowAttachmentRenderers[wid] = (ctx) => htmlString` -- sec. 11.3, 14.2 |
 | Read evicted attachment | not allowed; surface Rehydrate button or read `att.consumption_metadata` only -- sec. 9.2, 14.9 |

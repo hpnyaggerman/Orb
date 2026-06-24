@@ -3,30 +3,39 @@ from __future__ import annotations
 import base64
 import json
 from datetime import datetime, timezone
+from typing import Any, Mapping, cast
 
 import aiosqlite
 
 from ..connection import _build_set_clause, get_db
+from ..models import CharacterCardRow
 
 
-async def list_character_cards() -> list[dict]:
+async def list_character_cards() -> list[CharacterCardRow]:
+    # Projects only the columns the library sidebar/list consumes. The heavy text
+    # bodies (description, personality, scenario, first_mes, system_prompt) are
+    # deliberately excluded: nothing in the list path reads them, and shipping
+    # them for every card turns a large library (~2000 cards) into a multi-MB
+    # payload that the client must transfer, JSON-parse, and hold resident on
+    # every refresh. The edit modal lazy-loads the full card via
+    # get_character_card() when needed.
     async with get_db() as db:
         rows = list(
             await db.execute_fetchall(
-                "SELECT id, name, description, personality, scenario, first_mes, creator_notes, system_prompt, tags, creator, source_format, created_at, updated_at, avatar_mime, world_id FROM character_cards ORDER BY updated_at DESC"
+                "SELECT id, name, creator_notes, tags, creator, source_format, created_at, updated_at, avatar_mime, world_id, persona_lock_id FROM character_cards ORDER BY updated_at DESC"
             )
         )
-        result = []
+        result: list[CharacterCardRow] = []
         for r in rows:
             d = dict(r)
             d["tags"] = json.loads(d["tags"]) if d["tags"] else []
             d["has_avatar"] = d["avatar_mime"] is not None
             del d["avatar_mime"]
-            result.append(d)
+            result.append(cast(CharacterCardRow, d))
         return result
 
 
-async def get_character_card(card_id: str, include_avatar: bool = False) -> dict | None:
+async def get_character_card(card_id: str, include_avatar: bool = False) -> CharacterCardRow | None:
     async with get_db() as db:
         cols = (
             "*"
@@ -34,7 +43,7 @@ async def get_character_card(card_id: str, include_avatar: bool = False) -> dict
             else (
                 "id, name, description, personality, scenario, first_mes, mes_example, "
                 "creator_notes, system_prompt, post_history_instructions, tags, creator, "
-                "character_version, alternate_greetings, avatar_mime, source_format, world_id, created_at, updated_at"
+                "character_version, alternate_greetings, avatar_mime, source_format, world_id, persona_lock_id, created_at, updated_at"
             )
         )
         rows = list(
@@ -49,10 +58,10 @@ async def get_character_card(card_id: str, include_avatar: bool = False) -> dict
         d["tags"] = json.loads(d["tags"]) if d.get("tags") else []
         d["alternate_greetings"] = json.loads(d["alternate_greetings"]) if d.get("alternate_greetings") else []
         d["has_avatar"] = d.get("avatar_mime") is not None
-        return d
+        return cast(CharacterCardRow, d)
 
 
-async def create_character_card(data: dict) -> dict:
+async def create_character_card(data: dict) -> CharacterCardRow:
     async with get_db() as db:
         now = datetime.now(timezone.utc).isoformat()
         try:
@@ -119,7 +128,7 @@ async def insert_alternate_greeting_swipes(cid: str, alternate_greetings: list[s
         return count
 
 
-async def update_character_card(card_id: str, data: dict) -> dict | None:
+async def update_character_card(card_id: str, data: dict) -> CharacterCardRow | None:
     async with get_db() as db:
         allowed = [
             "name",
@@ -134,6 +143,7 @@ async def update_character_card(card_id: str, data: dict) -> dict | None:
             "creator",
             "character_version",
             "world_id",
+            "persona_lock_id",
         ]
         sets, vals = _build_set_clause(allowed, data)
         # JSON fields
@@ -162,7 +172,7 @@ async def update_character_card(card_id: str, data: dict) -> dict | None:
         return await get_character_card(card_id)
 
 
-async def sync_conversations_for_card(card_id: str, card: dict, old_name: str | None = None) -> None:
+async def sync_conversations_for_card(card_id: str, card: Mapping[str, Any], old_name: str | None = None) -> None:
     """Propagate mutable card fields to all conversations linked to this card.
 
     Only syncs fields that are denormalised onto the conversation row and
@@ -211,7 +221,10 @@ async def delete_character_card(card_id: str, delete_conversations: bool = False
 
 
 async def resolve_char_context(
-    conv: dict, settings: dict, shared_key: str = "shared_system_prompt", card: dict | None = None
+    conv: Mapping[str, Any],
+    settings: Mapping[str, Any],
+    shared_key: str = "shared_system_prompt",
+    card: CharacterCardRow | None = None,
 ) -> tuple[str, str, str]:
     """Resolve the effective system prompt, persona, and example messages.
 
@@ -235,8 +248,9 @@ async def resolve_char_context(
     if card:
         char_persona = "\n\n".join(filter(None, [card.get("description", ""), card.get("personality", "")]))
         mes_example = card.get("mes_example", "")
-        if card.get("system_prompt") and not settings.get("prevent_prompt_overrides"):
-            system_prompt = card["system_prompt"]
+        card_system_prompt = card.get("system_prompt")
+        if card_system_prompt and not settings.get("prevent_prompt_overrides"):
+            system_prompt = card_system_prompt
     return system_prompt, char_persona, mes_example
 
 
@@ -275,7 +289,7 @@ async def set_workflow_character_state(character_id: str, workflow_id: str, payl
     """Atomic per-slot write via SQLite JSON1. payload=None removes the slot;
     empty dict stores {}. No-op if card missing (UPDATE matches zero rows).
 
-    Caller must hold backend.locks.workflow_character_state_lock(character_id,
+    Caller must hold backend.core.locks.workflow_character_state_lock(character_id,
     workflow_id) across the read-then-write the payload was computed from.
     """
     async with get_db() as db:

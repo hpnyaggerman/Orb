@@ -9,8 +9,7 @@ Organised into:
 
 import pytest
 
-from backend.passes.editor.opening_monotony import detect_opening_monotony
-
+from backend.analysis.detectors.opening_monotony import detect_opening_monotony
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # TRUE POSITIVES – repetitive consecutive openings that should be flagged
@@ -62,7 +61,7 @@ class TestTruePositives:
 
     def test_repetition_within_longer_text(self):
         """Four consecutive repeated openers surrounded by other sentences."""
-        text = "The sky is blue. He walked. He ran. He jumped. He skipped. " "The grass is green. She sang."
+        text = "The sky is blue. He walked. He ran. He jumped. He skipped. The grass is green. She sang."
         result = detect_opening_monotony(text, n_words=1)
         he_flag = [f for f in result.flagged_openers if f.opener == "he"]
         assert len(he_flag) == 1
@@ -275,7 +274,7 @@ class TestEdgeCases:
 class TestAuditIntegration:
     def test_audit_flags_narrative_with_dialogue_between_he_sentences(self):
         """Audit correctly flags 'He' run even when dialogue appears between sentences."""
-        from backend.passes.editor.audit import run_audit
+        from backend.analysis import run_audit
 
         text = (
             "Henderson sighs, a long, rattling sound that suggests he's been "
@@ -297,7 +296,7 @@ class TestAuditIntegration:
 
     def test_audit_flags_consecutive_narrative(self):
         """Audit with default params: 4 consecutive 'He' sentences ARE flagged."""
-        from backend.passes.editor.audit import run_audit
+        from backend.analysis import run_audit
 
         text = (
             "Henderson sighs, a long rattling sound. "

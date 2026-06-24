@@ -10,7 +10,7 @@ mutate the bottom of the stack — but it sits *above* the real client and
     assembly + the DB persistence round-trip that reconstructs the next turn's
     history. A reformat, trim, or non-append-only rebuild there busts the
     cross-turn cache and the unit test cannot see it (it fakes the next prefix).
-  • the dynamic director schema rebuilt each turn from ``get_director_fragments()``
+  • the dynamic director schema rebuilt each turn from ``get_interactive_fragments()``
     — if that query's row order is unstable, the tools blob drifts turn-over-turn.
 
 These tests drive the genuine ``POST /send`` path (HTTP → handle_turn →
@@ -29,21 +29,20 @@ from __future__ import annotations
 import json
 
 from backend.database import get_messages
-from backend.kv_tracker import _serialize_messages
-
+from backend.inference.kv_tracker import _serialize_messages
 
 # ── A draft well over the length-guard ceiling so the editor pass always fires.
 _LONG_DRAFT = "word " * 60
 
 # Smallest valid PNG (1×1, transparent). The /send attachment validator
 # base64-decodes this, so it must be real base64 of a real image.
-_PNG_1X1_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk" "+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
+_PNG_1X1_B64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
 
 
 def _wire_tools(tools) -> str:
     """Serialize tools the way httpx puts them on the wire: insertion order
     preserved, no sort_keys (the tracker's sorted view would hide key-order
-    drift). Mirrors backend.llm_client's ``client.stream(..., json=body)``."""
+    drift). Mirrors backend.inference.client's ``client.stream(..., json=body)``."""
     return json.dumps(tools, separators=(",", ":"), ensure_ascii=False) if tools else ""
 
 
@@ -59,8 +58,8 @@ async def _configure_all_features(client) -> None:
                 "direct_scene": True,
                 "rewrite_user_prompt": True,  # → director makes TWO calls
                 "editor_apply_patch": True,
-                "length_guard": True,
             },
+            "length_guard_enabled": True,
             "length_guard_max_words": 5,  # _LONG_DRAFT (60 words) always trips it
         },
     )
@@ -68,8 +67,8 @@ async def _configure_all_features(client) -> None:
 
 
 async def _make_conversation(client) -> str:
-    # Macros in the card text exercise the per-pass macro-resolving client
-    # wrapper; they must resolve identically on every pass and every turn.
+    # Macros in the card text exercise the cached base's macro ``resolve`` hook;
+    # they must resolve identically on every pass and every turn.
     card = await client.post(
         "/api/characters",
         json={
@@ -130,15 +129,26 @@ async def test_within_turn_all_passes_share_prefix_and_tools_through_build_prefi
             "shared prefix — build_prefix or a pass rendered the system/history differently across passes."
         )
 
+    # The base's macro ``resolve`` hook must scrub every {{char}}/{{user}} from
+    # the bytes each pass actually shipped — including the card text carried in
+    # the shared prefix. The recorded messages are post-resolution, so a raw
+    # placeholder surviving here means the hook was dropped.
+    for c in calls:
+        sent = _serialize_messages(c["messages"])
+        assert "{{char}}" not in sent and "{{user}}" not in sent, (
+            f"MACRO LEAK: pass {c['pass']!r} shipped an unresolved placeholder to the model."
+        )
+        assert "Aria" in prefix_bytes  # {{char}} → the card name, resolved in the shared prefix
+
     # Inv-3 — wire-faithful tools blob identical across every pass, non-empty.
     blobs = {_wire_tools(c["tools"]) for c in calls}
     assert len(blobs) == 1, f"CACHE BUST: tools blob differs across passes; distinct sizes {sorted(len(b) for b in blobs)}"
     assert next(iter(blobs)), "expected a non-empty tools blob in single-model mode"
 
     # §3 — editor's prompt is a strict extension of the writer's full prompt.
-    assert _serialize_messages(editor["messages"][: len(writer["messages"])]) == _serialize_messages(
-        writer["messages"]
-    ), "CACHE BUST: editor no longer extends the writer's prompt verbatim."
+    assert _serialize_messages(editor["messages"][: len(writer["messages"])]) == _serialize_messages(writer["messages"]), (
+        "CACHE BUST: editor no longer extends the writer's prompt verbatim."
+    )
 
 
 async def test_cross_turn_prefix_is_append_only_through_persistence(client, llm_mock):
@@ -178,9 +188,13 @@ async def test_cross_turn_prefix_is_append_only_through_persistence(client, llm_
 
     # Sanity: the DB really did persist the turn-1 exchange.
     roles = [m["role"] for m in await get_messages(cid)]
-    assert roles[:3] == ["assistant", "user", "assistant"], f"unexpected persisted history: {roles}"
+    assert roles[:3] == [
+        "assistant",
+        "user",
+        "assistant",
+    ], f"unexpected persisted history: {roles}"
 
-    # Director's dynamic schema, rebuilt from get_director_fragments() each turn,
+    # Director's dynamic schema, rebuilt from get_interactive_fragments() each turn,
     # must be byte-identical across turns (this is the ONLY place a DB row-order
     # instability in the fragment query would show up).
     tools1 = {_wire_tools(c["tools"]) for c in turn1 if c["tools"]}
@@ -225,7 +239,7 @@ async def test_attachment_in_shared_history_is_byte_stable_across_passes_and_tur
     for c in turn2:
         head = _serialize_messages(c["messages"][: len(prefix2)])
         assert head == prefix2_bytes, (
-            f"CACHE BUST: pass {c['pass']!r} encoded the in-history image differently " "from the other passes."
+            f"CACHE BUST: pass {c['pass']!r} encoded the in-history image differently from the other passes."
         )
 
     # The image must actually be in the cached prefix as a data URL, proving the

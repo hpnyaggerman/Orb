@@ -9,8 +9,8 @@ list, or None where a string is expected.
 import re
 
 import pytest
-from backend.database import SEED_MOOD_FRAGMENTS, SEED_PHRASE_BANK
 
+from backend.database import SEED_MOOD_FRAGMENTS, SEED_PHRASE_BANK
 
 STR_FIELDS = ("id", "label", "description", "prompt_text", "negative_prompt")
 
@@ -20,9 +20,9 @@ class TestSeedMoodFragments:
     def test_string_fields_are_str(self, fragment):
         for field in STR_FIELDS:
             value = fragment[field]
-            assert isinstance(
-                value, str
-            ), f"Mood fragment {fragment.get('id')!r}: {field!r} must be str, got {type(value).__name__!r}"
+            assert isinstance(value, str), (
+                f"Mood fragment {fragment.get('id')!r}: {field!r} must be str, got {type(value).__name__!r}"
+            )
 
 
 class TestSeedPhraseBank:

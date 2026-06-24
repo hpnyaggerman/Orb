@@ -3,16 +3,52 @@ from __future__ import annotations
 import json
 import sqlite3
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Any, List, Mapping, Optional, Protocol, Sequence, cast
 
 from ..connection import get_db
+from ..models import (
+    MessageRow,
+    MessageWithAttachments,
+    UserAttachmentRow,
+    WorkflowAttachmentRowBase,
+)
 from .conversations import get_conversation
 
 
-async def get_path_to_leaf(cid: str, leaf_id: int) -> list[dict]:
+class _WorkflowAttachmentPersister(Protocol):
+    """Persists workflow attachments inside ``add_message``'s transaction.
+
+    Implemented by ``backend.workflows.attachment_cache.insert_workflow_attachments``
+    and registered at import time -- see the dependency-inversion note below.
+    """
+
+    async def __call__(self, message_id: int, attachments: list[dict], *, db: Any = None) -> tuple[list[int], list[dict]]: ...
+
+
+# Dependency-inversion seam. ``add_message`` must insert workflow attachments
+# inside its own write transaction (the cache layer's read->evict->insert runs
+# under the same lock as the message INSERT), yet the database layer must never
+# import "up" into ``backend.workflows``. So the workflow layer registers its
+# persister here at import time and ``add_message`` calls through this slot.
+# Left None in DB-only contexts that never produce workflow attachments; in
+# that state a workflow attachment reaching ``add_message`` is a wiring bug, so
+# we fail loudly rather than silently dropping bytes.
+_workflow_attachment_persister: "_WorkflowAttachmentPersister | None" = None
+
+
+def register_workflow_attachment_persister(fn: "_WorkflowAttachmentPersister") -> None:
+    """Wire the workflow-attachment persister into ``add_message``.
+
+    Called once, at import of ``backend.workflows.attachment_cache``.
+    """
+    global _workflow_attachment_persister
+    _workflow_attachment_persister = fn
+
+
+async def get_path_to_leaf(cid: str, leaf_id: int) -> list[MessageWithAttachments]:
     """Walk parent_id chain from leaf to root, return ordered root→leaf."""
     async with get_db() as db:
-        path = []
+        path: list[MessageWithAttachments] = []
         current_id = leaf_id
         while current_id is not None:
             rows = list(
@@ -23,16 +59,20 @@ async def get_path_to_leaf(cid: str, leaf_id: int) -> list[dict]:
             )
             if not rows:
                 break
+            # Raw row: progressive_fields is still the JSON string here. Decode
+            # it before labeling the dict a MessageWithAttachments, whose
+            # progressive_fields is typed as the decoded dict.
             msg = dict(rows[0])
             raw_pf = msg.get("progressive_fields")
             msg["progressive_fields"] = json.loads(raw_pf) if raw_pf else {}
-            path.append(msg)
-            current_id = msg.get("parent_id")
+            typed_msg = cast(MessageWithAttachments, msg)
+            path.append(typed_msg)
+            current_id = typed_msg.get("parent_id")
         path.reverse()
         return path
 
 
-async def _attach_user_attachments(messages: list[dict]) -> None:
+async def _attach_user_attachments(messages: list[MessageWithAttachments]) -> None:
     if not messages:
         return
     ids = [m["id"] for m in messages]
@@ -52,7 +92,7 @@ async def _attach_user_attachments(messages: list[dict]) -> None:
         m["user_attachments"] = by_msg[m["id"]]
 
 
-async def _attach_workflow_attachments(messages: list[dict]) -> None:
+async def _attach_workflow_attachments(messages: list[MessageWithAttachments]) -> None:
     if not messages:
         return
     ids = [m["id"] for m in messages]
@@ -74,12 +114,12 @@ async def _attach_workflow_attachments(messages: list[dict]) -> None:
         m["workflow_attachments"] = by_msg[m["id"]]
 
 
-async def _attach_attachments(messages: list[dict]) -> None:
+async def _attach_attachments(messages: list[MessageWithAttachments]) -> None:
     await _attach_user_attachments(messages)
     await _attach_workflow_attachments(messages)
 
 
-async def get_messages(cid: str) -> list[dict]:
+async def get_messages(cid: str) -> list[MessageWithAttachments]:
     """Get active path messages (root→leaf) for LLM prompt construction."""
     conv = await get_conversation(cid)
     if not conv:
@@ -92,7 +132,7 @@ async def get_messages(cid: str) -> list[dict]:
     return messages
 
 
-async def get_messages_before(cid: str, message_id: int) -> list[dict]:
+async def get_messages_before(cid: str, message_id: int) -> list[MessageWithAttachments]:
     """Return active-path messages strictly before ``message_id``.
 
     The result is shaped to pass through ``format_message_with_attachments``
@@ -119,7 +159,7 @@ async def get_messages_before(cid: str, message_id: int) -> list[dict]:
     return messages
 
 
-async def get_messages_with_branch_info(cid: str) -> list[dict]:
+async def get_messages_with_branch_info(cid: str) -> list[MessageWithAttachments]:
     """Get active path messages with branch navigation metadata for the frontend."""
     messages = await get_messages(cid)
     if not messages:
@@ -150,13 +190,36 @@ async def get_messages_with_branch_info(cid: str) -> list[dict]:
     return messages
 
 
+def user_attachment_payloads(msg: Mapping[str, Any]) -> list[dict] | None:
+    """Map a loaded message's ``user_attachments`` into ``add_message`` payloads.
+
+    Conversation-fork flows (Compress History, Checkpoint) re-append messages
+    onto a copy and must carry the user uploads while dropping regenerable
+    workflow attachments. Returns ``None`` when there are no uploads, matching
+    ``add_message``'s ``attachments`` default so the result passes straight
+    through.
+    """
+    atts = msg.get("user_attachments") or []
+    if not atts:
+        return None
+    return [
+        {
+            "mime_type": a.get("mime_type"),
+            "data_b64": a.get("data_b64"),
+            "filename": a.get("filename"),
+            "size": a.get("size"),
+        }
+        for a in atts
+    ]
+
+
 async def add_message(
     cid: str,
     role: str,
     content: str,
     turn_index: int,
     parent_id: int | None = None,
-    attachments: Optional[List[dict]] = None,
+    attachments: Optional[Sequence[Mapping[str, Any]]] = None,
     progressive_fields: dict | None = None,
 ) -> tuple[int, list[dict]]:
     """Add a message. Returns ``(message_id, rejected_workflow_atts)``.
@@ -182,12 +245,15 @@ async def add_message(
       'seed', and 'generation_metadata'. Lands in `workflow_attachments`
       through the cache module's batch entry point.
     """
+    # workflow atts are materialized into a fresh list[dict] the cache writer
+    # owns and mutates (it tags rejects with a 'reason' and shallow-copies); the
+    # read-only user atts stay as the caller's mappings.
     workflow_atts: list[dict] = []
-    user_atts: list[dict] = []
+    user_atts: list[Mapping[str, Any]] = []
     for att in attachments or []:
         src = att.get("source")
         if isinstance(src, str) and src.startswith("workflow:"):
-            workflow_atts.append(att)
+            workflow_atts.append(dict(att))
         else:
             user_atts.append(att)
 
@@ -230,19 +296,23 @@ async def add_message(
                     now,
                 ),
             )
-        # Lazy import: the database package must not depend on
-        # workflows at import time (would invert the layering).
+        # Persist workflow attachments through the registered persister
+        # (see register_workflow_attachment_persister) so the database layer
+        # never imports up into backend.workflows.
         if workflow_atts:
-            from backend.workflows.attachment_cache import insert_workflow_attachments
-
-            _, rejected_workflow_atts = await insert_workflow_attachments(message_id, workflow_atts, db=db)
+            if _workflow_attachment_persister is None:
+                raise RuntimeError(
+                    "workflow attachments supplied to add_message but no persister is "
+                    "registered -- import backend.workflows before producing them"
+                )
+            _, rejected_workflow_atts = await _workflow_attachment_persister(message_id, workflow_atts, db=db)
         await db.execute("UPDATE conversations SET updated_at = ? WHERE id = ?", (now, cid))
         await db.commit()
 
     return message_id, rejected_workflow_atts
 
 
-async def get_user_attachments_for_message(message_id: int) -> List[dict]:
+async def get_user_attachments_for_message(message_id: int) -> List[UserAttachmentRow]:
     async with get_db() as db:
         rows = list(
             await db.execute_fetchall(
@@ -251,10 +321,10 @@ async def get_user_attachments_for_message(message_id: int) -> List[dict]:
                 (message_id,),
             )
         )
-        return [dict(r) for r in rows]
+        return [cast(UserAttachmentRow, dict(r)) for r in rows]
 
 
-async def get_workflow_attachments_for_message(message_id: int) -> List[dict]:
+async def get_workflow_attachments_for_message(message_id: int) -> List[WorkflowAttachmentRowBase]:
     async with get_db() as db:
         rows = list(
             await db.execute_fetchall(
@@ -265,7 +335,7 @@ async def get_workflow_attachments_for_message(message_id: int) -> List[dict]:
                 (message_id,),
             )
         )
-        return [dict(r) for r in rows]
+        return [cast(WorkflowAttachmentRowBase, dict(r)) for r in rows]
 
 
 async def update_message_content(msg_id: int, content: str) -> None:
@@ -275,11 +345,16 @@ async def update_message_content(msg_id: int, content: str) -> None:
         await db.commit()
 
 
-async def get_message_by_id(msg_id: int) -> dict | None:
-    """Fetch a single message by its primary key."""
+async def get_message_by_id(msg_id: int) -> MessageRow | None:
+    """Fetch a single message by its primary key.
+
+    NOTE: unlike get_path_to_leaf(), this does not JSON-decode
+    ``progressive_fields``; it stays the raw string at runtime even though
+    ``MessageRow`` types it as the decoded dict. See MessageRow's docstring.
+    """
     async with get_db() as db:
         rows = list(await db.execute_fetchall("SELECT * FROM messages WHERE id = ?", (msg_id,)))
-        return dict(rows[0]) if rows else None
+        return cast(MessageRow, dict(rows[0])) if rows else None
 
 
 async def set_active_leaf(cid: str, leaf_id: int | None):
@@ -349,11 +424,11 @@ async def set_workflow_message_state(message_id: int, workflow_id: str, payload:
     missing (UPDATE matches zero rows).
 
     Read-modify-write callers must hold
-    ``backend.locks.workflow_state_lock(conversation_id, workflow_id)`` (the
+    ``backend.core.locks.workflow_state_lock(conversation_id, workflow_id)`` (the
     message's owning conversation) across the read-then-write the payload was
     computed from, or a concurrent caller can clobber the read between read
-    and write. Acquisition sites: ``backend.main.api_trigger_workflow`` and
-    the pre/post pipeline hook loops in ``backend.orchestrator``. The blind
+    and write. Acquisition sites: ``backend.api.routes.workflows.api_trigger_workflow`` and
+    the pre/post pipeline hook loops in ``backend.pipeline.workflow_bridge``. The blind
     first write from ``_persist_result`` to a just-minted assistant message
     is exempt: that row is not yet the active leaf and no other caller can
     name its id, so there is nothing to serialize against.
@@ -361,9 +436,7 @@ async def set_workflow_message_state(message_id: int, workflow_id: str, payload:
     async with get_db() as db:
         if payload is None:
             await db.execute(
-                "UPDATE messages "
-                "SET workflow_state = json_remove(COALESCE(workflow_state, '{}'), '$.' || ?) "
-                "WHERE id = ?",
+                "UPDATE messages SET workflow_state = json_remove(COALESCE(workflow_state, '{}'), '$.' || ?) WHERE id = ?",
                 (workflow_id, message_id),
             )
         else:

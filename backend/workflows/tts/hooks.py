@@ -20,14 +20,13 @@ from __future__ import annotations
 import base64
 import logging
 
-from backend.workflows.toolkit import (
+from ..toolkit import (
     get_message_by_id,
     get_workflow_character_state,
     get_workflow_config,
     insert_workflow_attachment,
     set_workflow_character_state,
 )
-
 from .engine.router import get_adapter, list_backends
 from .synth import (
     audio_mime_ext,

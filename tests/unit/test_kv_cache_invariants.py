@@ -43,15 +43,21 @@ from typing import Any
 
 import pytest
 
-from backend.kv_tracker import (
-    _KVCacheTracker,
+from backend.inference import (
+    AbortToken,
+    CachedBase,
+    build_direct_scene_tool,
+    build_feedback_tool,
+    enabled_schemas,
+)
+from backend.inference.kv_tracker import (
     _common_prefix_len,
+    _KVCacheTracker,
     _serialize_messages,
     _serialize_tools,
 )
-from backend.orchestrator import _run_pipeline
-from backend.passes.editor.editor import editor_pass
-from backend.tool_defs import build_direct_scene_tool
+from backend.pipeline.orchestrator import _run_pipeline
+from backend.pipeline.passes.editor.editor import editor_pass
 
 
 def _wire_tools(tools: Any) -> str:
@@ -78,7 +84,7 @@ _WRITER_DRAFT = (
     "and somewhere far off a bell begins to toll its slow uneven warning."
 )
 
-_DIRECTOR_FRAGMENTS = [
+_INTERACTIVE_FRAGMENTS = [
     {
         "id": "pacing",
         "field_type": "string",
@@ -112,7 +118,8 @@ class CapturingClient:
     def __init__(self, model: str) -> None:
         self.model = model
         self.calls: list[dict] = []
-        self._abort = False
+        # The turn's clients share one abort token, mirroring LLMClient.
+        self.abort_token = AbortToken()
         # FIFO of editor tool-call messages to return, one per ReAct iteration.
         # Empty → the editor returns no tool call and the loop stops.
         self._editor_queue: list[dict] = []
@@ -137,12 +144,33 @@ class CapturingClient:
             }
         )
 
+    def enqueue_editor_rewrite(self, text: str) -> None:
+        """Queue an ``editor_rewrite`` call returning *text* as the new draft.
+        Used to drive the rewrite branch of the ReAct loop (length guard /
+        structural rewrite), which is where the tool list used to be narrowed."""
+        self._editor_queue.append(
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": f"r{len(self._editor_queue)}",
+                        "type": "function",
+                        "function": {
+                            "name": "editor_rewrite",
+                            "arguments": json.dumps({"rewritten_text": text}),
+                        },
+                    }
+                ],
+            }
+        )
+
     @property
     def is_aborted(self) -> bool:
-        return self._abort
+        return self.abort_token.is_aborted
 
     def abort(self) -> None:
-        self._abort = True
+        self.abort_token.abort()
 
     def _label(self, tool_choice: Any) -> str:
         if tool_choice in (None, "none"):
@@ -151,6 +179,8 @@ class CapturingClient:
             name = tool_choice.get("function", {}).get("name", "")
             if name in ("editor_apply_patch", "editor_rewrite"):
                 return "editor"
+            if name == "give_feedback":
+                return "feedback"
             if name in ("direct_scene", "rewrite_user_prompt"):
                 return f"director:{name}"
             return name or "editor"
@@ -175,13 +205,33 @@ class CapturingClient:
 
         if label == "writer":
             yield {"type": "content", "delta": _WRITER_DRAFT}
-            yield {"type": "done", "message": {"role": "assistant", "content": _WRITER_DRAFT}}
+            yield {
+                "type": "done",
+                "message": {"role": "assistant", "content": _WRITER_DRAFT},
+            }
             return
 
         if label == "editor":
             # Pop the next queued patch; empty queue → no tool call → loop stops.
             msg = self._editor_queue.pop(0) if self._editor_queue else {"role": "assistant", "content": "", "tool_calls": []}
             yield {"type": "done", "message": msg}
+            return
+
+        if label == "feedback":
+            yield {
+                "type": "done",
+                "message": {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "f1",
+                            "type": "function",
+                            "function": {"name": "give_feedback", "arguments": '{"next_actions": "Ask her name."}'},
+                        }
+                    ],
+                },
+            }
             return
 
         # director:* — return a well-formed forced call so the parse path runs.
@@ -192,7 +242,13 @@ class CapturingClient:
             "message": {
                 "role": "assistant",
                 "content": "",
-                "tool_calls": [{"id": "c1", "type": "function", "function": {"name": name, "arguments": args}}],
+                "tool_calls": [
+                    {
+                        "id": "c1",
+                        "type": "function",
+                        "function": {"name": name, "arguments": args},
+                    }
+                ],
             },
         }
 
@@ -209,8 +265,9 @@ def _base_settings(**overrides) -> dict:
     settings = {
         "model_name": "writer-model",
         "enable_agent": 1,
-        "enabled_tools": {"direct_scene": True, "editor_apply_patch": True, "length_guard": True},
+        "enabled_tools": {"direct_scene": True, "editor_apply_patch": True},
         "reasoning_enabled_passes": {},
+        "length_guard_enabled": 1,
         "length_guard_max_words": 5,  # tiny, so _WRITER_DRAFT always trips the guard
         "length_guard_max_paragraphs": 1,
     }
@@ -226,18 +283,28 @@ async def _run_turn(
     client: CapturingClient,
     agent_client: CapturingClient | None = None,
     agent_prefix: list[dict] | None = None,
+    feedback_fragments: list[dict] | None = None,
 ) -> tuple[_KVCacheTracker, CapturingClient, CapturingClient | None]:
     tracker = _KVCacheTracker(conversation_id=conversation_id)
     director = {"active_moods": [], "progressive_fields": {}}
     enabled_tools = dict(settings["enabled_tools"])
-    schema_overrides = {"direct_scene": build_direct_scene_tool(_DIRECTOR_FRAGMENTS)}
+    # Writer-only fragments shape direct_scene; feedback fragments are passed in
+    # alongside them so _run_pipeline's split sees both. The caller mirrors what
+    # _prepare_turn does in production: when feedback is enabled the give_feedback
+    # schema rides the shared blob (schema_overrides) and its enable bit is set.
+    feedback_fragments = feedback_fragments or []
+    interactive_fragments = [*_INTERACTIVE_FRAGMENTS, *feedback_fragments]
+    schema_overrides = {"direct_scene": build_direct_scene_tool(_INTERACTIVE_FRAGMENTS)}
+    if bool(settings.get("feedback_enabled", 0)) and feedback_fragments:
+        schema_overrides["give_feedback"] = build_feedback_tool(feedback_fragments)
+        enabled_tools["give_feedback"] = True
 
     gen = _run_pipeline(
         client,
         settings,
         director,
         [],  # mood_fragments
-        _DIRECTOR_FRAGMENTS,
+        interactive_fragments,
         "I draw my sword.",
         phrase_bank=[],  # not None → audit_enabled path is live
         agent_client=agent_client,
@@ -305,8 +372,8 @@ def test_direct_scene_schema_is_deterministic_and_dynamic():
     or moves the fixed props relative to the dynamic ones, the wire bytes drift
     turn-over-turn and the cross-turn cache busts — invisibly to the tracker's
     ``sort_keys`` view. Comparing wire-faithful bytes here makes that ring."""
-    a = build_direct_scene_tool(_DIRECTOR_FRAGMENTS)
-    b = build_direct_scene_tool(list(_DIRECTOR_FRAGMENTS))  # same content, fresh list
+    a = build_direct_scene_tool(_INTERACTIVE_FRAGMENTS)
+    b = build_direct_scene_tool(list(_INTERACTIVE_FRAGMENTS))  # same content, fresh list
     assert _wire_tools([a]) == _wire_tools([b]), (
         "build_direct_scene_tool is not byte-stable for identical input — the "
         "director's tool schema will drift across turns and bust the cache."
@@ -371,8 +438,120 @@ async def test_single_model_prefix_and_tools_are_byte_identical_across_passes():
     )
 
 
+_FEEDBACK_FRAGMENT = {
+    "id": "next_actions",
+    "field_type": "feedback",
+    "description": "Suggested next actions for the player",
+    "injection_label": "Next actions",
+    "sort_order": 0,
+    "required": False,
+    "enabled": True,
+}
+
+
+async def test_feedback_step_reuses_shared_blob_no_cache_bust():
+    """The post-writer feedback step must NOT diverge the tools blob: with feedback
+    enabled, ``give_feedback`` rides the shared per-turn blob (Invariant 3) and the
+    feedback call reuses the same cached base as the director/writer/editor. Its
+    wire tools bytes must therefore equal every other pass's — no blob swap, no
+    deliberate cache miss (the old TOFIX)."""
+    prefix = _make_prefix("You are a vivid roleplay narrator.", n_pairs=4)
+    tracker, client, _ = await _run_turn(
+        prefix=prefix,
+        settings=_base_settings(feedback_enabled=1),
+        conversation_id="conv-feedback-kv",
+        client=CapturingClient("writer-model"),
+        feedback_fragments=[_FEEDBACK_FRAGMENT],
+    )
+
+    _reconcile_tracker_with_client(tracker, client)
+
+    entries = {e["label"]: e for e in tracker._entries}
+    assert "feedback" in entries, "feedback step did not fire (feedback_enabled + fragment present)"
+
+    # Inv-3 with give_feedback present: ONE tools blob across director, writer,
+    # editor AND feedback. The feedback call no longer swaps the blob.
+    wire = _wire_tools_by_label(client)
+    all_blobs = {b for blobs in wire.values() for b in blobs}
+    assert len(all_blobs) == 1, (
+        "CACHE BUST: the feedback step diverged the tools blob — it must reuse the "
+        "shared cached base, not swap in a give_feedback-only blob. Distinct blob "
+        "sizes: " + json.dumps(sorted(len(b) for b in all_blobs))
+    )
+
+    # The single shared blob actually carries give_feedback (rides the blob, not a swap).
+    the_blob = next(iter(all_blobs))
+    assert '"give_feedback"' in the_blob, "give_feedback schema is missing from the shared tools blob"
+
+    # Explicit cross-pass equality: feedback's blob == writer's blob == editor's.
+    assert wire["feedback"] == wire["writer"] == wire["editor"], (
+        "feedback/writer/editor tools blobs differ — the feedback step is not reusing the frozen shared base."
+    )
+
+    # Message-stack guard — the half a tools-only check misses. The feedback call
+    # must EXTEND the writer/editor stack, not fork off base.prefix with a fresh
+    # single message: it replays writer_user_msg + reply before its request, so
+    # the writer's full message stack is a prefix of feedback's. Forking (the old
+    # behaviour) collapsed the provider cache to just the system+tools block.
+    prefix_bytes = _serialize_messages(prefix)
+    fb_msgs = entries["feedback"]["msgs_serialized"]
+    writer_msgs = entries["writer"]["msgs_serialized"]
+    assert len(writer_msgs) > len(prefix_bytes), "writer stack should include the current-turn user message"
+    assert fb_msgs.startswith(writer_msgs), (
+        "CACHE BUST: the feedback step forked the message stack instead of extending "
+        "the writer's — it must replay writer_user_msg + reply so it reuses "
+        "prefix + current-turn exchange, not just base.prefix. Shared only "
+        f"{_common_prefix_len(writer_msgs, fb_msgs)}/{len(writer_msgs)}c with the writer."
+    )
+
+
+async def test_dual_model_feedback_rides_agent_lane_writer_stays_empty():
+    """Dual-model with feedback on: Invariant 5 must hold — the writer drops all
+    tools — while give_feedback rides only the agent lane, where the feedback
+    step actually runs. The feedback call must reuse the agent base (same blob as
+    the editor), never the empty writer base."""
+    writer_prefix = _make_prefix("You are a narrator.", n_pairs=3)
+    agent_prefix = _make_prefix("AGENT system prompt — distinct from the writer's.", n_pairs=3)
+
+    settings = _base_settings(
+        model_name="writer-model",
+        agent_same_as_writer=False,
+        agent_model_name="agent-model",
+        feedback_enabled=1,
+    )
+    tracker, client, agent_client = await _run_turn(
+        prefix=writer_prefix,
+        settings=settings,
+        conversation_id="conv-dual-feedback",
+        client=CapturingClient("writer-model"),
+        agent_client=CapturingClient("agent-model"),
+        agent_prefix=agent_prefix,
+        feedback_fragments=[_FEEDBACK_FRAGMENT],
+    )
+
+    _reconcile_tracker_with_client(tracker, client, agent_client)
+
+    # Invariant 5 — the writer (its own server) ships no tools even with feedback on.
+    writer_wire = _wire_tools_by_label(client)
+    assert writer_wire.get("writer") == {""}, "Inv-5 broken: the writer's tools blob is non-empty in dual-model."
+
+    # The feedback step ran on the AGENT client, not the writer client.
+    assert "feedback" not in writer_wire, "feedback must not run on the writer lane in dual-model."
+    agent_wire = _wire_tools_by_label(agent_client)
+    assert "feedback" in agent_wire, "feedback step did not run on the agent lane."
+
+    # give_feedback rides only the agent lane, and the feedback call reuses the
+    # agent base verbatim (same blob as the editor — no swap, no cache miss).
+    agent_blobs = {b for blobs in agent_wire.values() for b in blobs}
+    assert len(agent_blobs) == 1, "agent-lane passes must share one tools blob (feedback included)."
+    assert '"give_feedback"' in next(iter(agent_blobs)), "give_feedback missing from the agent-lane blob."
+    assert agent_wire["feedback"] == agent_wire["editor"], "feedback diverged from the agent base."
+
+
 @pytest.mark.parametrize("system_prompt", ["You are a narrator.", "ANOTHER totally different system body."])
-async def test_dual_model_agent_passes_share_agent_prefix_and_writer_drops_tools(system_prompt):
+async def test_dual_model_agent_passes_share_agent_prefix_and_writer_drops_tools(
+    system_prompt,
+):
     """Dual-model: director+editor run on the agent server and must share the
     agent prefix + a byte-identical tools blob; the writer runs on its own
     server and must send NO tools (Inv-5)."""
@@ -401,9 +580,9 @@ async def test_dual_model_agent_passes_share_agent_prefix_and_writer_drops_tools
 
     # Agent passes (director + editor) ride the agent prefix.
     for label in ("director:direct_scene", "editor"):
-        assert entries[label]["msgs_serialized"].startswith(
-            agent_prefix_bytes
-        ), f"CACHE BUST: agent pass {label!r} does not start with the agent prefix."
+        assert entries[label]["msgs_serialized"].startswith(agent_prefix_bytes), (
+            f"CACHE BUST: agent pass {label!r} does not start with the agent prefix."
+        )
 
     # Writer rides its own prefix and ships NO tools (Inv-5).
     assert entries["writer"]["msgs_serialized"].startswith(writer_prefix_bytes)
@@ -419,7 +598,7 @@ async def test_dual_model_agent_passes_share_agent_prefix_and_writer_drops_tools
     director_blobs = wire["director:direct_scene"]
     editor_blobs = wire["editor"]
     assert director_blobs == editor_blobs and len(director_blobs) == 1, (
-        "CACHE BUST: Director and Editor (both on the agent server) no longer " "share a byte-identical tools blob."
+        "CACHE BUST: Director and Editor (both on the agent server) no longer share a byte-identical tools blob."
     )
     assert next(iter(editor_blobs)), "agent passes should carry a non-empty tools blob"
     # Writer (other server) genuinely sends no tools.
@@ -508,21 +687,24 @@ async def test_editor_react_iterations_preserve_cached_bottom(reasoning_on):
         client.enqueue_editor_patch(f"{lead} shiver ran down her spine.", f"{lead} hall stayed silent.")
 
     settings = {"model_name": "editor-model", "editor_audit_toggles": None}
+    base = CachedBase(
+        prefix=tuple(prefix),
+        tools=tuple(enabled_schemas({"editor_apply_patch": True}, {})),
+        model="editor-model",
+    )
     async for _ in editor_pass(
         client,
-        prefix,
+        base,
         "I strike the anvil.",
         draft,
         settings,
         phrase_bank,
-        {"editor_apply_patch": True},
         audit_enabled=True,
         length_guard=None,
         kv_tracker=None,
         reasoning_on=reasoning_on,
         audit_context_msgs=[],
         writer_user_msg=writer_user,
-        schema_overrides={},
     ):
         pass
 
@@ -540,6 +722,16 @@ async def test_editor_react_iterations_preserve_cached_bottom(reasoning_on):
             "prefix is re-billed on every editor round."
         )
 
+    # Inv-3 across iterations — the tools blob must stay byte-identical every
+    # round. The schema list lives in the cached prefix; narrowing it mid-loop
+    # would re-bill the tools region each iteration. (This particular path never
+    # narrows, but the assertion documents the invariant cheaply; the rewrite
+    # path is covered by test_editor_tools_blob_constant_across_tool_switch.)
+    iter_blobs = {c["tools_wire"] for c in editor_calls}
+    assert len(iter_blobs) == 1, "CACHE BUST: editor tools blob changed between iterations. " + json.dumps(
+        sorted(len(b) for b in iter_blobs)
+    )
+
     if reasoning_on:
         # Append-only: every iteration extends the previous prompt verbatim, so
         # even the writer's draft pancake stays cached (the doc §7 ideal).
@@ -555,3 +747,82 @@ async def test_editor_react_iterations_preserve_cached_bottom(reasoning_on):
             "flat-mode editor changed its message count between iterations — it must "
             "rewrite the top two pancakes in place, not grow or rebuild the list."
         )
+
+
+async def test_editor_tools_blob_constant_across_tool_switch():
+    """Inv-3 regression: when the ReAct loop switches which tool it forces
+    (rewrite on one iteration, patch on the next), the tools *blob* must NOT
+    change — only ``tool_choice`` may. The loop used to narrow ``editor_tools``
+    to a single-tool list when changing tools mid-flight, shrinking the schema
+    blob (e.g. 3 tools → 1) and re-billing the tools region every iteration.
+
+    This drives that exact path: a 3-tool enabled set, a length-guard-forced
+    rewrite on iteration 1 whose result still carries a banned phrase, so the
+    loop continues to iteration 2 now forcing ``editor_apply_patch``. Before the
+    fix the two iterations shipped different-sized blobs; this asserts they don't.
+    """
+    prefix = _make_prefix("You are the editor's bench.", n_pairs=2)
+    writer_user = "I strike the anvil."
+    banned = "shiver ran down her spine"
+    # Long enough to trip the (tiny) length guard, and banned-phrase-laden so the
+    # initial audit has issues too.
+    draft = " ".join([f"The {banned}."] * 6)
+    phrase_bank = [[banned]]
+
+    client = CapturingClient("editor-model")
+    # Iteration 1 is force-rewrite (length guard). Return a rewrite that clears
+    # the word limit but still repeats the banned phrase, so audit issues remain
+    # and the loop advances to a patch-forced iteration 2 (queue then empty → stop).
+    client.enqueue_editor_rewrite(" ".join([f"A {banned}."] * 4))
+
+    settings = {"model_name": "editor-model", "editor_audit_toggles": None}
+    length_guard = {"enforce": False, "max_words": 5, "max_paragraphs": 1}
+    # 3-tool enabled set so a narrow-to-one would be visible as a byte change.
+    base = CachedBase(
+        prefix=tuple(prefix),
+        tools=tuple(
+            enabled_schemas(
+                {
+                    "direct_scene": True,
+                    "editor_apply_patch": True,
+                    "editor_rewrite": True,
+                },
+                {},
+            )
+        ),
+        model="editor-model",
+    )
+    async for _ in editor_pass(
+        client,
+        base,
+        writer_user,
+        draft,
+        settings,
+        phrase_bank,
+        audit_enabled=True,
+        length_guard=length_guard,
+        kv_tracker=None,
+        reasoning_on=False,
+        audit_context_msgs=[],
+        writer_user_msg=writer_user,
+    ):
+        pass
+
+    editor_calls = [c for c in client.calls if c["label"] == "editor"]
+    assert len(editor_calls) >= 2, f"expected ≥2 editor iterations (rewrite then patch), got {len(editor_calls)}"
+
+    # The forced tool changed across iterations — but the blob must be constant.
+    blobs = {c["tools_wire"] for c in editor_calls}
+    assert len(blobs) == 1, (
+        "CACHE BUST: the editor narrowed its tools blob when switching the forced "
+        "tool mid-loop. Tool selection must go through tool_choice alone; the "
+        "schema list must stay byte-identical. Distinct blob sizes: " + json.dumps(sorted(len(b) for b in blobs))
+    )
+    # And it must genuinely be the full 3-tool set, not a coincidental match.
+    full_blob = _wire_tools(
+        enabled_schemas(
+            {"direct_scene": True, "editor_apply_patch": True, "editor_rewrite": True},
+            {},
+        )
+    )
+    assert next(iter(blobs)) == full_blob, "editor shipped a tools blob that is not the full enabled set"

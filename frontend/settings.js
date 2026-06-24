@@ -1,9 +1,43 @@
+// Settings entrypoint. Endpoint/model configuration and persona management were
+// split into settings_models.js and settings_personas.js; this file keeps the
+// theme picker, the loadSettings orchestrator, the agent tools panel, the phrase
+// bank, and reset-to-defaults, and re-exports the two sub-modules so existing
+// importers (app.js, workflow_loader.js) keep working unchanged.
 import { api } from "./api.js";
-import { renderMessages } from "./chat.js";
+import { renderInspectorSecondary, renderMessages } from "./chat.js";
+import { renderInteractiveFragments } from "./library_fragments.js";
 import { closeModal, showConfirmModal, showModal } from "./modal.js";
-import { S } from "./state.js";
+import { initComboboxes, loadAgentModelConfigs, loadEndpoints, renderEndpoints } from "./settings_models.js";
+import { loadPersonas, updateUserBtn } from "./settings_personas.js";
+import { S, effectiveWorkflowEnabled } from "./state.js";
 import { $, esc, toast } from "./utils.js";
 import { validate } from "./validate.js";
+
+// Re-export the sub-module public surfaces so "./settings.js" remains the stable
+// import path for endpoint/model and persona functions.
+export {
+  loadAgentModelConfigs,
+  loadEndpoints,
+  loadModelConfigs,
+  onHybridInput,
+  renderEndpoints,
+  saveAgentSetting,
+  saveSetting,
+  toggleAgentSameAsWriter,
+} from "./settings_models.js";
+export {
+  activatePersona,
+  deletePersona,
+  editPersona,
+  loadPersonas,
+  savePersona,
+  saveUserProfile,
+  setPersonaCharacterLock,
+  setPersonaConversationLock,
+  showPersonaEditModal,
+  showUserModal,
+  updateUserBtn,
+} from "./settings_personas.js";
 
 // ── Theme
 let _themes = null;
@@ -33,77 +67,6 @@ export async function initThemeList() {
 }
 
 // ── Settings
-const MODEL_HYPERPARAM_KEYS = [
-  "shared_system_prompt",
-  "system_prompt",
-  "temperature",
-  "max_tokens",
-  "top_p",
-  "min_p",
-  "top_k",
-  "repetition_penalty",
-];
-
-const SETTING_FIELDS = [
-  { k: "endpoint_url", l: "Endpoint URL", t: "text" },
-  { k: "api_key", l: "API Key", t: "api_key" },
-  { k: "model_name", l: "Model Name", t: "text" },
-  { k: "shared_system_prompt", l: "System Prompt (global)", t: "textarea" },
-  { k: "system_prompt", l: "System Prompt (model)", t: "textarea" },
-  { k: "temperature", l: "Temperature", t: "number", s: "0.05", mn: "0", mx: "2" },
-  { k: "max_tokens", l: "Max Tokens", t: "number", s: "64", mn: "64", mx: "8192" },
-  { k: "top_p", l: "Top P", t: "number", s: "0.05", mn: "0", mx: "1" },
-  { k: "min_p", l: "Min P", t: "number", s: "0.01", mn: "0", mx: "1" },
-  { k: "top_k", l: "Top K", t: "number", s: "1", mn: "0", mx: "200" },
-  { k: "repetition_penalty", l: "Rep. Penalty", t: "number", s: "0.05", mn: "1", mx: "2" },
-];
-
-const AGENT_MODEL_HYPERPARAM_KEYS = [
-  "agent_shared_system_prompt",
-  "agent_temperature",
-  "agent_top_p",
-  "agent_repetition_penalty",
-];
-
-const AGENT_SETTING_FIELDS = [
-  { k: "agent_endpoint_url", l: "Agent Endpoint URL", t: "text" },
-  { k: "agent_api_key", l: "Agent API Key", t: "api_key" },
-  { k: "agent_model_name", l: "Agent Model Name", t: "text" },
-  { k: "agent_shared_system_prompt", l: "Agent System Prompt (global)", t: "textarea" },
-  { k: "agent_temperature", l: "Agent Temperature", t: "number", s: "0.05", mn: "0", mx: "2" },
-  { k: "agent_top_p", l: "Agent Top P", t: "number", s: "0.05", mn: "0", mx: "1" },
-  { k: "agent_repetition_penalty", l: "Agent Rep. Penalty", t: "number", s: "0.05", mn: "1", mx: "2" },
-];
-
-// Descriptor objects that parameterise all writer vs. agent differences.
-const WRITER_CTX = {
-  role: "writer",
-  configsKey: "modelConfigs",
-  endpointIdKey: "activeEndpointId",
-  configIdKey: "activeModelConfigId",
-  urlField: "endpoint_url",
-  apiKeyField: "api_key",
-  modelField: "model_name",
-  activeConfigDbField: "active_model_config_id",
-  settingsEndpointField: "active_endpoint_id",
-  hyperparamKeys: MODEL_HYPERPARAM_KEYS,
-  hyperparamPrefix: "",
-};
-
-const AGENT_CTX = {
-  role: "agent",
-  configsKey: "agentModelConfigs",
-  endpointIdKey: "agentEndpointId",
-  configIdKey: "agentModelConfigId",
-  urlField: "agent_endpoint_url",
-  apiKeyField: "agent_api_key",
-  modelField: "agent_model_name",
-  activeConfigDbField: "agent_active_model_config_id",
-  settingsEndpointField: "agent_endpoint_id",
-  hyperparamKeys: AGENT_MODEL_HYPERPARAM_KEYS,
-  hyperparamPrefix: "agent_",
-};
-
 export async function loadSettings() {
   S.settings = await api.get("/settings");
   S.activePersonaId = S.settings.active_persona_id || null;
@@ -112,17 +75,19 @@ export async function loadSettings() {
   if (S.settings.enabled_tools) S.enabledTools = { ...S.enabledTools, ...S.settings.enabled_tools };
   if (typeof S.settings.enable_agent === "number") S.agentEnabled = S.settings.enable_agent !== 0;
 
-  if (S.settings.enabled_tools && "length_guard" in S.settings.enabled_tools) {
-    S.lengthGuardEnabled = Boolean(S.settings.enabled_tools.length_guard);
-  } else {
-    S.lengthGuardEnabled = false;
-  }
+  // Length guard is a feature flag, not a tool — its own settings columns, not enabled_tools.
+  S.lengthGuardEnabled = Boolean(S.settings.length_guard_enabled);
+  S.lengthGuardEnforce = Boolean(S.settings.length_guard_enforce);
 
-  if (S.settings.enabled_tools && "length_guard_enforce" in S.settings.enabled_tools) {
-    S.lengthGuardEnforce = Boolean(S.settings.enabled_tools.length_guard_enforce);
-  } else {
-    S.lengthGuardEnforce = false;
-  }
+  // Agentic Lorebook: a feature flag (not a tool). When on, the Director picks
+  // relevant lorebook entries each turn instead of keyword matching. Depends on
+  // the Director (direct_scene) being enabled.
+  S.agenticLorebookEnabled = Boolean(S.settings.agentic_lorebook_enabled);
+
+  // Editor Feedback: a feature flag (post-writer user-facing note). Gated here
+  // and again by at least one enabled feedback-type interactive fragment server-side.
+  S.feedbackEnabled = Boolean(S.settings.feedback_enabled);
+  S.directorIndividualFragments = Boolean(S.settings.director_individual_fragments);
 
   if (S.settings.length_guard_max_words) S.lengthGuardMaxWords = S.settings.length_guard_max_words;
   if (S.settings.length_guard_max_paragraphs) S.lengthGuardMaxParagraphs = S.settings.length_guard_max_paragraphs;
@@ -181,122 +146,6 @@ export async function loadSettings() {
   updateUserBtn();
 }
 
-export async function toggleAgentSameAsWriter(checked) {
-  S.agentSameAsWriter = checked;
-  try {
-    await api.put("/settings", { agent_same_as_writer: checked });
-  } catch (e) {
-    toast("Failed to save agent toggle", true);
-    return;
-  }
-  const container = document.getElementById("agent-fields");
-  if (container) container.style.display = checked ? "none" : "";
-  if (!checked && S.agentEndpointId) {
-    await _loadConfigs(AGENT_CTX, S.agentEndpointId);
-    initComboboxes();
-    _fillEndpointFields(AGENT_CTX);
-  }
-  updateAgentModelWarning();
-}
-
-export async function loadPersonas() {
-  try {
-    S.personas = await api.get("/user-personas");
-  } catch (e) {
-    console.error("Failed to load personas:", e);
-    S.personas = [];
-  }
-}
-
-export function renderEndpoints() {
-  function renderField(f, isAgent) {
-    const v = S.settings[f.k] ?? "";
-    const saveFn = isAgent ? "saveAgentSetting" : "saveSetting";
-    if (f.t === "textarea") {
-      const rows = f.k === "system_prompt" || f.k === "agent_system_prompt" ? ' rows="2"' : "";
-      return `<div class="field"><label>${f.l}</label>
-                <textarea data-key="${f.k}"${rows} onchange="${saveFn}(this)">${v}</textarea>
-              </div>`;
-    }
-    if (f.t === "api_key") {
-      return `<div class="field"><label>${f.l}</label>
-        <div class="api-key-wrap">
-          <input type="text" class="api-key-input" value="${esc(v)}" data-key="${f.k}" autocomplete="off" onchange="${saveFn}(this)">
-          <button type="button" class="api-key-toggle" onclick="toggleApiKeyVisibility(this)" aria-label="Show/hide API key">
-            <svg class="eye-show" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-            <svg class="eye-hide" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="display:none"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/></svg>
-          </button>
-        </div>
-      </div>`;
-    }
-    if (f.k === "endpoint_url" || f.k === "model_name" || f.k === "agent_endpoint_url" || f.k === "agent_model_name") {
-      const ph =
-        f.k === "endpoint_url" || f.k === "agent_endpoint_url" ? "http://localhost:5000/v1" : "google/gemma-4-31b-it";
-      const warningHtml =
-        f.k === "agent_model_name"
-          ? `<div id="agent-model-match-warning" class="field-warning" style="display:none">Warning: Same endpoint and model as writer detected - this increases cache cost significantly.</div>`
-          : "";
-      return `<div class="field"><label>${f.l}</label>
-        <div class="cb-root" data-combobox="${f.k}">
-          <div class="cb-control">
-            <input type="text" class="cb-input" value="${v}" data-key="${f.k}" placeholder="${ph}" autocomplete="off" onchange="${saveFn}(this)">
-            <span class="cb-arrow"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="2,4 6,8 10,4"/></svg></span>
-          </div>
-          <div class="cb-dropdown" hidden><div class="cb-list"></div></div>
-        </div>
-        ${warningHtml}
-      </div>`;
-    }
-    const attrs = f.s ? `step="${f.s}" min="${f.mn}" max="${f.mx}"` : "";
-    return `<div class="field"><label>${f.l}</label>
-              <input type="${f.t}" value="${v}" data-key="${f.k}" ${attrs} onchange="${saveFn}(this)">
-            </div>`;
-  }
-
-  const agentHidden = S.agentSameAsWriter ? ' style="display:none"' : "";
-
-  $("endpoints-form").innerHTML = `
-    ${SETTING_FIELDS.map((f) => renderField(f, false)).join("")}
-    <div style="display:flex;align-items:center;gap:12px;margin:12px 0 8px"><div style="flex:1;height:1px;background:var(--accent-dim)"></div><span style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--accent-dim)">Agent</span><div style="flex:1;height:1px;background:var(--accent-dim)"></div></div>
-    <div class="tool-card" style="margin-bottom:12px">
-      <div class="tool-card-header">
-        <span class="tool-card-name">Same as Writer</span>
-        <label class="tog" onclick="event.stopPropagation()">
-          <input type="checkbox" ${S.agentSameAsWriter ? "checked" : ""} onchange="toggleAgentSameAsWriter(this.checked)">
-          <span class="tog-slider"></span>
-        </label>
-      </div>
-      <div class="tool-card-desc">Use the same endpoint and model for Agent passes as the Writer.</div>
-    </div>
-    <div id="agent-fields"${agentHidden}>
-      ${AGENT_SETTING_FIELDS.map((f) => renderField(f, true)).join("")}
-    </div>
-  `;
-  initComboboxes();
-  updateAgentModelWarning();
-}
-
-function updateAgentModelWarning() {
-  const el = document.getElementById("agent-model-match-warning");
-  if (!el) return;
-  if (S.agentSameAsWriter) {
-    el.style.display = "none";
-    return;
-  }
-  const writerUrlEl = document.querySelector('[data-key="endpoint_url"]');
-  const writerModelEl = document.querySelector('[data-key="model_name"]');
-  const agentUrlEl = document.querySelector('[data-key="agent_endpoint_url"]');
-  const agentModelEl = document.querySelector('[data-key="agent_model_name"]');
-  if (!writerUrlEl || !writerModelEl || !agentUrlEl || !agentModelEl) return;
-  const writerUrl = writerUrlEl.value.trim();
-  const writerModel = writerModelEl.value.trim();
-  const agentUrl = agentUrlEl.value.trim();
-  const agentModel = agentModelEl.value.trim();
-  const same =
-    writerUrl && agentUrl && writerUrl === agentUrl && writerModel && agentModel && writerModel === agentModel;
-  el.style.display = same ? "" : "none";
-}
-
 export function renderSettings() {
   $("settings-form").innerHTML = `
     <div class="tool-card ${S.hideUntilBaked ? "tool-on" : ""}">
@@ -319,689 +168,12 @@ export function renderSettings() {
       </div>
       <div class="tool-card-desc">Ignore system prompt and post-history instructions from character cards.</div>
     </div>
-    <div class="field" style="margin-top:16px;padding-top:16px;border-top:1px solid var(--accent-dim)">
-      <button class="btn btn-danger" onclick="showResetConfirmModal()" style="width:100%;justify-content:center">Reset to Defaults</button>
+    <div style="display:flex;align-items:center;gap:12px;margin:16px 0 8px"><div style="flex:1;height:1px;background:var(--accent-dim)"></div><span style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--accent-dim)">Data</span><div style="flex:1;height:1px;background:var(--accent-dim)"></div></div>
+    <div class="field" style="display:flex;flex-direction:column;gap:8px">
+      <button class="btn btn-block btn-sm" onclick="showPresetsModal()">💾 Backup &amp; Presets</button>
+      <button class="btn btn-danger" onclick="showResetConfirmModal()" style="width:100%;justify-content:center">⚠️ Reset to Defaults</button>
     </div>
   `;
-}
-
-// ── Combobox engine
-
-let _comboboxCleanups = [];
-
-function highlightMatch(text, query) {
-  if (!query) return esc(text);
-  const lText = text.toLowerCase();
-  const lQuery = query.toLowerCase();
-  const idx = lText.indexOf(lQuery);
-  if (idx === -1) return esc(text);
-  return (
-    esc(text.slice(0, idx)) +
-    `<mark class="cb-hl">${esc(text.slice(idx, idx + query.length))}</mark>` +
-    esc(text.slice(idx + query.length))
-  );
-}
-
-function initComboboxes() {
-  _comboboxCleanups.forEach((fn) => fn());
-  _comboboxCleanups = [];
-  const epRoot = document.querySelector('[data-combobox="endpoint_url"]');
-  if (epRoot) initCombobox(epRoot, () => S.endpoints.map((e) => ({ value: e.url, id: e.id, type: "endpoint" })), false);
-  const mdRoot = document.querySelector('[data-combobox="model_name"]');
-  if (mdRoot)
-    initCombobox(mdRoot, () => S.modelConfigs.map((m) => ({ value: m.model_name, id: m.id, type: "model" })), false);
-  const agentEpRoot = document.querySelector('[data-combobox="agent_endpoint_url"]');
-  if (agentEpRoot)
-    initCombobox(agentEpRoot, () => S.endpoints.map((e) => ({ value: e.url, id: e.id, type: "endpoint" })), true);
-  const agentMdRoot = document.querySelector('[data-combobox="agent_model_name"]');
-  if (agentMdRoot)
-    initCombobox(
-      agentMdRoot,
-      () => S.agentModelConfigs.map((m) => ({ value: m.model_name, id: m.id, type: "model" })),
-      true,
-    );
-}
-
-// Global delete function for combobox items
-window.deleteComboboxItem = (btn, type, id, isAgent = false) => {
-  const typeName = type === "endpoint" ? "endpoint" : "model configuration";
-  showConfirmModal(
-    {
-      title: `Delete ${typeName}?`,
-      message: `Are you sure you want to delete this ${typeName}? This action cannot be undone.`,
-      confirmText: "Delete",
-      confirmClass: "btn-danger",
-    },
-    async () => {
-      try {
-        let wasActive = false;
-        if (type === "endpoint") {
-          await api.del(`/endpoints/${id}`);
-          const index = S.endpoints.findIndex((e) => e.id === id);
-          if (index > -1) S.endpoints.splice(index, 1);
-          if (isAgent) {
-            if (S.agentEndpointId === id) {
-              S.agentEndpointId = null;
-              S.agentModelConfigId = null;
-              S.agentModelConfigs = [];
-              wasActive = true;
-            }
-          } else {
-            if (S.activeEndpointId === id) {
-              S.activeEndpointId = null;
-              S.activeModelConfigId = null;
-              S.modelConfigs = [];
-              wasActive = true;
-            }
-          }
-        } else if (type === "model") {
-          await api.del(`/models/${id}`);
-          if (isAgent) {
-            const index = S.agentModelConfigs.findIndex((m) => m.id === id);
-            if (index > -1) S.agentModelConfigs.splice(index, 1);
-            if (S.agentModelConfigId === id) {
-              S.agentModelConfigId = null;
-              wasActive = true;
-            }
-          } else {
-            const index = S.modelConfigs.findIndex((m) => m.id === id);
-            if (index > -1) S.modelConfigs.splice(index, 1);
-            if (S.activeModelConfigId === id) {
-              S.activeModelConfigId = null;
-              wasActive = true;
-            }
-          }
-        }
-
-        if (wasActive) {
-          let inputSelector;
-          if (isAgent) {
-            inputSelector = type === "endpoint" ? '[data-key="agent_endpoint_url"]' : '[data-key="agent_model_name"]';
-          } else {
-            inputSelector = type === "endpoint" ? '[data-key="endpoint_url"]' : '[data-key="model_name"]';
-          }
-          const input = document.querySelector(inputSelector);
-          if (input) {
-            input.value = "";
-            input.dispatchEvent(new Event("change", { bubbles: true }));
-          }
-        }
-
-        initComboboxes();
-        populateEndpointDatalist();
-        populateModelDatalist();
-        toast("Deleted");
-      } catch (e) {
-        toast("Failed to delete: " + e.message, true);
-      }
-    },
-  );
-};
-
-function initCombobox(rootEl, getItems, isAgent = false) {
-  const input = rootEl.querySelector(".cb-input");
-  const control = rootEl.querySelector(".cb-control");
-  const dropdown = rootEl.querySelector(".cb-dropdown");
-  const list = rootEl.querySelector(".cb-list");
-  let activeIdx = -1;
-  let isOpen = false;
-
-  function getFiltered() {
-    // Always return all items, no filtering (for creating new records)
-    return getItems();
-  }
-
-  function render() {
-    const items = getFiltered();
-    const total = items.length;
-    activeIdx = Math.max(-1, Math.min(activeIdx, total - 1));
-    const q = input.value.trim();
-    if (!total) {
-      list.innerHTML = '<div class="cb-empty">No saved options</div>';
-    } else {
-      list.innerHTML = items
-        .map((item, i) => {
-          const value = item.value;
-          const id = item.id;
-          const type = item.type;
-          const agentArg = isAgent ? ", true" : "";
-          return `
-              <div class="cb-option${i === activeIdx ? " active" : ""}" data-value="${esc(value)}" data-id="${id}" data-type="${type}">
-                <span class="cb-option-text">${highlightMatch(value, q)}</span>
-                <button class="cb-delete-btn" title="Delete" onclick="event.stopPropagation(); deleteComboboxItem(this, '${type}', ${id}${agentArg})">×</button>
-              </div>`;
-        })
-        .join("");
-    }
-    list.querySelectorAll(".cb-option").forEach((el, i) => {
-      el.addEventListener(
-        "touchstart",
-        (e) => {
-          if (e.target.classList.contains("cb-delete-btn")) return;
-          e.preventDefault();
-          selectVal(el.dataset.value);
-        },
-        { passive: false },
-      );
-      el.onmousedown = (e) => {
-        if (e.target.classList.contains("cb-delete-btn")) return;
-        e.preventDefault();
-        selectVal(el.dataset.value);
-      };
-      el.onmouseenter = () => {
-        activeIdx = i;
-        render();
-      };
-    });
-  }
-
-  function openDropdown() {
-    if (isOpen) return;
-    isOpen = true;
-    activeIdx = -1;
-    control.classList.add("open");
-    dropdown.hidden = false;
-    render(); // Show all options
-  }
-
-  function closeDropdown() {
-    if (!isOpen) return;
-    isOpen = false;
-    control.classList.remove("open");
-    dropdown.hidden = true;
-  }
-
-  async function selectVal(val) {
-    input.value = val;
-    closeDropdown();
-    await onHybridInput(input);
-    input.dispatchEvent(new Event("change", { bubbles: true }));
-  }
-
-  input.addEventListener("keydown", (e) => {
-    // Only handle Escape to close dropdown - mouse-only navigation
-    if (e.key === "Escape") {
-      closeDropdown();
-      return;
-    }
-    // Allow typing, tab navigation, etc. but no arrow key or Enter navigation
-  });
-  control.addEventListener("mousedown", (e) => {
-    // Only toggle when clicking the arrow (cb-arrow), not the input or control background
-    if (!e.target.closest(".cb-arrow")) return;
-    e.preventDefault();
-    // Toggle dropdown
-    if (isOpen) closeDropdown();
-    else openDropdown();
-    // Focus input
-    input.focus();
-  });
-  control.addEventListener(
-    "touchstart",
-    (e) => {
-      if (!e.target.closest(".cb-arrow")) return;
-      e.preventDefault();
-      if (isOpen) closeDropdown();
-      else openDropdown();
-    },
-    { passive: false },
-  );
-  const onDocDown = (e) => {
-    if (!rootEl.contains(e.target)) closeDropdown();
-  };
-  const onDocTouch = (e) => {
-    if (!rootEl.contains(e.target)) closeDropdown();
-  };
-  document.addEventListener("mousedown", onDocDown);
-  document.addEventListener("touchstart", onDocTouch, { passive: true });
-  _comboboxCleanups.push(() => {
-    document.removeEventListener("mousedown", onDocDown);
-    document.removeEventListener("touchstart", onDocTouch);
-  });
-}
-
-// ── Endpoint / Model Config helpers
-
-export async function loadEndpoints() {
-  try {
-    S.endpoints = await api.get("/endpoints");
-    S.activeEndpointId = S.settings.active_endpoint_id || null;
-    // active_model_config_id lives on the endpoint row, not settings
-    const activeEp = S.endpoints.find((e) => e.id === S.activeEndpointId);
-    S.activeModelConfigId = activeEp?.active_model_config_id || null;
-    const agentEp = S.endpoints.find((e) => e.id === S.agentEndpointId);
-    S.agentModelConfigId = agentEp?.agent_active_model_config_id || null;
-    populateEndpointDatalist();
-    if (S.activeEndpointId) {
-      await loadModelConfigs(S.activeEndpointId);
-    }
-  } catch (e) {
-    console.error("Failed to load endpoints:", e);
-    S.endpoints = [];
-  }
-}
-
-function populateEndpointDatalist() {
-  const dl = document.getElementById("endpoint-datalist");
-  if (!dl) return;
-  dl.innerHTML = S.endpoints.map((e) => `<option value="${esc(e.url)}"></option>`).join("");
-}
-
-// ── Unified endpoint / model-config helpers (parameterised by WRITER_CTX / AGENT_CTX)
-
-async function _loadConfigs(ctx, endpointId) {
-  if (!endpointId) {
-    S[ctx.configsKey] = [];
-    initComboboxes();
-    return;
-  }
-  try {
-    const all = await api.get(`/endpoints/${endpointId}/models`);
-    S[ctx.configsKey] = all.filter((m) => m.role === ctx.role || (ctx.role === "writer" && !m.role));
-    initComboboxes();
-  } catch (e) {
-    S[ctx.configsKey] = [];
-    initComboboxes();
-  }
-}
-
-function _fillConfigFields(ctx, config) {
-  const p = ctx.hyperparamPrefix;
-  ctx.hyperparamKeys.forEach((k) => {
-    const el = document.querySelector(`[data-key="${k}"]`);
-    const configKey = p ? k.replace(p, "") : k;
-    if (el && config[configKey] !== undefined) el.value = config[configKey];
-  });
-}
-
-function _fillEndpointFields(ctx) {
-  const ep = S.endpoints.find((e) => e.id === S[ctx.endpointIdKey]);
-  if (ep) {
-    const epEl = document.querySelector(`[data-key="${ctx.urlField}"]`);
-    if (epEl) epEl.value = ep.url || "";
-    const keyEl = document.querySelector(`[data-key="${ctx.apiKeyField}"]`);
-    if (keyEl) keyEl.value = ep.api_key || "";
-  }
-  const activeModel = S[ctx.configsKey].find((m) => m.id === S[ctx.configIdKey]) || S[ctx.configsKey][0];
-  if (activeModel) {
-    const modelEl = document.querySelector(`[data-key="${ctx.modelField}"]`);
-    if (modelEl) modelEl.value = activeModel.model_name || "";
-    _fillConfigFields(ctx, activeModel);
-  }
-}
-
-async function _syncEndpointRecord(ctx, url, apiKey) {
-  const existing = S.endpoints.find((e) => e.url === url);
-  if (existing) {
-    S[ctx.endpointIdKey] = existing.id;
-    if (existing.api_key !== apiKey) {
-      await api.put(`/endpoints/${existing.id}`, { api_key: apiKey });
-      existing.api_key = apiKey;
-    }
-    await api.put("/settings", { [ctx.settingsEndpointField]: existing.id });
-    if (!S[ctx.configsKey].length || S[ctx.configsKey][0]?.endpoint_id !== existing.id) {
-      await _loadConfigs(ctx, existing.id);
-    }
-  } else if (url) {
-    const ep = await api.post("/endpoints", { url, api_key: apiKey });
-    S.endpoints.push(ep);
-    S[ctx.endpointIdKey] = ep.id;
-    S[ctx.configIdKey] = null;
-    await api.put("/settings", { [ctx.settingsEndpointField]: ep.id });
-    populateEndpointDatalist();
-    await _loadConfigs(ctx, ep.id);
-  }
-}
-
-async function _syncModelConfigRecord(ctx, modelName, hyperparams) {
-  if (!S[ctx.endpointIdKey] || !modelName) return;
-  const existing = S[ctx.configsKey].find((m) => m.model_name === modelName);
-  const p = ctx.hyperparamPrefix;
-  if (existing) {
-    S[ctx.configIdKey] = existing.id;
-    const update = {};
-    ctx.hyperparamKeys.forEach((k) => {
-      const base = p ? k.replace(p, "") : k;
-      if (hyperparams[k] !== undefined) update[base] = hyperparams[k];
-    });
-    if (Object.keys(update).length) {
-      await api.put(`/models/${existing.id}`, update);
-      Object.assign(existing, update);
-    }
-    await api.put(`/endpoints/${S[ctx.endpointIdKey]}`, { [ctx.activeConfigDbField]: existing.id });
-  } else {
-    const get = (key, def) => hyperparams[`${p}${key}`] ?? def;
-    const mc = await api.post(`/endpoints/${S[ctx.endpointIdKey]}/models`, {
-      role: ctx.role,
-      model_name: modelName,
-      system_prompt: get("system_prompt", ""),
-      temperature: get("temperature", 0.8),
-      min_p: get("min_p", 0),
-      top_k: get("top_k", 40),
-      top_p: get("top_p", 0.95),
-      repetition_penalty: get("repetition_penalty", 1.0),
-      max_tokens: get("max_tokens", 4096),
-    });
-    S[ctx.configsKey].push(mc);
-    S[ctx.configIdKey] = mc.id;
-    await api.put(`/endpoints/${S[ctx.endpointIdKey]}`, { [ctx.activeConfigDbField]: mc.id });
-    if (ctx.role === "writer") populateModelDatalist();
-    initComboboxes();
-  }
-}
-
-// Serialize endpoint-related saves. When a user fills endpoint_url + api_key + model_name and
-// clicks outside, the three change events fire near-simultaneously and run concurrently. The
-// model save reads S[ctx.endpointIdKey], which is only populated after the endpoint POST resolves
-// — so without serialization the model save sees a null id and silently no-ops.
-let _endpointSaveQueue = Promise.resolve();
-
-function _saveEndpointSetting(ctx, el) {
-  const next = _endpointSaveQueue.catch(() => {}).then(() => _doSaveEndpointSetting(ctx, el));
-  _endpointSaveQueue = next;
-  return next;
-}
-
-async function _doSaveEndpointSetting(ctx, el) {
-  let v = el.value;
-  if (el.type === "number") v = parseFloat(v);
-  const key = el.dataset.key;
-  const p = ctx.hyperparamPrefix;
-  const baseKey = p ? key.replace(p, "") : key;
-  const validation = validate.validateSetting(baseKey, v);
-  if (!validation.valid) {
-    toast(validation.error, true);
-    return;
-  }
-  const payload = { [key]: v };
-  if (key === ctx.urlField) {
-    const apiKeyEl = document.querySelector(`[data-key="${ctx.apiKeyField}"]`);
-    if (apiKeyEl) payload[ctx.apiKeyField] = apiKeyEl.value;
-  } else if (key === ctx.modelField) {
-    ctx.hyperparamKeys.forEach((k) => {
-      const fieldEl = document.querySelector(`[data-key="${k}"]`);
-      if (!fieldEl) return;
-      if (fieldEl.type === "number") {
-        // Empty number inputs would parseFloat to NaN, which JSON-serializes as null and is
-        // rejected by the backend's Pydantic float fields. Skip them so the model-create POST
-        // can fall back to its defaults.
-        if (fieldEl.value.trim() === "") return;
-        const parsed = parseFloat(fieldEl.value);
-        if (Number.isNaN(parsed)) return;
-        payload[k] = parsed;
-      } else {
-        payload[k] = fieldEl.value;
-      }
-    });
-  }
-  try {
-    S.settings = await api.put("/settings", payload);
-    toast("Settings saved");
-  } catch (e) {
-    toast("Failed: " + e.message, true);
-    return;
-  }
-  try {
-    if (key === ctx.urlField) {
-      await _syncEndpointRecord(ctx, v, payload[ctx.apiKeyField] || "");
-    } else if (key === ctx.apiKeyField && S[ctx.endpointIdKey]) {
-      await api.put(`/endpoints/${S[ctx.endpointIdKey]}`, { api_key: v });
-    } else if (key === ctx.modelField) {
-      await _syncModelConfigRecord(ctx, v, payload);
-    } else if (ctx.hyperparamKeys.includes(key) && S[ctx.configIdKey]) {
-      await api.put(`/models/${S[ctx.configIdKey]}`, { [baseKey]: v });
-    }
-  } catch (e) {
-    console.error("Endpoint/model sync error:", e);
-    toast("Failed to sync " + (key === ctx.modelField ? "model" : "endpoint") + ": " + e.message, true);
-  }
-  updateAgentModelWarning();
-}
-
-async function _onHybridInputCtx(ctx, el) {
-  const key = el.dataset.key;
-  if (key === ctx.urlField) {
-    const match = S.endpoints.find((e) => e.url === el.value);
-    if (!match) return;
-    S[ctx.endpointIdKey] = match.id;
-    try {
-      const ep = await api.get(`/endpoints/${match.id}`);
-      Object.assign(match, ep);
-    } catch (e) {
-      console.error("Failed to fetch endpoint:", e);
-    }
-    const apiKeyEl = document.querySelector(`[data-key="${ctx.apiKeyField}"]`);
-    if (apiKeyEl) apiKeyEl.value = match.api_key || "";
-    await _loadConfigs(ctx, match.id);
-    const modelEl = document.querySelector(`[data-key="${ctx.modelField}"]`);
-    if (!modelEl || !S[ctx.configsKey].length) return;
-    const activeModel = S[ctx.configsKey].find((m) => m.id === match[ctx.activeConfigDbField]) || S[ctx.configsKey][0];
-    modelEl.value = activeModel.model_name;
-    _fillConfigFields(ctx, activeModel);
-    S[ctx.configIdKey] = activeModel.id;
-    try {
-      await api.put(`/endpoints/${match.id}`, { [ctx.activeConfigDbField]: activeModel.id });
-    } catch (e) {
-      console.error("Failed to save active model config:", e);
-    }
-  } else if (key === ctx.modelField) {
-    if (S[ctx.endpointIdKey]) {
-      try {
-        await _loadConfigs(ctx, S[ctx.endpointIdKey]);
-      } catch (e) {
-        console.error("Failed to refresh model configs:", e);
-      }
-    }
-    const match = S[ctx.configsKey].find((m) => m.model_name === el.value);
-    if (!match) return;
-    _fillConfigFields(ctx, match);
-    S[ctx.configIdKey] = match.id;
-    try {
-      await api.put(`/endpoints/${S[ctx.endpointIdKey]}`, { [ctx.activeConfigDbField]: match.id });
-    } catch (e) {
-      console.error("Failed to save active model config:", e);
-    }
-  }
-  updateAgentModelWarning();
-}
-
-// ── Public API
-
-function populateModelDatalist() {
-  const dl = document.getElementById("model-datalist");
-  if (!dl) return;
-  dl.innerHTML = S.modelConfigs.map((m) => `<option value="${esc(m.model_name)}"></option>`).join("");
-}
-
-export async function loadModelConfigs(endpointId) {
-  await _loadConfigs(WRITER_CTX, endpointId);
-  populateModelDatalist();
-}
-
-export async function loadAgentModelConfigs(endpointId) {
-  await _loadConfigs(AGENT_CTX, endpointId);
-}
-
-export async function saveSetting(el) {
-  await _saveEndpointSetting(WRITER_CTX, el);
-}
-
-export async function saveAgentSetting(el) {
-  await _saveEndpointSetting(AGENT_CTX, el);
-}
-
-export async function onHybridInput(el) {
-  const key = el.dataset.key;
-  if (key === WRITER_CTX.urlField || key === WRITER_CTX.modelField) {
-    await _onHybridInputCtx(WRITER_CTX, el);
-  } else if (key === AGENT_CTX.urlField || key === AGENT_CTX.modelField) {
-    await _onHybridInputCtx(AGENT_CTX, el);
-  }
-}
-
-// ── User Profile
-export function updateUserBtn() {
-  let displayName = "User";
-  if (S.activePersonaId && S.personas.length) {
-    const activePersona = S.personas.find((p) => p.id === S.activePersonaId);
-    if (activePersona) displayName = activePersona.name;
-  }
-  $("user-profile-btn").textContent = "👤 " + displayName;
-}
-
-export function showUserModal() {
-  const personaItems = S.personas
-    .map((p) => {
-      const isActive = p.id === S.activePersonaId;
-      const avatarColor = p.avatar_color || "#E1F5EE";
-      const avatarTextColor = isActive ? "var(--accent)" : "#085041";
-      const avatarBg = isActive ? "var(--accent-glow)" : avatarColor;
-      const initials = p.name.charAt(0).toUpperCase();
-      return `
-      <div class="persona-item${isActive ? " persona-item-active" : ""}" onclick="activatePersona(${p.id})">
-        <div class="persona-avatar" style="background:${avatarBg};color:${avatarTextColor}">${initials}</div>
-        <div class="persona-info">
-          <div style="display:flex;align-items:center;gap:6px">
-            <span class="persona-name">${esc(p.name)}</span>
-            ${isActive ? '<span class="persona-active-badge">Active</span>' : ""}
-          </div>
-          <span class="persona-desc">${esc(p.description || "")}</span>
-        </div>
-        <button class="btn btn-sm" onclick="event.stopPropagation();editPersona(${p.id})">Edit</button>
-      </div>
-    `;
-    })
-    .join("");
-
-  showModal(`
-    <div class="modal-title-row">
-      <div>
-        <h2>User personas</h2>
-        <p class="modal-subtitle">Click a persona to activate it.</p>
-      </div>
-      <div class="modal-title-actions">
-        <button class="btn" onclick="showPersonaEditModal(null)">+ New persona</button>
-      </div>
-    </div>
-    <div class="persona-list">
-      ${personaItems.length ? personaItems : '<p class="modal-subtitle" style="text-align:center;padding:1rem 0">No personas yet. Create one to get started.</p>'}
-    </div>
-  `);
-}
-
-export async function saveUserProfile() {
-  const name = $("user-name-input").value.trim();
-  const desc = $("user-desc-input").value.trim();
-  const validation = validate.validateUserProfile(name, desc);
-  if (!validation.valid) {
-    toast(validation.error, true);
-    return;
-  }
-  try {
-    S.settings = await api.put("/settings", { user_name: name || "User", user_description: desc });
-    updateUserBtn();
-    closeModal();
-    toast("User profile saved");
-  } catch (e) {
-    toast("Failed: " + e.message, true);
-  }
-}
-
-export function showPersonaEditModal(personaId) {
-  const persona = personaId ? S.personas.find((p) => p.id === personaId) : null;
-  const isEdit = persona !== null;
-  showModal(`
-    <h2>${isEdit ? "Edit persona" : "New persona"}</h2>
-    <div class="field">
-      <label>Name</label>
-      <input id="persona-name-input" type="text" placeholder="e.g. Kai" value="${esc(persona?.name || "")}">
-    </div>
-    <div class="field">
-      <label>Description <span style="font-weight:400;text-transform:none;letter-spacing:0">(injected into system prompt)</span></label>
-      <textarea id="persona-desc-input" placeholder="Describe yourself — appearance, personality, background…" rows="4" style="resize:vertical;min-height:90px">${esc(persona?.description || "")}</textarea>
-    </div>
-    <label class="modal-checkbox-label">
-      <input type="checkbox" id="persona-active-checkbox" ${!personaId || personaId === S.activePersonaId ? "checked" : ""} style="width:14px;height:14px;margin:0;flex-shrink:0">
-      <span style="font-size:13px;text-transform:none;letter-spacing:0;font-weight:400">Set as active persona after saving</span>
-    </label>
-    <div class="modal-actions">
-      ${isEdit ? `<button class="btn btn-danger" onclick="deletePersona(${personaId})">Delete</button>` : ""}
-      <button class="btn" onclick="showUserModal()">Cancel</button>
-      <button class="btn btn-accent" onclick="savePersona(${personaId || "null"})">${isEdit ? "Update" : "Create"}</button>
-    </div>
-  `);
-}
-
-export async function savePersona(personaId) {
-  const name = $("persona-name-input").value.trim();
-  const description = $("persona-desc-input").value.trim();
-  const setActive = $("persona-active-checkbox").checked;
-  const validation = validate.validatePersona(name, description);
-  if (!validation.valid) {
-    toast(validation.error, true);
-    return;
-  }
-  try {
-    let newId;
-    if (personaId && personaId !== "null") {
-      await api.put("/user-personas/" + personaId, { name, description });
-      newId = parseInt(personaId, 10);
-    } else {
-      const result = await api.post("/user-personas", { name, description });
-      newId = result.id;
-    }
-    await loadPersonas();
-    if (setActive) {
-      await api.put("/settings", { active_persona_id: newId });
-      S.activePersonaId = newId;
-      updateUserBtn();
-    }
-    showUserModal();
-    toast("Persona saved");
-  } catch (e) {
-    toast("Failed: " + e.message, true);
-  }
-}
-
-export async function deletePersona(personaId) {
-  showConfirmModal(
-    {
-      title: "Delete Persona",
-      message: "Are you sure you want to delete this persona?",
-      confirmText: "Delete",
-    },
-    async () => {
-      try {
-        await api.del("/user-personas/" + personaId);
-        if (S.activePersonaId === personaId) {
-          await api.put("/settings", { active_persona_id: null });
-          S.activePersonaId = null;
-          updateUserBtn();
-        }
-        await loadPersonas();
-        showUserModal();
-        toast("Persona deleted");
-      } catch (e) {
-        toast("Failed: " + e.message, true);
-      }
-    },
-  );
-}
-
-export async function activatePersona(personaId) {
-  if (S.activePersonaId === personaId) return;
-  try {
-    await api.put("/settings", { active_persona_id: personaId });
-    S.activePersonaId = personaId;
-    updateUserBtn();
-    showUserModal();
-  } catch (e) {
-    toast("Failed: " + e.message, true);
-  }
-}
-
-export async function editPersona(personaId) {
-  showPersonaEditModal(personaId);
 }
 
 // ── Agent Tools Panel
@@ -1009,17 +181,17 @@ const TOOL_DEFS = [
   {
     id: "direct_scene",
     name: "Director",
-    desc: "Gives written direction and selects active mood fragments based on scene context",
+    desc: "Gives written direction and manages fragments based on scene context.",
   },
   {
     id: "rewrite_user_prompt",
     name: "Prompt Rewriter",
-    desc: "Expands user's vague or lazy messages into richer input",
+    desc: "Expands user's vague or lazy messages into richer input.",
   },
   {
     id: "editor_apply_patch",
     name: "Output Auditor",
-    desc: "Scans for LLM slop and repetition, then surgically patches the draft",
+    desc: "Scans for LLM slop and repetition, then surgically patches the draft.",
   },
 ];
 
@@ -1042,6 +214,11 @@ const AUDIT_TYPE_DEFS = [
     key: "structural_repetition",
     label: "Structural repetition",
     title: "Flag messages that share a similar block structure.",
+  },
+  {
+    key: "anti_echo",
+    label: "Anti-echo",
+    title: 'Flag questions that parrot the user\'s last message back (e.g. "Ice cream?").',
   },
 ];
 
@@ -1099,16 +276,34 @@ export async function toggleToolEnabled(id, on) {
 
 export async function toggleLengthGuard(on) {
   S.lengthGuardEnabled = on;
-  S.enabledTools.length_guard = on;
   renderToolsPanel();
-  await persistSettings({ enabled_tools: S.enabledTools });
+  await persistSettings({ length_guard_enabled: on });
 }
 
 export async function toggleLengthGuardEnforce(on) {
   S.lengthGuardEnforce = on;
-  S.enabledTools.length_guard_enforce = on;
   renderToolsPanel();
-  await persistSettings({ enabled_tools: S.enabledTools });
+  await persistSettings({ length_guard_enforce: on });
+}
+
+export async function toggleAgenticLorebook(on) {
+  S.agenticLorebookEnabled = on;
+  renderToolsPanel();
+  await persistSettings({ agentic_lorebook_enabled: on });
+}
+
+export async function toggleFeedbackEnabled(on) {
+  S.feedbackEnabled = on;
+  renderToolsPanel();
+  // Feedback fragments in the sidebar are greyed out when this feature is off.
+  renderInteractiveFragments();
+  await persistSettings({ feedback_enabled: on });
+}
+
+export async function toggleDirectorIndividualFragments(on) {
+  S.directorIndividualFragments = on;
+  renderToolsPanel();
+  await persistSettings({ director_individual_fragments: on });
 }
 
 export async function toggleShowEditorDiff(on) {
@@ -1160,9 +355,112 @@ export async function saveLengthGuardConfig() {
   }
 }
 
+// -- Workflow enable/disable toggles (Agents panel, Secondary tab)
+//
+// Two storage columns back these: workflows_globally_enabled (master) and the
+// workflow_enabled {wid: bool} map. The master persists through the normal settings
+// PUT; each per-workflow flip goes through its dedicated per-key route (which writes
+// only that key), never the full-column settings PUT, so two tabs flipping different
+// workflows cannot clobber each other.
+
+export async function toggleWorkflowsGlobal(on) {
+  await persistSettings({ workflows_globally_enabled: on });
+  renderToolsPanel();
+  renderMessages();
+  renderInspectorSecondary();
+}
+
+export async function toggleWorkflowEnabled(wid, on) {
+  try {
+    const res = await api.post("/workflows/" + wid + "/enabled", { enabled: on });
+    if (res && typeof res.workflow_enabled === "object") S.settings.workflow_enabled = res.workflow_enabled;
+  } catch (e) {
+    toast("Failed to toggle workflow", true);
+  }
+  // Re-render regardless: on success the reassigned map drives the new state; on
+  // failure the unchanged stored value reverts the checkbox.
+  renderToolsPanel();
+  renderMessages();
+  renderInspectorSecondary();
+}
+
+// One card per manifest workflow, under a master switch, in the Secondary tab.
+// Empty when no workflow exists so the panel's "no workflows" fallback still shows.
+// Each per-workflow checkbox reflects effective state -- so the master being off
+// shows every card unchecked, greyed, and disabled (the dependent-disable pattern)
+// while the stored per-workflow value is preserved (the master writes a separate
+// column). A workflow that ships a config panel folds it into the same card (one
+// entry, not a separate toggle and settings card) -- the registered renderer returns
+// the card body (description + any controls), shown only while the workflow is on.
+function buildWorkflowToggleRows() {
+  if (!S.workflowManifest.length) return "";
+  const g = S.settings?.workflows_globally_enabled;
+  const globalOn = g === undefined ? true : Boolean(g);
+
+  const masterRow = `<div class="tool-card ${globalOn ? "tool-on" : ""}">
+    <div class="tool-card-header">
+      <span class="tool-card-name">Secondary Workflows</span>
+      <label class="tog" onclick="event.stopPropagation()">
+        <input type="checkbox" ${globalOn ? "checked" : ""} onchange="toggleWorkflowsGlobal(this.checked)">
+        <span class="tog-slider"></span>
+      </label>
+    </div>
+    <div class="tool-card-desc">Turns all the workflows below on or off at once.</div>
+  </div>`;
+
+  const panels = new Map(S.workflowToolsPanelRenderers.map(({ workflowId, render }) => [workflowId, render]));
+
+  const workflowRows = S.workflowManifest
+    .map((w) => {
+      const effOn = effectiveWorkflowEnabled(w.id);
+      let body = "";
+      if (!globalOn) {
+        body = '<div class="tool-card-desc"><em>Workflows globally off.</em></div>';
+      } else if (effOn && panels.has(w.id)) {
+        try {
+          const piece = panels.get(w.id)();
+          if (typeof piece === "string") body = piece;
+        } catch (e) {
+          console.error("workflow tools-panel renderer threw:", e);
+        }
+      }
+      return `<div class="tool-card ${effOn ? "tool-on" : ""}"${globalOn ? "" : ' style="opacity:0.5"'}>
+    <div class="tool-card-header">
+      <span class="tool-card-name">${esc(w.display_name || w.id)}</span>
+      <label class="tog" onclick="event.stopPropagation()">
+        <input type="checkbox" ${effOn ? "checked" : ""} ${globalOn ? "" : "disabled"} onchange="toggleWorkflowEnabled('${w.id}', this.checked)">
+        <span class="tog-slider"></span>
+      </label>
+    </div>
+    ${body}
+  </div>`;
+    })
+    .join("");
+
+  return masterRow + workflowRows;
+}
+
 export function renderToolsPanel() {
   $("agent-enable-chk").checked = S.agentEnabled;
+  $("agent-master-card").classList.toggle("tool-on", S.agentEnabled);
   $("tools-panel-btn").style.opacity = S.agentEnabled ? "1" : "0.5";
+
+  // Agentic Lorebook depends on the Director (direct_scene). When the Director
+  // is off, the toggle is greyed out / disabled with a "requires Director" hint,
+  // and the backend falls back to the keyword scan regardless of this flag.
+  const alOn = S.agenticLorebookEnabled;
+  const directorOn = !!S.enabledTools.direct_scene;
+  const agenticLorebookCard = `<div class="tool-card ${alOn ? "tool-on" : ""}"${directorOn ? "" : ' style="opacity:0.5"'}>
+    <div class="tool-card-header">
+      <span class="tool-card-name">Agentic Lorebook</span>
+      <label class="tog" onclick="event.stopPropagation()">
+        <input type="checkbox" ${alOn ? "checked" : ""} ${directorOn ? "" : "disabled"} onchange="toggleAgenticLorebook(this.checked)">
+        <span class="tog-slider"></span>
+      </label>
+    </div>
+    <div class="tool-card-desc">Let Director manage Lorebook entries.${directorOn ? "" : " <em>Requires Director.</em>"}</div>
+  </div>`;
+
   const toolCards = TOOL_DEFS.map((t) => {
     const on = !!S.enabledTools[t.id];
     const auditChecks = AUDIT_TYPE_DEFS.map(
@@ -1181,7 +479,7 @@ export function renderToolsPanel() {
              </label>
            </div>`
         : "";
-    return `<div class="tool-card ${on ? "tool-on" : ""}">
+    const card = `<div class="tool-card ${on ? "tool-on" : ""}">
       <div class="tool-card-header">
         <span class="tool-card-name">${t.name}</span>
         <label class="tog" onclick="event.stopPropagation()">
@@ -1192,6 +490,8 @@ export function renderToolsPanel() {
       <div class="tool-card-desc">${t.desc}</div>
       ${extras}
     </div>`;
+    // The Agentic Lorebook card sits directly below the Prompt Rewriter card.
+    return t.id === "rewrite_user_prompt" ? card + agenticLorebookCard : card;
   }).join("");
 
   const lgOn = S.lengthGuardEnabled;
@@ -1205,7 +505,7 @@ export function renderToolsPanel() {
           <input id="lg-max-words" type="number" min="50" max="4000" step="50" value="${S.lengthGuardMaxWords}" onchange="saveLengthGuardConfig()">
         </div>
         <div class="lg-field">
-          <label>Max sections</label>
+          <label>Max paragraphs</label>
           <input id="lg-max-paragraphs" type="number" min="1" max="20" step="1" value="${S.lengthGuardMaxParagraphs}" onchange="saveLengthGuardConfig()">
         </div>
       </div>
@@ -1224,25 +524,41 @@ export function renderToolsPanel() {
         <span class="tog-slider"></span>
       </label>
     </div>
-    <div class="tool-card-desc">Reigns the model's response length by word count. MAX SECTIONS is suggested to the AI in rewrite pass.</div>
+    <div class="tool-card-desc">Reigns the model's response length by word count. MAX PARAGRAPHS is suggested to the AI in rewrite pass.</div>
     ${lgConfig}
   </div>`;
 
-  $("tools-list").innerHTML = toolCards + lengthGuardCard;
+  const fbOn = S.feedbackEnabled;
+  const feedbackCard = `<div class="tool-card ${fbOn ? "tool-on" : ""}">
+    <div class="tool-card-header">
+      <span class="tool-card-name">Editor Feedback</span>
+      <label class="tog" onclick="event.stopPropagation()">
+        <input type="checkbox" ${fbOn ? "checked" : ""} onchange="toggleFeedbackEnabled(this.checked)">
+        <span class="tog-slider"></span>
+      </label>
+    </div>
+    <div class="tool-card-desc">After each reply, surfaces a note to you (e.g. what you could do next). Runs only when at least one interactive fragment has its Field Type set to "feedback".</div>
+  </div>`;
+
+  const ifpOn = S.directorIndividualFragments;
+  const individualFragmentsCard = `<div class="tool-card ${ifpOn ? "tool-on" : ""}">
+    <div class="tool-card-header">
+      <span class="tool-card-name">Individual Fragment Processing</span>
+      <label class="tog" onclick="event.stopPropagation()">
+        <input type="checkbox" ${ifpOn ? "checked" : ""} onchange="toggleDirectorIndividualFragments(this.checked)">
+        <span class="tog-slider"></span>
+      </label>
+    </div>
+    <div class="tool-card-desc">Director fills each interactive fragment in its own LLM call. More focused output; higher latency.</div>
+  </div>`;
+
+  $("tools-list").innerHTML = toolCards + lengthGuardCard + feedbackCard + individualFragmentsCard;
 
   const secEl = $("tools-list-secondary");
   if (secEl) {
-    let secHtml = "";
-    for (const fn of S.workflowToolsPanelRenderers) {
-      try {
-        const piece = fn();
-        if (typeof piece === "string" && piece) secHtml += piece;
-      } catch (e) {
-        console.error("workflow tools-panel renderer threw:", e);
-      }
-    }
     secEl.innerHTML =
-      secHtml || `<div style="color:var(--text-muted);font-size:12px;padding:8px 0;">No workflows registered.</div>`;
+      buildWorkflowToggleRows() ||
+      `<div style="color:var(--text-muted);font-size:12px;padding:8px 0;">No workflows registered.</div>`;
   }
 }
 
@@ -1342,6 +658,7 @@ export function showAddPhraseGroupModal(editId = null, group = null) {
 
     <div class="modal-actions">
       ${deleteButton}
+      <div style="flex:1"></div>
       <button class="btn" onclick="showPhraseBankModal()">Cancel</button>
       <button class="btn btn-accent" id="phrase-save-btn" onclick="savePhraseGroup(${editId || "null"})">${isEdit ? "Update" : "Save"}</button>
     </div>
@@ -1501,7 +818,7 @@ export async function showResetConfirmModal() {
     {
       title: "Reset to Defaults",
       message:
-        "This will reset Mood Fragments, Director Fragments, Phrase Bank, and all Settings to their original default values. All custom data will be lost.<br><br>The following will be retained: Characters, Conversations, Lorebooks.",
+        "This will reset Mood Fragments, Interactive Fragments, Phrase Bank, and all Settings to their original default values. All custom data will be lost.<br><br>The following will be retained: Characters, Conversations, Lorebooks.",
       confirmText: "Reset Everything",
     },
     async () => {
@@ -1518,21 +835,3 @@ export async function showResetConfirmModal() {
 
 // Expose to global scope for inline onclick handlers
 window.showResetConfirmModal = showResetConfirmModal;
-window.saveAgentSetting = saveAgentSetting;
-window.toggleAgentSameAsWriter = toggleAgentSameAsWriter;
-
-window.toggleApiKeyVisibility = (btn) => {
-  const input = btn.closest(".api-key-wrap").querySelector(".api-key-input");
-  const visible = btn.dataset.visible === "1";
-  if (!visible) {
-    input.style.webkitTextSecurity = "none";
-    btn.dataset.visible = "1";
-    btn.querySelector(".eye-show").style.display = "none";
-    btn.querySelector(".eye-hide").style.display = "";
-  } else {
-    input.style.webkitTextSecurity = "disc";
-    btn.dataset.visible = "";
-    btn.querySelector(".eye-show").style.display = "";
-    btn.querySelector(".eye-hide").style.display = "none";
-  }
-};

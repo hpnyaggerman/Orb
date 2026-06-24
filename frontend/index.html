@@ -30,6 +30,9 @@
             <button class="btn btn-sm" style="flex:1;justify-content:center" onclick="showCreateWorldModal()">+ Create</button>
             <button class="btn btn-sm" style="flex:1;justify-content:center" onclick="lbImportJson()">⬆ Import JSON</button>
           </div>
+          <div id="worlds-search-wrap" style="display:none;margin-bottom:8px">
+            <input id="worlds-search" class="worlds-search" type="text" placeholder="Search worlds…" autocomplete="off" oninput="onWorldSearch(this.value)">
+          </div>
           <div id="worlds-list"></div>
         </div>
       </div>
@@ -46,10 +49,10 @@
         </div>
       </div>
       <div class="sidebar-section">
-        <div class="sidebar-section-header" onclick="toggleSection(this)">Director Fragments <span class="arrow collapsed">▼</span></div>
-        <div class="sidebar-section-body collapsed" id="director-frag-section">
-          <div id="director-frag-list"></div>
-          <button class="btn btn-block btn-sm" onclick="showDirectorFragmentModal()" style="margin-top:6px">+ Add Director Fragment</button>
+        <div class="sidebar-section-header" onclick="toggleSection(this)">Interactive Fragments <span class="arrow collapsed">▼</span></div>
+        <div class="sidebar-section-body collapsed" id="interactive-frag-section">
+          <div id="interactive-frag-list"></div>
+          <button class="btn btn-block btn-sm" onclick="showInteractiveFragmentModal()" style="margin-top:6px">+ Add Interactive Fragment</button>
         </div>
       </div>
       <div class="sidebar-section">
@@ -60,18 +63,14 @@
         </div>
       </div>
       <div class="sidebar-section">
-        <div class="sidebar-section-header" onclick="toggleSection(this)">Endpoints <span class="arrow collapsed">▼</span></div>
+        <div class="sidebar-section-header" onclick="toggleSection(this)"><span id="endpoints-label">Endpoints</span> <span class="arrow collapsed">▼</span></div>
         <div class="sidebar-section-body collapsed" id="endpoints-section"><div id="endpoints-form"></div></div>
       </div>
       <div class="sidebar-section">
         <div class="sidebar-section-header" onclick="toggleSection(this)">Settings <span class="arrow collapsed">▼</span></div>
-        <div class="sidebar-section-body collapsed" id="settings-section"><div id="settings-form"></div></div>
-      </div>
-    </div>
-    <div id="avatar-popup" class="avatar-popup hidden">
-      <div class="avatar-popup-content">
-        <img id="avatar-popup-image" src="" alt="Character avatar">
-        <button class="btn btn-sm avatar-popup-close" onclick="hideAvatarPopup()">✕</button>
+        <div class="sidebar-section-body collapsed" id="settings-section">
+          <div id="settings-form"></div>
+        </div>
       </div>
     </div>
   </div>
@@ -90,12 +89,12 @@
       </div>
       <div class="chat-actions">
         <button class="btn btn-sm" id="user-profile-btn" onclick="showUserModal()" title="User profile">👤 User</button>
-        <button class="btn btn-sm" id="tools-panel-btn" onclick="toggleToolsPanel()" title="Agent tools">🎭 Agent</button>
+        <button class="btn btn-sm" id="tools-panel-btn" onclick="toggleToolsPanel()" title="Agentic Tools & Workflows">✨ Workflow</button>
         <button class="btn btn-sm" id="inspector-toggle" onclick="toggleInspector()">🔍 Inspector</button>
         <button id="mobile-chat-actions-toggle" onclick="toggleMobileHeaderActions()" title="Quick actions">⋯</button>
         <div id="mobile-chat-actions-menu">
-          <div class="burger-menu-item" onclick="closeMobileHeaderActions();showUserModal()">👤 User</div>
-          <div class="burger-menu-item" onclick="closeMobileHeaderActions();toggleToolsPanel()">🎭 Agent</div>
+          <div class="burger-menu-item" id="mobile-user-profile-btn" onclick="closeMobileHeaderActions();showUserModal()">👤 User</div>
+          <div class="burger-menu-item" onclick="closeMobileHeaderActions();toggleToolsPanel()">✨ Workflow</div>
           <div class="burger-menu-item" onclick="closeMobileHeaderActions();toggleInspector()">🔍 Inspector</div>
         </div>
       </div>
@@ -109,10 +108,11 @@
     </div>
     <div id="chat-input-area">
       <div id="burger-dropdown">
-        <div class="burger-menu-item" onclick="closeBurger();newConvForChar(S.activeCharId)">✚ New conversation</div>
-        <div class="burger-menu-item" onclick="closeBurger();showConvHistoryModal()">📋 Conversations</div>
-        <div class="burger-menu-item" onclick="closeBurger();showCompressModal()">📦 Compress History</div>
-        <div class="burger-menu-item" onclick="closeBurger();triggerAttachImage()">🖼️ Attach Image</div>
+        <div class="burger-menu-item" onclick="closeBurger();newConvForChar(S.activeCharId)"><span class="burger-icon">✚</span>New conversation</div>
+        <div class="burger-menu-item" onclick="closeBurger();showConvHistoryModal()"><span class="burger-icon">📋</span>Conversations</div>
+        <div class="burger-menu-item" onclick="closeBurger();showCompressModal()"><span class="burger-icon">📦</span>Compress History</div>
+        <div class="burger-menu-item" onclick="closeBurger();createCheckpoint()"><span class="burger-icon">🔖</span>Create Checkpoint</div>
+        <div class="burger-menu-item" onclick="closeBurger();triggerAttachImage()"><span class="burger-icon">🖼️</span>Attach Image</div>
       </div>
       <input type="file" id="attach-image-input" accept="image/*" multiple style="display:none">
       <div id="attachment-preview" class="attachment-preview"></div>
@@ -125,15 +125,18 @@
     </div>
   </div>
   <div id="tools-panel"><div class="tools-inner">
-    <div class="inspector-title">Global</div>
+    <div class="inspector-title">Workflows</div>
     <div class="tab-row">
       <button type="button" class="tab-button tab-button-active" id="tools-tab-main" onclick="setToolsTab('main')">Main</button>
       <button type="button" class="tab-button" id="tools-tab-secondary" onclick="setToolsTab('secondary')">Secondary</button>
     </div>
     <div id="tools-pane-main">
-      <div class="agent-master-row">
-        <span class="agent-master-label">Agent Enabled</span>
-        <label class="tog"><input type="checkbox" id="agent-enable-chk" checked onchange="setAgentEnabled(this.checked)"><span class="tog-slider"></span></label>
+      <div class="tool-card" id="agent-master-card">
+        <div class="tool-card-header">
+          <span class="tool-card-name">Main Workflows</span>
+          <label class="tog"><input type="checkbox" id="agent-enable-chk" checked onchange="setAgentEnabled(this.checked)"><span class="tog-slider"></span></label>
+        </div>
+        <div class="tool-card-desc">Enables the tools below.</div>
       </div>
       <div style="font-size:11px;font-weight:500;text-transform:uppercase;letter-spacing:.5px;color:var(--text-secondary);margin-bottom:8px;">Available Tools</div>
       <div id="tools-list"></div>
@@ -153,8 +156,15 @@
     <div id="inspector-content"><div style="color:var(--text-muted);font-size:12px;">Send a message to see director output</div></div>
     <div id="inspector-secondary-content" class="hidden"></div>
   </div></div>
+  <div id="avatar-popup" class="avatar-popup hidden" onclick="if(event.target===this)hideAvatarPopup()">
+    <div class="avatar-popup-content">
+      <img id="avatar-popup-image" src="" alt="Character avatar">
+      <button class="btn btn-sm avatar-popup-close" onclick="hideAvatarPopup()">✕</button>
+    </div>
+  </div>
 </div>
 <div id="modal-root"></div>
+<div id="modal-sub-root"></div>
 <div id="modal-crop-root"></div>
 <div id="toast" class="toast hidden"></div>
 <script type="module" src="/static/app.js"></script>

@@ -26,6 +26,42 @@ from backend.database import init_db
 from ._llm_mock import FakeLLMClient, llm_factory
 
 
+@pytest.fixture(autouse=True)
+def _reset_module_locks():
+    """Clear the process-global asyncio.Lock dicts between tests.
+
+    Several lock caches key ``asyncio.Lock`` objects by id/key tuples:
+    ``backend.api.deps._workflow_root_locks`` (root_id) and
+    ``_conversation_stream_locks`` (conversation id), plus
+    ``backend.core.locks._workflow_state_locks`` and
+    ``_workflow_character_state_locks`` (both ``(key, workflow_id)`` tuples)
+    which the orchestrator and ``/trigger`` route acquire. Each test gets a
+    fresh temp DB, so autoincrement ids restart at 1 and those keys collide
+    across tests. A ``Lock`` binds to the event loop of its first ``acquire``;
+    reusing one cached under a prior test's (now closed) loop raises "got
+    Future attached to a different loop" the moment a waiter Future is created
+    on the stale loop. That only bites when two tests contend on a shared key,
+    which today's UUID/one-off keys happen to avoid -- clearing all four dicts
+    removes the latent flake instead of relying on that coincidence.
+    (``workflow_config_lock`` is excluded: it already keys its dict by running
+    loop, so its entries are self-isolating.)
+    """
+    from backend.api import deps
+    from backend.core import locks
+
+    lock_dicts = (
+        deps._workflow_root_locks,
+        deps._conversation_stream_locks,
+        locks._workflow_state_locks,
+        locks._workflow_character_state_locks,
+    )
+    for d in lock_dicts:
+        d.clear()
+    yield
+    for d in lock_dicts:
+        d.clear()
+
+
 @pytest.fixture
 async def db_path(tmp_path: Path) -> Path:
     return tmp_path / "test.db"
@@ -57,16 +93,21 @@ async def db(db_path: Path):
 def llm_mock(monkeypatch):
     """Substitute the streaming LLM client across every bound import.
 
-    ``from .llm_client import LLMClient`` binds a local name at import
-    time, so patching only ``backend.llm_client.LLMClient`` is not
-    enough -- ``backend.main`` and ``backend.orchestrator`` retain
-    pre-patch references. The fixture patches all three.
+    ``from ..inference import LLMClient`` binds a local name at import
+    time, so patching only ``backend.inference.client.LLMClient`` is not
+    enough -- the route modules that construct a client
+    (``backend.api.routes.conversations`` for /summarize and
+    ``backend.api.routes.workflows`` for the workflow hooks) and
+    ``backend.pipeline.context`` (which builds the writer/agent clients in
+    ``_load_pipeline_context``) retain pre-patch references. The fixture
+    patches every bound name.
     """
     fake = FakeLLMClient()
     factory = llm_factory(fake)
-    monkeypatch.setattr("backend.llm_client.LLMClient", factory)
-    monkeypatch.setattr("backend.main.LLMClient", factory)
-    monkeypatch.setattr("backend.orchestrator.LLMClient", factory)
+    monkeypatch.setattr("backend.inference.client.LLMClient", factory)
+    monkeypatch.setattr("backend.api.routes.conversations.LLMClient", factory)
+    monkeypatch.setattr("backend.api.routes.workflows.LLMClient", factory)
+    monkeypatch.setattr("backend.pipeline.context.LLMClient", factory)
     return fake
 
 
@@ -113,6 +154,10 @@ async def streaming_client(db_path: Path, monkeypatch):
         log_level="warning",
         lifespan="off",
         timeout_graceful_shutdown=1,
+        # The app is SSE-based and uses no WebSocket endpoints. Disabling the
+        # WebSocket protocol avoids uvicorn importing the deprecated
+        # ``websockets.legacy`` module, which emits DeprecationWarnings.
+        ws="none",
     )
     server = uvicorn.Server(config)
     serve_task = asyncio.create_task(server.serve(sockets=[sock]))

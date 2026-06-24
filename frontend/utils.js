@@ -10,6 +10,27 @@ export function esc(s) {
   return div.innerHTML;
 }
 
+// Escape a value for safe interpolation into a double-quoted HTML attribute.
+// esc() handles &, <, > but leaves quotes intact, so a " would break out of
+// the attribute — escape it (and ') explicitly here.
+export function escAttr(s) {
+  return esc(s).replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+// Escape a value embedded inside an inline handler's single-quoted JS string
+// that itself sits in a double-quoted HTML attribute, e.g.
+// onclick="fn('${escHandlerArg(v)}')". The browser decodes HTML entities
+// before the JS parser runs, so we JS-escape first, then HTML-escape — that
+// order yields a valid JS string literal after attribute decoding.
+export function escHandlerArg(s) {
+  const js = String(s == null ? "" : s)
+    .replace(/\\/g, "\\\\")
+    .replace(/'/g, "\\'")
+    .replace(/\r/g, "\\r")
+    .replace(/\n/g, "\\n");
+  return js.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 export function toast(msg, isError = false) {
   const el = $("toast");
   if (!el) return;
@@ -30,7 +51,9 @@ export function scrollToBottom(smooth = false) {
         S._programmaticScroll = false;
       }, 400);
     } else {
-      ct.scrollTop = ct.scrollHeight;
+      // behavior:"instant" overrides #chat-messages' CSS scroll-behavior:smooth;
+      // a bare scrollTop assignment would animate instead of snapping.
+      ct.scrollTo({ top: ct.scrollHeight, behavior: "instant" });
       S._programmaticScroll = false;
     }
   });
@@ -43,6 +66,29 @@ export function scrollToMessage(msgId) {
 
 export function avatarUrl(charId) {
   return `/api/characters/${charId}/avatar`;
+}
+
+// A conversation's recency for list ordering: the most recent of when it was
+// last opened (last_accessed_at), last edited (updated_at), or created. ISO8601
+// sorts lexicographically, so string max is correct. Mirrors the backend's
+// ORDER BY in queries/conversations.py — keep the two in sync.
+export function convActivity(c) {
+  return [c.last_accessed_at, c.updated_at, c.created_at].reduce((a, b) => (b && b > a ? b : a), "");
+}
+
+// Placeholder glyphs shown when an avatar image is missing or fails to load.
+// Two conventions: library cards fall back to a person, the chat header to a
+// scroll. Kept as named constants so the fallback can't drift between sites.
+export const NO_AVATAR_ICON = "👤"; // character library cards / lists
+export const CHAT_AVATAR_ICON = "📜"; // active chat header
+
+// Inner HTML for an avatar cell: an <img> that swaps to the placeholder glyph
+// if it fails to load, or the bare glyph when there's no image at all. `attrs`
+// appends extra <img> attributes (loading, decoding, onclick…). `src` must be
+// pre-escaped by the caller when it comes from untrusted data.
+export function avatarCell(src, { icon = NO_AVATAR_ICON, attrs = "" } = {}) {
+  if (!src) return icon;
+  return `<img src="${src}"${attrs ? " " + attrs : ""} onerror="this.parentElement.textContent='${icon}'">`;
 }
 
 export function convUrl(...parts) {
@@ -196,24 +242,89 @@ export function formatProseWithDiff(ops) {
       html += `<span class="diff-change">${_applyInlineFormatting(esc(op.text))}</span>`;
     }
   }
-  return html.replace(/\n/g, "<br>");
+  return html.replace(/\n{2,}/g, '<br><span class="pbreak"></span>').replace(/\n/g, "<br>");
 }
+
+// Icons for the code-block toolbar (word-wrap toggle + copy). Inline SVG so the
+// markup stays a self-contained string; matches the stroke style of the message
+// toolbar icons in chat_core.js.
+const ICON_WRAP = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><line x1="3" y1="6" x2="21" y2="6"/><path d="M3 12h15a3 3 0 1 1 0 6h-4"/><polyline points="16 16 14 18 16 20"/><line x1="3" y1="18" x2="10" y2="18"/></svg>`;
+const ICON_COPY = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="14" height="14"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg>`;
+
+// Markdown image link to an image-extension URL, e.g. ![alt](https://host/x.jpg)
+const IMG_LINK_RE = /!\[([^\]]*)\]\((https?:\/\/[^\s)]+\.(?:jpe?g|png|gif|webp))\)/i;
+
+// Render a markdown image link as a collapsed <details> wrapper. The image is
+// wrapped in an anchor so clicking it opens the source image in a new tab, and
+// falls back to a plain link if the image fails to load. The URL is matched as
+// http(s) only (no javascript: URIs); escAttr() prevents breaking out of attrs.
+function renderImageEmbed(url, alt) {
+  const safeUrl = escAttr(url);
+  const safeAlt = escAttr(alt || "");
+  return (
+    `<details class="msg-image-embed">` +
+    `<summary><span class="reasoning-summary-arrow">▶</span>` +
+    `<span class="msg-image-label">🖼️ Image</span></summary>` +
+    `<a class="msg-image-link" href="${safeUrl}" target="_blank" rel="noopener">` +
+    `<img class="msg-image" src="${safeUrl}" alt="${safeAlt}" loading="lazy" ` +
+    `onerror="this.replaceWith(Object.assign(document.createElement('span'),` +
+    `{className:'msg-image-broken',textContent:this.src}))">` +
+    `</a>` +
+    `</details>`
+  );
+}
+
+// Memoize rendered prose. formatProse is pure for a given input string, so on
+// re-renders (editing, streaming ticks, branch switches) we can skip the regex
+// passes entirely. Bounded to keep memory in check; oldest entries are evicted.
+const _proseCache = new Map();
+const _PROSE_CACHE_MAX = 2000;
 
 export function formatProse(text) {
   if (!text) return "";
-  // Split on fenced code blocks before escaping so we can handle them separately
-  const parts = text.split(/(```[\w]*\n?[\s\S]*?```)/g);
+  const cached = _proseCache.get(text);
+  if (cached !== undefined) return cached;
+  const html = _formatProse(text);
+  if (_proseCache.size >= _PROSE_CACHE_MAX) {
+    // Evict the oldest insertion (Map preserves insertion order).
+    _proseCache.delete(_proseCache.keys().next().value);
+  }
+  _proseCache.set(text, html);
+  return html;
+}
+
+function _formatProse(text) {
+  // Split on fenced code blocks and image links before escaping so we can handle
+  // them separately (their content must bypass prose escaping/inline formatting).
+  const parts = text.split(/(```[\w]*\n?[\s\S]*?```|!\[[^\]]*\]\((?:https?:\/\/[^\s)]+\.(?:jpe?g|png|gif|webp))\))/gi);
   return parts
     .map((part, i) => {
-      // Odd-indexed parts are fenced code block matches
-      if (i % 2 === 1) {
-        const match = part.match(/^```(\w*)\n?([\s\S]*?)```$/);
-        if (match) {
-          const lang = match[1];
-          const code = esc(match[2]);
-          const langAttr = lang ? ` class="language-${esc(lang)}"` : "";
-          return `<pre><code${langAttr}>${code}</code></pre>`;
-        }
+      // Captured segments (odd-indexed) are either image links or code blocks.
+      const imgMatch = part.match(IMG_LINK_RE);
+      if (imgMatch) {
+        return renderImageEmbed(imgMatch[2], imgMatch[1]);
+      }
+      const codeMatch = part.match(/^```(\w*)(\n)?([\s\S]*?)```$/);
+      if (codeMatch) {
+        // An info string is only a language when a newline follows the opening
+        // fence. A single-line fence (no newline) has no language — its first
+        // token is content, so ```This is a test``` must keep "This" as code
+        // rather than swallowing it as a language identifier.
+        const hasNewline = !!codeMatch[2];
+        const lang = hasNewline ? codeMatch[1] : "";
+        const code = esc(hasNewline ? codeMatch[3] : codeMatch[1] + codeMatch[3]);
+        const langAttr = lang ? ` class="language-${esc(lang)}"` : "";
+        return (
+          `<div class="code-block">` +
+          `<div class="code-block-bar">` +
+          `<button type="button" class="code-block-btn" title="Toggle word wrap" aria-label="Toggle word wrap" aria-pressed="false" ` +
+          `onclick="this.setAttribute('aria-pressed', this.closest('.code-block').classList.toggle('wrap'))">${ICON_WRAP}</button>` +
+          `<button type="button" class="code-block-btn" title="Copy" aria-label="Copy code" ` +
+          `onclick="navigator.clipboard.writeText(this.closest('.code-block').querySelector('code').textContent).then(() => { this.classList.add('copied'); setTimeout(() => this.classList.remove('copied'), 1200); })">${ICON_COPY}</button>` +
+          `</div>` +
+          `<pre><code${langAttr}>${code}</code></pre>` +
+          `</div>`
+        );
       }
       // Strip boundary newlines that would double-up spacing next to <pre> blocks
       let prose = part;
@@ -232,7 +343,9 @@ export function formatProse(text) {
         /^(#{1,6}) (.+)$/gm,
         (_, hashes, content) => `<strong class="md-h${hashes.length}">${content}</strong>`,
       );
-      return escaped.replace(/\n/g, "<br>");
+      // Double+ linebreak: one <br> plus a half-line spacer so the paragraph gap
+      // is 1.5x a single break (not 2x). Single \n stays a plain <br>.
+      return escaped.replace(/\n{2,}/g, '<br><span class="pbreak"></span>').replace(/\n/g, "<br>");
     })
     .join("");
 }
@@ -266,15 +379,28 @@ export function replacePlaceholders(text, userName, charName) {
  */
 export function resolvePlaceholders(text) {
   let userName = S.settings?.user_name || "User";
-  if (S.activePersonaId) {
-    const activePersona = S.personas.find((p) => p.id === S.activePersonaId);
-    if (activePersona && activePersona.name) {
-      userName = activePersona.name;
+  const personaId = effectivePersonaId();
+  if (personaId) {
+    const persona = S.personas.find((p) => p.id === personaId);
+    if (persona && persona.name) {
+      userName = persona.name;
     }
   }
   const conv = S.conversations?.find((c) => c.id === S.activeConvId);
   const charName = conv?.character_name || "";
   return replacePlaceholders(text, userName, charName);
+}
+
+/**
+ * The persona actually in force for the open conversation: conversation pin →
+ * character pin → global default. Mirrors backend resolve_persona_id.
+ * @returns {number|null} Persona id, or null when none applies
+ */
+export function effectivePersonaId() {
+  const conv = S.conversations?.find((c) => c.id === S.activeConvId);
+  if (conv?.persona_lock_id) return conv.persona_lock_id;
+  const card = conv?.character_card_id ? (S.allCharacters || []).find((c) => c.id === conv.character_card_id) : null;
+  return card?.persona_lock_id || S.activePersonaId || null;
 }
 
 export function formatBytes(bytes) {

@@ -17,14 +17,21 @@ import logging
 import os
 from typing import Any
 
-from backend.database.connection import get_db
-from backend.database.queries.workflow_attachments import _encode_metadata_field, insert_workflow_attachment_row
-
+from ..database.connection import get_db
+from ..database.queries.messages import register_workflow_attachment_persister
+from ..database.queries.workflow_attachments import (
+    EVICTED_MARKER,
+    _encode_metadata_field,
+    _staging_root,
+    insert_workflow_attachment_row,
+)
 from .registry import get_workflow
 
 logger = logging.getLogger(__name__)
 
-EVICTED_MARKER = "[evicted]"
+# EVICTED_MARKER is re-exported from the database boundary above (where it
+# describes the persisted ``data_b64`` shape) so the eviction layer here and
+# the route layer in main.py can keep importing it from this module.
 
 
 class RehydrateAlreadyDoneError(ValueError):
@@ -195,8 +202,7 @@ async def rehydrate_attachment(attachment_id: int, data: bytes, *, consumption_m
         budget = await _get_budget_bytes_on(db)
         if new_size > budget:
             raise ValueError(
-                f"workflow_attachment {attachment_id!r} size {new_size} exceeds "
-                f"cache budget {budget}; refusing to rehydrate"
+                f"workflow_attachment {attachment_id!r} size {new_size} exceeds cache budget {budget}; refusing to rehydrate"
             )
 
         candidates = await _byte_bearing_candidates_on(db)
@@ -219,8 +225,7 @@ async def rehydrate_attachment(attachment_id: int, data: bytes, *, consumption_m
         # intent on the very next insert.
         if cm_json is not None:
             await db.execute(
-                "UPDATE workflow_attachments "
-                "SET data_b64 = ?, recent_accesses = NULL, consumption_metadata = ? WHERE id = ?",
+                "UPDATE workflow_attachments SET data_b64 = ?, recent_accesses = NULL, consumption_metadata = ? WHERE id = ?",
                 (data_b64, cm_json, attachment_id),
             )
         else:
@@ -343,7 +348,11 @@ def _estimate_size(attachment: dict) -> int:
         return len(raw)
     path = attachment.get("path")
     if isinstance(path, str):
-        return os.path.getsize(path)
+        # Confine to the staging root before stat (see _staging_root).
+        resolved = os.path.realpath(path)
+        if not resolved.startswith(_staging_root() + os.sep):
+            raise ValueError("path escapes the workflow staging root")
+        return os.path.getsize(resolved)
     return 0
 
 
@@ -407,10 +416,14 @@ def validate_workflow_attachment_shape(attachment: Any) -> tuple[bool, str | Non
         path = attachment["path"]
         if not isinstance(path, str):
             return False, "path must be a string"
+        # Confine to the staging root before stat (see _staging_root).
+        resolved = os.path.realpath(path)
+        if not resolved.startswith(_staging_root() + os.sep):
+            return False, "path is outside the workflow staging area"
         try:
-            if not os.path.isfile(path):
+            if not os.path.isfile(resolved):
                 return False, "path does not exist or is not a regular file"
-            if os.path.getsize(path) == 0:
+            if os.path.getsize(resolved) == 0:
                 return False, "path points at an empty file"
         except OSError:
             return False, "path is not stat-able"
@@ -949,3 +962,10 @@ async def delete_workflow_attachments(
             "root_id": new_root,
             "active_sibling_id": new_active,
         }
+
+
+# Wire this module's batch persister into the database layer's add_message
+# seam (dependency inversion -- the DB layer must not import up into
+# backend.workflows). Registered at import; backend.workflows is always
+# imported before any workflow attachment reaches add_message.
+register_workflow_attachment_persister(insert_workflow_attachments)
