@@ -396,7 +396,8 @@ def build_direction_note_prompt(
     if tool_schema is not None:
         labels = {df["id"]: (df.get("injection_label") or df.get("label") or "").strip() for df in direction_note_fragments}
         parts.append(_tool_call_instruction("record_direction_note", tool_schema, labels=labels))
-    return "\n\n".join(parts)
+    # Close the [OOC: aside opened in DIRECTION_NOTE_PREAMBLE; the whole instruction is the aside.
+    return "\n\n".join(parts) + "]"
 
 
 def build_editor_prompt(
