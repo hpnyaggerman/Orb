@@ -55,20 +55,18 @@ async def compose_prompt(
     *,
     client: Any,
     prefix: Sequence[dict],
-    scene: dict | str,
+    scene: dict,
     guideline: str,
     char_prompt: str,
     persona_prompt: str,
     settings: Any,
-    artist_tags: str = "",
-    style_tags: str = "",
     pass_id: str | None = None,
     kv_tracker: Any = None,
     enabled_tools: Any = None,
     schema_overrides: Any = None,
 ) -> AsyncIterator[dict]:
     tail = [
-        {"role": "user", "content": compose_instruction(guideline, char_prompt, persona_prompt, artist_tags, style_tags)},
+        {"role": "user", "content": compose_instruction(guideline, char_prompt, persona_prompt)},
         {"role": "user", "content": render_scene_block(scene)},
     ]
     async for event in forced_tool_call(

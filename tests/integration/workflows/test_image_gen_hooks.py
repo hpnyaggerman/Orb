@@ -13,7 +13,7 @@ import pytest
 
 from backend.database import create_character_card, create_conversation
 from backend.workflows import PostCtx, RerollGenCtx, set_workflow_character_state
-from backend.workflows.image_gen import hooks, prompt_assembly
+from backend.workflows.image_gen import hooks
 from backend.workflows.image_gen.comfy import ComfyError
 
 WID = "image_gen"
@@ -111,39 +111,6 @@ async def test_post_pipeline_default_off_without_state(client, monkeypatch):
 
     events = [ev async for ev in hooks.post_pipeline(_post_ctx(cid, char_id, "Hi."))]
     assert events == []
-
-
-async def test_post_pipeline_threads_artist_style_to_composer(client, monkeypatch):
-    # Artist/style tags reach the prompt via the composer's instruction, not the
-    # mechanical layer: the composer receives them, and the assembled positive
-    # starts with the quality block followed directly by the composed string.
-    cid, char_id = await _seed()
-    await set_workflow_character_state(char_id, WID, {"enabled": True, "prompt": "a tester"})
-    await client.put(
-        f"/api/workflows/{WID}/config",
-        json={"config": {"artist_tags": "by someone", "style_tags": "flat color"}},
-    )
-
-    seen = {}
-
-    async def fake_analyze(**kwargs):
-        yield {"type": "result", "args": _SCENE}
-
-    async def fake_compose(**kwargs):
-        seen.update(kwargs)
-        yield {"type": "result", "args": {"positive_prompt": "1girl, tester, by someone, flat color, hat"}}
-
-    monkeypatch.setattr(hooks, "analyze_scene", fake_analyze)
-    monkeypatch.setattr(hooks, "compose_prompt", fake_compose)
-    _stub_render(monkeypatch)
-
-    events = [ev async for ev in hooks.post_pipeline(_post_ctx(cid, char_id, "She smiles."))]
-
-    assert seen["artist_tags"] == "by someone"
-    assert seen["style_tags"] == "flat color"
-    att = [e for e in events if e.get("type") == "attach_artifact"][0]["attachment"]
-    positive = att["generation_metadata"]["positive"]
-    assert positive == prompt_assembly.DEFAULT_QUALITY_TAGS + ", 1girl, tester, by someone, flat color, hat"
 
 
 async def test_post_pipeline_degrades_on_comfy_error(client, monkeypatch):
@@ -262,22 +229,16 @@ async def test_char_state_round_trip(client):
     assert again.json()["prompt"] == "a knight"
 
 
-async def test_on_demand_test_runs_composer_over_baseline_scene(client, monkeypatch):
+async def test_on_demand_test_unifies_config_without_llm(client, monkeypatch):
     cid, char_id = await _seed()
     await set_workflow_character_state(char_id, WID, {"enabled": True, "prompt": "a knight, plate armor"})
 
-    async def fail_analyze(**kwargs):
-        raise AssertionError("a config test must not run the scene analyzer")
+    async def fail(**kwargs):
+        raise AssertionError("a config test must not run the LLM passes")
         yield  # pragma: no cover
 
-    seen = {}
-
-    async def fake_compose(**kwargs):
-        seen.update(kwargs)
-        yield {"type": "result", "args": {"positive_prompt": "1girl, knight, by someone, plate armor"}}
-
-    monkeypatch.setattr(hooks, "analyze_scene", fail_analyze)
-    monkeypatch.setattr(hooks, "compose_prompt", fake_compose)
+    monkeypatch.setattr(hooks, "analyze_scene", fail)
+    monkeypatch.setattr(hooks, "compose_prompt", fail)
 
     captured = {}
 
@@ -294,26 +255,9 @@ async def test_on_demand_test_runs_composer_over_baseline_scene(client, monkeypa
     )
     assert resp.status_code == 200
     assert "image_b64" in resp.json()
-    # The composer receives the unsaved artist tags, the stored character
-    # prompt, and the baseline scene on an empty prefix; the mechanical layer
-    # prepends the quality block (default here) and the negative falls back to
-    # its baked default.
-    assert seen["artist_tags"] == "by someone"
-    assert seen["char_prompt"] == "a knight, plate armor"
-    assert seen["scene"] == prompt_assembly.TEST_SCENE
-    assert seen["prefix"] == []
-    assert captured["positive"] == prompt_assembly.DEFAULT_QUALITY_TAGS + ", 1girl, knight, by someone, plate armor"
+    # The single prompt unifies the prepended tags with the character prompt; the
+    # negative falls back to its baked default.
+    assert "a knight, plate armor" in captured["positive"]
+    assert "by someone" in captured["positive"]
+    assert "sitting in front of a table" in captured["positive"]
     assert captured["negative"]
-
-
-async def test_on_demand_test_errors_when_composer_yields_nothing(client, monkeypatch):
-    cid, _ = await _seed()
-
-    async def fake_compose(**kwargs):
-        yield {"type": "result", "args": {}}
-
-    monkeypatch.setattr(hooks, "compose_prompt", fake_compose)
-
-    resp = await client.post(f"/api/conversations/{cid}/workflows/{WID}/trigger", json={"action": "test"})
-    assert resp.status_code == 200
-    assert "error" in resp.json()

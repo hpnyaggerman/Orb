@@ -32,9 +32,9 @@ from .comfy import ComfyError, generate_image, inject_graph, load_template
 from .passes import analyze_scene, compose_prompt
 from .prompt_assembly import (
     CONFIG_DEFAULTS,
-    TEST_SCENE,
     assemble_positive,
     build_generation_metadata,
+    build_test_positive,
     normalize_config,
     resolve_gen_params,
     resolve_guideline,
@@ -181,8 +181,6 @@ async def post_pipeline(ctx):
         guideline=resolve_guideline(cfg),
         char_prompt=char_prompt,
         persona_prompt=persona_prompt,
-        artist_tags=cfg["artist_tags"],
-        style_tags=cfg["style_tags"],
         settings=ctx.settings,
         pass_id=f"{WORKFLOW_ID}:compose",
         kv_tracker=ctx.kv_tracker,
@@ -250,8 +248,6 @@ async def regenerate(ctx, body):
                 guideline=resolve_guideline(cfg),
                 char_prompt=char_prompt,
                 persona_prompt=persona_prompt,
-                artist_tags=cfg["artist_tags"],
-                style_tags=cfg["style_tags"],
                 settings=ctx.settings,
             )
         )
@@ -355,36 +351,16 @@ async def _render_preview(cfg: dict, positive: str) -> dict:
 
 
 async def _test(ctx, body) -> dict:
-    """Render a config preview: run the composer pass over the neutral baseline
-    scene, then render the result -- nothing persisted. The real composer runs so
-    the preview exercises the exact tag placement a turn would produce, including
-    the model-replicated artist/style tags; the scene analyzer is skipped because
-    the baseline scene stands in for an analyzed moment, and the prefix is empty
-    so the preview reflects the settings rather than the conversation history.
-    The panel's live (possibly unsaved) per-character prompt overrides the stored
-    one.
+    """Render a neutral preview that folds the configured quality/artist/style tags
+    and the character and persona prompts into a simple baseline scene -- no LLM
+    passes, nothing persisted -- so the user can confirm the prompt settings produce
+    what they want. The panel's live (possibly unsaved) per-character prompt
+    overrides the stored one.
     """
     cfg = _cfg_with_overrides(await get_workflow_config(WORKFLOW_ID), body)
     char_state = await get_workflow_character_state(ctx.character_id, WORKFLOW_ID) if ctx.character_id else None
     char_prompt, persona_prompt = _resolve_prompts(ctx, cfg, char_state)
     if isinstance(body.get("char_prompt"), str):
         char_prompt = body["char_prompt"]
-    composed = (
-        await _collect(
-            compose_prompt(
-                client=ctx.client,
-                prefix=[],
-                scene=TEST_SCENE,
-                guideline=resolve_guideline(cfg),
-                char_prompt=char_prompt,
-                persona_prompt=persona_prompt,
-                artist_tags=cfg["artist_tags"],
-                style_tags=cfg["style_tags"],
-                settings=ctx.settings,
-            )
-        )
-    ).get("positive_prompt", "")
-    if not composed.strip():
-        return {"error": "prompt composition produced nothing"}
-    positive = assemble_positive(composed, cfg)
+    positive = build_test_positive(cfg, char_prompt, persona_prompt)
     return await _render_preview(cfg, positive)
