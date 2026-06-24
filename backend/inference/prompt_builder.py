@@ -259,7 +259,8 @@ def build_director_tool_prompt(
         parts.append(f'User\'s next message (for context, take this into account when directing):\n"""{user_message}"""')
     elif tool_name == "rewrite_user_prompt":
         parts.append(build_rewrite_prompt(user_message))
-    return "\n\n".join(parts)
+    # Close the [OOC: aside opened in DIRECTOR_PREAMBLE; the whole instruction is the aside.
+    return "\n\n".join(parts) + "]"
 
 
 def _render_decided(value: Any) -> str:
@@ -312,7 +313,8 @@ def build_director_scene_step_prompt(
             parts.append(f"Previous value (update it): {progressive_prior}")
 
     parts.append(f'User\'s next message (context):\n"""{user_message}"""')
-    return "\n\n".join(parts)
+    # Close the [OOC: aside opened in DIRECTOR_PREAMBLE; the whole instruction is the aside.
+    return "\n\n".join(parts) + "]"
 
 
 def build_feedback_prompt(
@@ -335,7 +337,8 @@ def build_feedback_prompt(
     if tool_schema is not None:
         labels = {df["id"]: (df.get("injection_label") or "").strip() for df in feedback_fragments}
         parts.append(_tool_call_instruction("give_feedback", tool_schema, labels=labels))
-    return "\n\n".join(parts)
+    # Close the [OOC: aside opened in FEEDBACK_PREAMBLE; the whole instruction is the aside.
+    return "\n\n".join(parts) + "]"
 
 
 DIRECTION_NOTE_PREAMBLE = (
@@ -426,7 +429,8 @@ def build_editor_prompt(
         parts.append(EDITOR_PATCH_INSTRUCTIONS)
         parts.append(report_text)
 
-    return "\n\n".join(parts)
+    # Close the [OOC: aside opened in EDITOR_PREAMBLE; the whole instruction is the aside.
+    return "\n\n".join(parts) + "]"
 
 
 # ── Style injection block

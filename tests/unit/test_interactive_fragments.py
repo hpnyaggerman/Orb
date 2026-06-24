@@ -7,6 +7,10 @@ import pytest
 from backend.database import SEED_INTERACTIVE_FRAGMENTS
 from backend.inference import (
     build_direct_scene_tool,
+    build_director_scene_step_prompt,
+    build_director_tool_prompt,
+    build_editor_prompt,
+    build_feedback_prompt,
     build_feedback_tool,
     build_style_injection,
     compute_style_injection_block,
@@ -528,3 +532,18 @@ class TestSeedInteractiveFragments:
             "story_direction",
         }
         assert ids == expected
+
+
+# build_director/editor/feedback preambles open [OOC: -- their builders must close it.
+def test_ooc_preambles_close_their_bracket():
+    """Each pass preamble opens an ``[OOC:`` aside; the builder must close it at the end so the
+    whole instruction is bracketed and the delimiters stay balanced (regression guard)."""
+    outs = [
+        build_director_tool_prompt("direct_scene", "hi", [], []),
+        build_director_scene_step_prompt("hi", [], []),
+        build_editor_prompt(False, "", False, ""),
+        build_feedback_prompt([]),
+    ]
+    for o in outs:
+        assert o.startswith("[OOC:")
+        assert o.endswith("]")
