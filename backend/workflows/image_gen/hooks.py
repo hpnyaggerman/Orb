@@ -19,12 +19,21 @@ on-demand action router:
 from __future__ import annotations
 
 import base64
+import json
 import logging
 
+from fastapi.responses import StreamingResponse
+
+from backend.core import ChatMessage
 from backend.workflows.toolkit import (
+    Macros,
+    build_prefix,
+    get_conversation,
     get_message_by_id,
+    get_user_personas,
     get_workflow_character_state,
     get_workflow_config,
+    insert_workflow_attachment,
     set_workflow_character_state,
 )
 
@@ -56,6 +65,13 @@ def _phase(label: str) -> dict:
 
 def _phase_done() -> dict:
     return {"event": "phase_status", "data": {"channel": f"workflow:{WORKFLOW_ID}", "state": "done"}}
+
+
+def _sse(event: dict) -> str:
+    """Wire-frame an event for the off-turn production stream. The on-demand
+    trigger route returns the hook's value verbatim, so the production path frames
+    its own events the way the orchestrator frames the in-turn pipeline's."""
+    return f"event: {event['event']}\ndata: {json.dumps(event.get('data'))}\n\n"
 
 
 def _resolve_prompts(ctx, cfg: dict, char_state: dict | None) -> tuple[str, str]:
@@ -93,6 +109,65 @@ def _cold_prefix(history) -> list[dict]:
     return out
 
 
+def _resolve_char_context(settings, card) -> tuple[str, str, str]:
+    """Resolve the effective system prompt, character persona, and example messages.
+
+    A duplicate of ``database.resolve_char_context`` (minus its card fetch -- the
+    card is always supplied off-turn): the production path cannot reach the
+    pipeline's prefix builder, which lives a layer above the workflow. Keep in sync
+    with ``backend.database.queries.character_cards.resolve_char_context``.
+    """
+    shared = settings.get("shared_system_prompt", "")
+    model_specific = settings.get("system_prompt", "")
+    system_prompt = f"{shared}\n\n{model_specific}" if shared and model_specific else (shared or model_specific)
+    char_persona, mes_example = "", ""
+    if card:
+        char_persona = "\n\n".join(filter(None, [card.get("description", ""), card.get("personality", "")]))
+        mes_example = card.get("mes_example", "")
+        card_system_prompt = card.get("system_prompt")
+        if card_system_prompt and not settings.get("prevent_prompt_overrides"):
+            system_prompt = card_system_prompt
+    return system_prompt, char_persona, mes_example
+
+
+def _resolve_persona_id(conv, card, settings):
+    """Effective persona id: conversation pin -> character pin -> global active.
+
+    A duplicate of ``pipeline.predicates.resolve_persona_id``, here for the same
+    layering reason as ``_resolve_char_context``; keep the two in sync.
+    """
+    return conv.get("persona_lock_id") or (card.get("persona_lock_id") if card else None) or settings.get("active_persona_id")
+
+
+async def _build_offturn_prefix(ctx, conv, messages) -> list[ChatMessage]:
+    """Rebuild the base prefix the in-turn passes receive -- system prompt,
+    character framing, and history -- for the off-turn production path, so a
+    manually generated image gets the same context an auto one does. Mirrors the
+    pipeline's ``_build_prefix_from_ctx`` through the toolkit surface. Pre-pipeline
+    system blocks have no off-turn analogue and are omitted.
+    """
+    settings = ctx.settings
+    card = ctx.character
+    system_prompt, char_persona, mes_example = _resolve_char_context(settings, card)
+    persona_id = _resolve_persona_id(conv, card, settings)
+    persona = None
+    if persona_id is not None:
+        persona = next((p for p in await get_user_personas() if str(p.get("id")) == str(persona_id)), None)
+    macros = Macros.from_settings(settings, conv.get("character_name", ""), persona)
+    user_description = persona.get("description", "") if persona else settings.get("user_description", "")
+    post_history = "" if settings.get("prevent_prompt_overrides") else conv.get("post_history_instructions", "")
+    return build_prefix(
+        system_prompt,
+        char_persona,
+        conv.get("character_scenario", ""),
+        mes_example,
+        post_history,
+        messages,
+        macros,
+        user_description,
+    )
+
+
 def _scene_ok(scene) -> bool:
     return isinstance(scene, dict) and bool(scene.get("characters_present")) and bool(scene.get("outfits"))
 
@@ -124,44 +199,45 @@ def _attachment(img: bytes, mime: str, positive: str, negative: str, params: dic
     }
 
 
-async def _collect(generator) -> dict:
-    """Drain a pass generator and return its terminal tool arguments, ignoring the
-    reasoning events (off-turn callers have no SSE stream to forward them to)."""
-    args: dict = {}
-    async for event in generator:
-        if event.get("type") == "result":
-            args = event.get("args") or {}
-    return args
+async def _generate_core(
+    *,
+    client,
+    prefix,
+    char_prompt: str,
+    persona_prompt: str,
+    moment: str,
+    cfg: dict,
+    settings,
+    kv_tracker=None,
+    enabled_tools=None,
+    schema_overrides=None,
+):
+    """Run the scene analyzer, prompt composer, and ComfyUI render for one image.
 
+    Yields the passes' reasoning and phase-status events; on success yields a
+    single ``{"type": "artifact", "attachment": <dict>}`` and stops; on any
+    LLM-noise or ComfyUI failure yields ``_phase_done`` and stops with no artifact.
 
-async def post_pipeline(ctx):
-    """Generate and attach an image for a character whose image generation is
-    enabled. Yields phase-status events, the two passes' reasoning, and one
-    ``attach_artifact``. Every failure degrades to no image so the turn completes.
+    The per-turn auto path and the on-demand production path both drive this, so a
+    manually generated image is identical to the one auto-generation would have
+    produced. The artifact is handed back as a sentinel rather than persisted here
+    so each caller owns its sink: the turn stages it through the framework, the
+    on-demand path inserts it. ``kv_tracker`` / ``enabled_tools`` /
+    ``schema_overrides`` thread the turn's KV state so the in-turn passes reuse the
+    turn's cache; off-turn callers leave them None and pay the cold prompt.
     """
-    if not ctx.character_id:
-        return
-    char_state = await get_workflow_character_state(ctx.character_id, WORKFLOW_ID)
-    if not (char_state or {}).get("enabled"):
-        return
-    if not (ctx.draft or "").strip():
-        return
-    cfg = normalize_config(await get_workflow_config(WORKFLOW_ID))
-    char_prompt, persona_prompt = _resolve_prompts(ctx, cfg, char_state)
-    moment = _moment(ctx.effective_msg, ctx.draft)
-
     yield _phase("Analyzing scene...")
     scene: dict = {}
     async for event in analyze_scene(
-        client=ctx.client,
-        prefix=ctx.prefix,
+        client=client,
+        prefix=prefix,
         char_prompt=char_prompt,
         moment=moment,
-        settings=ctx.settings,
+        settings=settings,
         pass_id=f"{WORKFLOW_ID}:analyze",
-        kv_tracker=ctx.kv_tracker,
-        enabled_tools=ctx.enabled_tools,
-        schema_overrides=ctx.schema_overrides,
+        kv_tracker=kv_tracker,
+        enabled_tools=enabled_tools,
+        schema_overrides=schema_overrides,
     ):
         if event.get("type") == "result":
             scene = event.get("args") or {}
@@ -175,17 +251,17 @@ async def post_pipeline(ctx):
     yield _phase("Composing prompt...")
     composed = ""
     async for event in compose_prompt(
-        client=ctx.client,
-        prefix=ctx.prefix,
+        client=client,
+        prefix=prefix,
         scene=scene,
         guideline=resolve_guideline(cfg),
         char_prompt=char_prompt,
         persona_prompt=persona_prompt,
-        settings=ctx.settings,
+        settings=settings,
         pass_id=f"{WORKFLOW_ID}:compose",
-        kv_tracker=ctx.kv_tracker,
-        enabled_tools=ctx.enabled_tools,
-        schema_overrides=ctx.schema_overrides,
+        kv_tracker=kv_tracker,
+        enabled_tools=enabled_tools,
+        schema_overrides=schema_overrides,
     ):
         if event.get("type") == "result":
             composed = (event.get("args") or {}).get("positive_prompt", "")
@@ -209,10 +285,44 @@ async def post_pipeline(ctx):
         yield _phase_done()
         return
 
-    att = _attachment(img, mime, positive, negative, params, cfg["comfy_url"])
-    att["source"] = f"workflow:{WORKFLOW_ID}"
-    yield {"type": "attach_artifact", "attachment": att}
+    yield {"type": "artifact", "attachment": _attachment(img, mime, positive, negative, params, cfg["comfy_url"])}
     yield _phase_done()
+
+
+async def post_pipeline(ctx):
+    """Generate and attach an image for a character whose image generation is
+    enabled. Yields phase-status events, the two passes' reasoning, and one
+    ``attach_artifact``. Every failure degrades to no image so the turn completes.
+    """
+    if not ctx.character_id:
+        return
+    char_state = await get_workflow_character_state(ctx.character_id, WORKFLOW_ID)
+    if not (char_state or {}).get("enabled"):
+        return
+    if not (ctx.draft or "").strip():
+        return
+    cfg = normalize_config(await get_workflow_config(WORKFLOW_ID))
+    char_prompt, persona_prompt = _resolve_prompts(ctx, cfg, char_state)
+    async for event in _generate_core(
+        client=ctx.client,
+        prefix=ctx.prefix,
+        char_prompt=char_prompt,
+        persona_prompt=persona_prompt,
+        moment=_moment(ctx.effective_msg, ctx.draft),
+        cfg=cfg,
+        settings=ctx.settings,
+        kv_tracker=ctx.kv_tracker,
+        enabled_tools=ctx.enabled_tools,
+        schema_overrides=ctx.schema_overrides,
+    ):
+        if event.get("type") == "artifact":
+            att = event["attachment"]
+            # The framework's attach_artifact validator only stages bytes whose
+            # source tag matches the producing workflow.
+            att["source"] = f"workflow:{WORKFLOW_ID}"
+            yield {"type": "attach_artifact", "attachment": att}
+        else:
+            yield event
 
 
 async def regenerate(ctx, body):
@@ -226,45 +336,24 @@ async def regenerate(ctx, body):
     cfg = normalize_config(await get_workflow_config(WORKFLOW_ID))
     char_state = await get_workflow_character_state(ctx.character_id, WORKFLOW_ID) if ctx.character_id else None
     char_prompt, persona_prompt = _resolve_prompts(ctx, cfg, char_state)
-    prefix = _cold_prefix(ctx.history)
+    conv = await get_conversation(ctx.conversation_id)
+    prefix = await _build_offturn_prefix(ctx, conv, ctx.history) if conv else _cold_prefix(ctx.history)
 
-    scene = await _collect(
-        analyze_scene(
-            client=ctx.client,
-            prefix=prefix,
-            char_prompt=char_prompt,
-            moment=_moment("", text),
-            settings=ctx.settings,
-        )
-    )
-    if not _scene_ok(scene):
-        return []
-    composed = (
-        await _collect(
-            compose_prompt(
-                client=ctx.client,
-                prefix=prefix,
-                scene=scene,
-                guideline=resolve_guideline(cfg),
-                char_prompt=char_prompt,
-                persona_prompt=persona_prompt,
-                settings=ctx.settings,
-            )
-        )
-    ).get("positive_prompt", "")
-    if not composed.strip():
-        return []
-
-    positive = assemble_positive(composed, cfg)
-    negative = resolve_negative(cfg)
-    params = resolve_gen_params(cfg)
-    try:
-        graph = inject_graph(_TEMPLATE, _graph_values(positive, negative, params))
-        img, mime = await generate_image(graph, base_url=cfg["comfy_url"], timeout=cfg["timeout_s"])
-    except ComfyError as e:
-        logger.warning("image_gen: regenerate render failed for attachment %s: %s", ctx.attachment_id, e)
-        return []
-    return [_attachment(img, mime, positive, negative, params, cfg["comfy_url"])]
+    att = None
+    async for event in _generate_core(
+        client=ctx.client,
+        prefix=prefix,
+        char_prompt=char_prompt,
+        persona_prompt=persona_prompt,
+        moment=_moment("", text),
+        cfg=cfg,
+        settings=ctx.settings,
+    ):
+        if event.get("type") == "artifact":
+            att = event["attachment"]
+    if att is None:
+        logger.info("image_gen: regenerate produced no image for attachment %s", ctx.attachment_id)
+    return [att] if att else []
 
 
 async def reroll_gen(ctx, params, seed):
@@ -305,6 +394,8 @@ async def on_demand(ctx, body):
         return await _set_char_state(ctx, body)
     if action == "test":
         return await _test(ctx, body)
+    if action == "generate":
+        return await _generate(ctx, body)
     return {"error": f"unknown action: {action!r}"}
 
 
@@ -364,3 +455,71 @@ async def _test(ctx, body) -> dict:
         char_prompt = body["char_prompt"]
     positive = build_test_positive(cfg, char_prompt, persona_prompt)
     return await _render_preview(cfg, positive)
+
+
+async def _generate(ctx, body):
+    """Production render: generate and persist an image for an existing assistant
+    message on demand. Validates the target, then returns a streaming response that
+    the generic trigger route relays verbatim -- so the passes' live progress
+    streams back without a dedicated hook type. Unlike the per-turn path this has no
+    per-character enable gate: the toolbar button is itself the explicit request.
+    """
+    mid = body.get("message_id") if isinstance(body, dict) else None
+    if not isinstance(mid, int) or isinstance(mid, bool):
+        return {"error": "message_id (int) required"}
+    anchor = await get_message_by_id(mid)
+    if anchor is None or anchor.get("conversation_id") != ctx.conversation_id:
+        return {"error": "message not found in this conversation"}
+    if anchor.get("role") != "assistant":
+        return {"error": "image generation targets assistant messages"}
+    return StreamingResponse(_generate_stream(ctx, anchor), media_type="text/event-stream")
+
+
+async def _generate_stream(ctx, anchor):
+    """Drive the shared generation core for ``anchor`` and persist the result.
+
+    The image depicts the assistant reply, so the moment pairs that reply with the
+    user message it answers -- the anchor's parent. With no turn in flight the
+    passes read a freshly rebuilt prefix -- the same system prompt and character
+    framing the in-turn passes get -- over the history up to the anchor, never the
+    turns after it, and forgo KV reuse. The terminal ``image_generated`` event
+    carries the new attachment id, or null when generation degraded to no image.
+    """
+    text = (anchor.get("content") or "").strip()
+    if not text:
+        yield _sse(_phase_done())
+        return
+    user_message = ""
+    parent_id = anchor.get("parent_id")
+    if parent_id:
+        parent = await get_message_by_id(parent_id)
+        user_message = (parent or {}).get("content") or ""
+    before = []
+    for message in ctx.history or ():
+        if message.get("id") == anchor["id"]:
+            break
+        before.append(message)
+    conv = await get_conversation(ctx.conversation_id)
+    prefix = await _build_offturn_prefix(ctx, conv, before) if conv else _cold_prefix(before)
+    cfg = normalize_config(await get_workflow_config(WORKFLOW_ID))
+    char_state = await get_workflow_character_state(ctx.character_id, WORKFLOW_ID) if ctx.character_id else None
+    char_prompt, persona_prompt = _resolve_prompts(ctx, cfg, char_state)
+
+    new_id = None
+    async for event in _generate_core(
+        client=ctx.client,
+        prefix=prefix,
+        char_prompt=char_prompt,
+        persona_prompt=persona_prompt,
+        moment=_moment(user_message, text),
+        cfg=cfg,
+        settings=ctx.settings,
+    ):
+        if event.get("type") == "artifact":
+            try:
+                new_id, _ = await insert_workflow_attachment(anchor["id"], event["attachment"])
+            except (ValueError, LookupError, OSError):
+                logger.exception("image_gen: production insert failed for message %s", anchor.get("id"))
+        elif event.get("event"):
+            yield _sse(event)
+    yield _sse({"event": "image_generated", "data": {"attachment_id": new_id}})

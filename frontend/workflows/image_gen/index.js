@@ -6,6 +6,7 @@
 
 import { registerWorkflowPipeline, registerWorkflowToolsPanelCard } from "/static/state.js";
 import { initConfigPanel, configPanelRenderer } from "./config_panel.js";
+import { initGenerate } from "./generate.js";
 
 const WORKFLOW_ID = "image_gen";
 
@@ -20,6 +21,7 @@ function injectStyles() {
 
 injectStyles();
 initConfigPanel();
+initGenerate();
 
 registerWorkflowToolsPanelCard(WORKFLOW_ID, configPanelRenderer);
 registerWorkflowPipeline({
