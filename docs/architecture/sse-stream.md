@@ -61,8 +61,9 @@ A typical `/send` turn with reasoning on (Director + Writer), an Editor pass, an
 | 8 | `writer_rewrite` | BE→FE | `{ "refined_text": "…" }` | *Optional.* Editor's patched prose; FE diffs vs. the draft and swaps the bubble. |
 | 9 | `editor_done` | BE→FE | `{ "tool_calls": [...] }` | Merges editor tool calls into the inspector. |
 | 10 | `feedback` | BE→FE | `{ "values": {...} }` | *Optional.* User-facing notes; display-only, re-renders the inspector. |
-| 11 | `phase_status`, `tts_autoplay`, … | BE→FE | varies | Secondary-workflow passthrough (see §6). |
-| 12 | `done` | BE→FE | *(none)* | Terminal. Stream closes; FE runs `afterStream()`. |
+| 11 | `direction_notes` | BE→FE | `{ "notes": [...] }` | *Optional.* The Director's persistent notes recorded this turn; display-only, re-renders the inspector's Direction Notes block. |
+| 12 | `phase_status`, `tts_autoplay`, … | BE→FE | varies | Secondary-workflow passthrough (see §6). |
+| 13 | `done` | BE→FE | *(none)* | Terminal. Stream closes; FE runs `afterStream()`. |
 
 The only event whose `data` is **not** JSON is `token` — it's a raw text delta, with newlines escaped to `\n` and un-escaped on arrival.
 
