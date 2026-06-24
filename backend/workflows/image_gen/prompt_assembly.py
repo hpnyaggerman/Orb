@@ -12,14 +12,49 @@ from __future__ import annotations
 import secrets
 
 # Backend prompting guideline applied when the config field is left empty. A
-# booru-tag-oriented default that suits the shipped graph; surfaced to the user
-# as the field's placeholder (via the config schema) rather than a stored value,
-# so editing it is an explicit override.
-DEFAULT_GUIDELINE = (
-    "Output ONLY a single comma-separated list of danbooru-style tags. Order subject-first: "
-    "character count and identity, then appearance, outfit, expression, pose, then setting and "
-    "composition. Lowercase, no sentences, no weighting syntax. Prefer concrete visual tags."
-)
+# step-by-step procedure (count -> identity/appearance -> outfit -> pose/action
+# -> scene -> setting) mixing booru tags and natural language; surfaced to the
+# user as the field's placeholder (via the config schema) rather than a stored
+# value, so editing it is an explicit override.
+DEFAULT_GUIDELINE = """Follow this procedure to compose the positive_prompt string. Mix comma-separated tags and natural language sentences as the steps below direct.
+
+NEVER EMIT THESE: masterpiece, best quality, quality tags, score tags (score_N), @artist tags, safe, nsfw, sensitive, explicit, highres, absurdres, newest, recent, year tags. If you emit any of these the prompt breaks.
+
+STEP 1 - CHARACTER COUNT
+Read "Characters present" in the scene. Emit the count tag first: 1girl, 2girls, 1boy, 1girl 1boy, etc.
+
+STEP 2 - IDENTITY AND APPEARANCE
+For each character, read their Character base description or User-persona base description block.
+
+(A) If the block contains a character tag (a recognizable character name like "rem" or "hatsune miku"): emit that tag exactly as-is. If a series tag is present, emit it exactly as-is. Do not reformat either. These are known characters -- the image model has learned their appearance.
+Example: a base description has character tag "rem" and series tag "re:zero kara hajimeru isekai seikatsu" -> emit: rem, re:zero kara hajimeru isekai seikatsu
+
+(B) If the block has NO character tag: the character is original. Emit every visual trait from the block as tags: hair color, length, style, eye color, skin, body type, distinguishing features. Do NOT invent a name tag.
+Example: block has "long silver hair, red eyes, pointed ears, dark skin, tall" -> emit all of those tags.
+
+STEP 3 - OUTFIT
+For each character, read the outfit line in the scene.
+- "default outfit" or no outfit line: emit clothing tags from the base description block.
+- "wearing [items]; without [items]": emit the ADDED articles as tags. Do NOT emit the removed articles. Keep all non-clothing tags (hair, eyes, features) from the base description.
+- The outfit delta always overrides the base. If the scene says "without armor" then drop armor even if the base description includes it.
+
+STEP 4 - POSE AND ACTION
+Read each character's pose and action lines. Emit as tags or short phrases: sitting, arms crossed, holding cup, looking away, smile, open mouth, etc.
+
+STEP 5 - SCENE DESCRIPTION
+If the scene has 2+ characters OR complex spatial positioning: write 1-3 natural language sentences describing who is where and doing what. Name each character by a key visual marker so the image model keeps identities straight.
+Example: "A girl with blue hair sits on the left holding a book. A girl with blonde twintails stands on the right, pointing forward."
+If the scene is solo with a simple pose, skip NL -- tags from previous steps are enough.
+
+STEP 6 - SETTING
+Emit setting tags from the scene anchors: indoors, forest, classroom, night, rain, etc. Add camera or composition tags at the end only if the scene calls for them: dutch angle, from above, depth of field, wide shot.
+
+ADDITIONAL RULES
+- All tags lowercase, spaces not underscores.
+- For known characters in multi-char scenes, still include their hair/eye color in the NL section (step 5) to prevent the model from swapping appearances between characters.
+- For original characters, be thorough. The image model has never seen them. Every visible trait matters.
+- Stay concise. You do not need every possible tag. Focus on what makes this scene distinct.
+- Use (tag:weight) only when a concept is niche or critical and might render too weakly. Weight range 1.3-2.0. Do not weight ordinary tags."""
 
 # Quality tags and negative prompt applied when their config fields are left
 # empty, surfaced to the user as placeholders (via the config schema) rather than
