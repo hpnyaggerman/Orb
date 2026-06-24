@@ -44,14 +44,12 @@ function triggerUrl() {
   return convUrl(S.activeConvId, "workflows", WORKFLOW_ID, "trigger");
 }
 
+// Tools-panel card body: the framework owns the card frame (name + on/off toggle);
+// this returns just the description and a Settings button that opens the full form
+// in a modal.
 export function configPanelRenderer() {
-  return `<div class="tool-card">
-    <div class="tool-card-header">
-      <span class="tool-card-name">Image Generation</span>
-      <button class="ig-settings-btn" onclick="window.imageGenOpenSettings()">Settings</button>
-    </div>
-    <div class="tool-card-desc">Illustrate each reply through a ComfyUI backend.</div>
-  </div>`;
+  return `<div class="tool-card-desc">Illustrate each reply through a ComfyUI backend.</div>
+    <button class="ig-settings-btn" onclick="window.imageGenOpenSettings()">Settings</button>`;
 }
 
 function openSettings() {

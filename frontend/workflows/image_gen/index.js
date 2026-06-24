@@ -4,7 +4,7 @@
 // two-pass reasoning rail. Rendered images use the framework's default image
 // widget, so no attachment renderer is registered.
 
-import { S, registerWorkflowPipeline } from "/static/state.js";
+import { registerWorkflowPipeline, registerWorkflowToolsPanelCard } from "/static/state.js";
 import { initConfigPanel, configPanelRenderer } from "./config_panel.js";
 
 const WORKFLOW_ID = "image_gen";
@@ -21,7 +21,7 @@ function injectStyles() {
 injectStyles();
 initConfigPanel();
 
-S.workflowToolsPanelRenderers.push(configPanelRenderer);
+registerWorkflowToolsPanelCard(WORKFLOW_ID, configPanelRenderer);
 registerWorkflowPipeline({
   id: WORKFLOW_ID,
   label: "Image Generation",
