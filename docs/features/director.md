@@ -42,3 +42,4 @@ Fragments can be reordered; precedence runs top-down and the Director tries to f
 - **List** — a collection of plain text values. Rendered as a bullet list under the label.
 - **Progressive** — a text value that persists across turns. Both the Director and Writer can see the previous turn's value alongside the new one, rendered as `Label: old value → new value`. Useful for incremental stat tracking.
 - **Feedback** — instead of steering the Writer, this produces an out-of-character note shown to *you* in the Inspector after the reply is written. See [Feedback Fragments](feedback-fragments.md).
+- **Direction note** — instead of steering a single reply, this records a lasting note that persists across the branch and can be fed back to the Director and/or Writer on later turns. See [Direction Notes](direction-notes.md).
