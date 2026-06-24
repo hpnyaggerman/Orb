@@ -163,6 +163,8 @@
 
 .message .msg-body p { margin-bottom: .6em; }
 .message .msg-body p:last-child { margin-bottom: 0; }
+/* half-line spacer for double linebreaks: .5 x line-height (1.65) = 1:1.5 gap */
+.message .msg-body .pbreak { display: block; height: .825em; }
 .message .msg-body em { font-style: italic; color: var(--text-secondary); }
 .message .msg-body strong { font-weight: 600; }
 .message .msg-body .quoted { color: var(--accent); }
