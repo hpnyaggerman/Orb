@@ -9,6 +9,7 @@ from typing import Any, AsyncIterator, Mapping, Sequence
 import httpx
 
 from . import endpoint_profiles
+from .gemma_tool_format import parse_gemma_tool_calls
 
 logger = logging.getLogger(__name__)
 
@@ -303,9 +304,9 @@ class LLMClient:
 
 
 def _sanitize_args(obj):
-    """Recursively strip tokenizer-artifact quote tokens (``<|"|``) from string values."""
+    """Recursively strip tokenizer-artifact quote tokens (``<|"|>``) from string values."""
     if isinstance(obj, str):
-        return obj.replace('<|"|', "").replace('<|"|', "")
+        return obj.replace('<|"|>', "")
     if isinstance(obj, list):
         return [_sanitize_args(v) for v in obj]
     if isinstance(obj, dict):
@@ -326,9 +327,10 @@ def _make_tool_call(name: str, arguments) -> dict:
 def parse_tool_calls(message: dict) -> list[dict]:
     """Extract tool calls from a completion message.
 
-    Tries, in order: the standard ``tool_calls`` array, Gemma-style
-    ``<tool_call>...</tool_call>`` tags, then JSON embedded in the content
-    body (common with some local servers).
+    Tries, in order: the standard ``tool_calls`` array, Hermes-style
+    ``<tool_call>...</tool_call>`` tags, Gemma 4 native
+    ``<|tool_call>call:NAME{...}<tool_call|>`` tokens, then JSON embedded in
+    the content body (common with some local servers).
     """
     tool_calls = []
 
@@ -344,7 +346,7 @@ def parse_tool_calls(message: dict) -> list[dict]:
     if not content:
         return []
 
-    # Gemma-style <tool_call>...</tool_call> tags
+    # Hermes-style <tool_call>...</tool_call> tags
     for match in re.finditer(r"<tool_call>(.*?)</tool_call>", content, re.DOTALL):
         try:
             parsed = json.loads(match.group(1).strip())
@@ -354,6 +356,11 @@ def parse_tool_calls(message: dict) -> list[dict]:
             pass
     if tool_calls:
         return tool_calls
+
+    # Gemma 4 native <|tool_call>call:NAME{...}<tool_call|> tokens
+    gemma_calls = parse_gemma_tool_calls(content)
+    if gemma_calls:
+        return [_make_tool_call(c["name"], c["arguments"]) for c in gemma_calls]
 
     # Try to find JSON objects or arrays in the content
     for start_char, end_char in [("{", "}"), ("[", "]")]:
