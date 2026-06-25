@@ -34,8 +34,8 @@ def migrate(conn: sqlite3.Connection) -> None:
         print("[migrations] 0035: added direction_note_timing column to interactive_fragments")
 
     # Ship the default direction_note fragment to existing installs; the guard makes this a
-    # no-op on fresh ones, which seeded it before migrations ran. The row is pinned here so a
-    # later edit to the seed cannot change what an existing install received.
+    # no-op on fresh ones, which seeded it before migrations ran. Keep this description in sync
+    # with the 'characterization' entry in SEED_INTERACTIVE_FRAGMENTS so the two never diverge.
     frag_ids = {row[0] for row in conn.execute("SELECT id FROM interactive_fragments").fetchall()}
     if "characterization" not in frag_ids:
         conn.execute(
@@ -43,10 +43,11 @@ def migrate(conn: sqlite3.Connection) -> None:
             "(id, label, description, field_type, required, enabled, injection_label, sort_order, direction_note_timing) "
             "VALUES ('characterization', 'Characterization', ?, 'direction_note', 0, 0, 'Characterization', 6, 'post_turn')",
             (
-                "Record a substantial, long-lasting change that this turn's events have caused in a "
-                "character's established characterization: how they behave, relate, or see the world. "
-                "Name the character, the change, and its cause. If this turn produced no such change, "
-                "leave empty.",
+                "Record the substantial, long-lasting changes this turn's events have caused in a "
+                "character's established characterization -- how they act, how they relate to the user "
+                "and other characters, or what they believe about the world or themselves. A single "
+                "character may change in several of these ways at once; record every change that "
+                "qualifies -- several, one, or none at all -- naming the character, the change, and its cause.",
             ),
         )
         print("[migrations] 0035: seeded the default 'characterization' direction_note fragment")

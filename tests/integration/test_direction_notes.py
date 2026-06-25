@@ -447,6 +447,25 @@ async def test_get_for_path_orders_by_branch_not_row_id(client, db, llm_mock):
     assert [r["message_id"] for r in rows] == [early, late]
 
 
+async def test_deleting_message_removes_its_notes(client, db, llm_mock):
+    cid = "conv-dn-del"
+    await dbmod.create_conversation(cid, "dn", "Bot", "a scenario")
+    uid, _ = await dbmod.add_message(cid, "user", "hi", 0)
+    aid, _ = await dbmod.add_message(cid, "assistant", "yo", 1, parent_id=uid)
+    await dbmod.set_active_leaf(cid, aid)
+    await dbmod.create_direction_notes(
+        cid, aid, [{"interactive_fragment_id": "human", "interactive_fragment_label": "N", "content": "note on the reply"}]
+    )
+    assert [r["content"] for r in await dbmod.get_direction_notes_for_path(cid, [uid, aid])] == ["note on the reply"]
+
+    # Removing the assistant message cascade-deletes its note (FK ON DELETE CASCADE, foreign_keys=ON)
+    # and moves the active leaf to the parent, so the note leaves both the DB and the branch path.
+    assert await dbmod.delete_message_with_descendants(cid, aid) is True
+    assert await dbmod.get_direction_notes_for_message(aid) == []
+    path_ids = [m["id"] for m in await dbmod.get_messages(cid)]
+    assert await dbmod.get_direction_notes_for_path(cid, path_ids) == []
+
+
 async def test_per_fragment_timing_runs_both_steps(client, db, llm_mock):
     cid = "conv-dn-timing"
     await dbmod.create_conversation(cid, "dn", "Bot", "a scenario")
