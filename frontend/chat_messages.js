@@ -138,6 +138,9 @@ export async function deleteMessage(msgId) {
         S.directorState = await api.get(convUrl(S.activeConvId, "director"));
         renderMessages();
         clearInspectedMessage();
+        // Deletion cascades to the notes on the removed messages and moves the active branch,
+        // so the panel's path-scoped set is stale; refetch it if open (mirrors switchBranch).
+        if (isUtilityPanelOpen("direction-notes-panel")) await renderDirectionNotesPanel();
         scrollToBottom();
         toast("Message deleted");
       } catch (e) {
