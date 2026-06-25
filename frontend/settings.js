@@ -7,6 +7,7 @@ import { api } from "./api.js";
 import { renderInspectorSecondary, renderMessages } from "./chat.js";
 import { renderInteractiveFragments } from "./library_fragments.js";
 import { closeModal, showConfirmModal, showModal } from "./modal.js";
+import { closeUtilityPanel, isUtilityPanelOpen, openUtilityPanel } from "./panels.js";
 import { initComboboxes, loadAgentModelConfigs, loadEndpoints, renderEndpoints } from "./settings_models.js";
 import { loadPersonas, updateUserBtn } from "./settings_personas.js";
 import { S, effectiveWorkflowEnabled } from "./state.js";
@@ -88,6 +89,9 @@ export async function loadSettings() {
   // and again by at least one enabled feedback-type interactive fragment server-side.
   S.feedbackEnabled = Boolean(S.settings.feedback_enabled);
   S.directorIndividualFragments = Boolean(S.settings.director_individual_fragments);
+  S.directionNotesRecord = Boolean(S.settings.direction_notes_record);
+  S.directionNotesInject = S.settings.direction_notes_inject || "off";
+  updateDirectionNotesButton();
 
   if (S.settings.length_guard_max_words) S.lengthGuardMaxWords = S.settings.length_guard_max_words;
   if (S.settings.length_guard_max_paragraphs) S.lengthGuardMaxParagraphs = S.settings.length_guard_max_paragraphs;
@@ -231,34 +235,10 @@ async function persistSettings(payload) {
 }
 
 export function toggleToolsPanel() {
-  const panel = $("tools-panel");
-  const inspector = $("inspector");
-  const btn = $("tools-panel-btn");
-  const inspectorBtn = $("inspector-toggle");
-  const wasOpen = panel.classList.contains("open");
-  const switching = !wasOpen && inspector.classList.contains("open");
-
-  if (wasOpen) {
-    panel.classList.remove("open");
-    btn.classList.remove("btn-active");
-  } else if (switching) {
-    // Both panels are the same width: swap instantly with no slide animation.
-    panel.classList.add("no-anim");
-    inspector.classList.add("no-anim");
-    inspector.classList.remove("open");
-    inspectorBtn.classList.remove("btn-active");
-    panel.classList.add("open");
-    btn.classList.add("btn-active");
-    renderToolsPanel();
-    // Force a synchronous reflow so the swapped state is committed with
-    // transitions disabled before we re-enable them.
-    void panel.offsetWidth;
-    panel.classList.remove("no-anim");
-    inspector.classList.remove("no-anim");
+  if (isUtilityPanelOpen("tools-panel")) {
+    closeUtilityPanel("tools-panel", "tools-panel-btn");
   } else {
-    panel.classList.add("open");
-    btn.classList.add("btn-active");
-    renderToolsPanel();
+    openUtilityPanel("tools-panel", "tools-panel-btn", renderToolsPanel);
   }
 }
 
@@ -304,6 +284,37 @@ export async function toggleDirectorIndividualFragments(on) {
   S.directorIndividualFragments = on;
   renderToolsPanel();
   await persistSettings({ director_individual_fragments: on });
+}
+
+export async function setDirectionNotesRecord(on) {
+  S.directionNotesRecord = on;
+  renderToolsPanel();
+  // Direction-note fragments in the sidebar are greyed out when recording is off.
+  renderInteractiveFragments();
+  // The per-message add-note button is gated on this switch, so repaint the messages too.
+  renderMessages();
+  updateDirectionNotesButton();
+  await persistSettings({ direction_notes_record: on });
+}
+
+export async function setDirectionNotesInject(val) {
+  S.directionNotesInject = val;
+  renderToolsPanel();
+  updateDirectionNotesButton();
+  await persistSettings({ direction_notes_inject: val });
+}
+
+// The Notes button and its panel only matter while notes are being recorded or injected;
+// with both off the feature is dormant, so hide the entry points and close the panel.
+function updateDirectionNotesButton() {
+  const on = S.directionNotesRecord || S.directionNotesInject !== "off";
+  for (const id of ["direction-notes-panel-btn", "mobile-direction-notes-btn"]) {
+    const el = $(id);
+    if (el) el.classList.toggle("hidden", !on);
+  }
+  if (!on && isUtilityPanelOpen("direction-notes-panel")) {
+    closeUtilityPanel("direction-notes-panel", "direction-notes-panel-btn");
+  }
 }
 
 export async function toggleShowEditorDiff(on) {
@@ -552,7 +563,30 @@ export function renderToolsPanel() {
     <div class="tool-card-desc">Director fills each interactive fragment in its own LLM call. More focused output; higher latency.</div>
   </div>`;
 
-  $("tools-list").innerHTML = toolCards + lengthGuardCard + feedbackCard + individualFragmentsCard;
+  const dnRecord = S.directionNotesRecord === true;
+  const dnInject = S.directionNotesInject || "off";
+  const directionNotesCard = `<div class="tool-card ${dnRecord || dnInject !== "off" ? "tool-on" : ""}">
+    <div class="tool-card-header">
+      <span class="tool-card-name">Direction Notes</span>
+    </div>
+    <div class="dn-config">
+      <label>Recording</label>
+      <label class="tog" onclick="event.stopPropagation()">
+        <input type="checkbox" ${dnRecord ? "checked" : ""} onchange="setDirectionNotesRecord(this.checked)">
+        <span class="tog-slider"></span>
+      </label>
+      <label>Injection</label>
+      <select class="tool-card-select" onchange="setDirectionNotesInject(this.value)">
+        <option value="off" ${dnInject === "off" ? "selected" : ""}>Off</option>
+        <option value="director" ${dnInject === "director" ? "selected" : ""}>Director</option>
+        <option value="writer" ${dnInject === "writer" ? "selected" : ""}>Writer</option>
+        <option value="both" ${dnInject === "both" ? "selected" : ""}>Director and writer</option>
+      </select>
+    </div>
+    <div class="tool-card-desc">Recording writes a lasting note per enabled "direction_note" fragment, kept on this branch; each fragment sets when it records (before the writer, or end of turn). Injection feeds stored notes back to the director, the writer, or both, and is independent of recording.</div>
+  </div>`;
+
+  $("tools-list").innerHTML = toolCards + lengthGuardCard + feedbackCard + individualFragmentsCard + directionNotesCard;
 
   const secEl = $("tools-list-secondary");
   if (secEl) {

@@ -17,6 +17,8 @@ const IDS = Object.freeze({
   toolsPanelToggle: "tools-panel-btn",
   inspector: "inspector",
   inspectorToggle: "inspector-toggle",
+  directionNotesPanel: "direction-notes-panel",
+  directionNotesPanelToggle: "direction-notes-panel-btn",
   modalRoot: "modal-root",
   cropModalRoot: "modal-crop-root",
 });
@@ -25,6 +27,7 @@ const APP_STATE = Object.freeze({
   sidebarOpen: "mobile-sidebar-open",
   toolsOpen: "mobile-tools-open",
   inspectorOpen: "mobile-inspector-open",
+  notesOpen: "mobile-notes-open",
 });
 
 const MOBILE_SIDE_PANELS = Object.freeze([
@@ -37,6 +40,11 @@ const MOBILE_SIDE_PANELS = Object.freeze([
     elementId: IDS.inspector,
     toggleId: IDS.inspectorToggle,
     appStateClass: APP_STATE.inspectorOpen,
+  },
+  {
+    elementId: IDS.directionNotesPanel,
+    toggleId: IDS.directionNotesPanelToggle,
+    appStateClass: APP_STATE.notesOpen,
   },
 ]);
 

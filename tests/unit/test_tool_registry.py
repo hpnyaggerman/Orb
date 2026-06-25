@@ -106,6 +106,7 @@ class TestEnabledSchemasBaseline:
             "editor_apply_patch",
             "editor_rewrite",
             "give_feedback",
+            "record_direction_note",
         ]
 
     def test_dict_filter_returns_insertion_order_subset(self):
@@ -162,4 +163,5 @@ class TestRegisterTool:
             "editor_apply_patch",
             "editor_rewrite",
             "give_feedback",
+            "record_direction_note",
         ]

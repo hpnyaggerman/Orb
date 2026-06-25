@@ -7,6 +7,8 @@ import pytest
 from backend.database import SEED_INTERACTIVE_FRAGMENTS
 from backend.inference import (
     build_direct_scene_tool,
+    build_direction_note_prompt,
+    build_direction_note_tool,
     build_director_scene_step_prompt,
     build_director_tool_prompt,
     build_editor_prompt,
@@ -519,7 +521,7 @@ class TestSeedInteractiveFragments:
 
     @pytest.mark.parametrize("frag", SEED_INTERACTIVE_FRAGMENTS, ids=lambda f: f.get("id", "?"))
     def test_field_type_is_valid(self, frag):
-        assert frag["field_type"] in ("string", "array", "progressive", "feedback")
+        assert frag["field_type"] in ("string", "array", "progressive", "feedback", "direction_note")
 
     def test_seed_ids_match_original_hardcoded_params(self):
         ids = {f["id"] for f in SEED_INTERACTIVE_FRAGMENTS}
@@ -529,6 +531,7 @@ class TestSeedInteractiveFragments:
             "next_event",
             "detected_repetitions",
             "suggested_actions",
+            "characterization",
         }
         assert ids == expected
 
@@ -546,3 +549,14 @@ def test_ooc_preambles_close_their_bracket():
     for o in outs:
         assert o.startswith("[OOC:")
         assert o.endswith("]")
+
+
+# build_direction_note_prompt: the [OOC: aside opened in the preamble must close at the end.
+def test_direction_note_prompt_closes_ooc_aside():
+    """Opens ``[OOC:`` in the preamble and must close at the very end, so the whole
+    instruction is bracketed and the delimiters stay balanced (regression guard)."""
+    frag = {"id": "characterization", "injection_label": "Characterization", "description": "x"}
+    prompt = build_direction_note_prompt([], [frag], tool_schema=build_direction_note_tool([frag]))
+    assert prompt.startswith("[OOC:")
+    assert prompt.endswith("]")
+    assert prompt.count("[") == prompt.count("]")

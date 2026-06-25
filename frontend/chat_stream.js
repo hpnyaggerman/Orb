@@ -29,6 +29,12 @@ import {
 } from "./chat_inspector.js";
 import { clearInspectedMessage } from "./chat_messages.js";
 import { _mergeWorkflowRejections } from "./chat_workflow.js";
+import {
+  clearDirectionNotesRegenCut,
+  optimisticDropDirectionNotesFrom,
+  renderDirectionNotesPanel,
+} from "./direction_notes_panel.js";
+import { isUtilityPanelOpen } from "./panels.js";
 import { refreshCharacters } from "./library.js";
 // Imported directly rather than via settings.js to avoid an import cycle
 // (settings.js → chat.js → this module), as chat_conversations.js does.
@@ -333,6 +339,11 @@ export async function afterStream() {
     renderMessages();
   }
   clearInspectedMessage();
+  // The active branch moved (new reply or a regenerated sibling), so the notes
+  // panel's path-scoped set is stale; refetch it if the user has it open. Clear the
+  // regen cut first so the refetch reflects the now-committed server state unfiltered.
+  clearDirectionNotesRegenCut();
+  if (isUtilityPanelOpen("direction-notes-panel")) renderDirectionNotesPanel();
   scrollToBottom(true);
   refreshCharacters();
 }
@@ -354,6 +365,7 @@ export async function processSSEStream(resp, container, msgDiv, signal) {
   S.reasoningWriter = "";
   S.reasoningEditor = "";
   S.lastFeedback = null;
+  S.lastDirectionNotes = null;
   S.reasoningByPass = {};
   S.reasoningPassActive = 0; // tracks streaming progress (for dot lighting)
   S.reasoningPassSelected = 0; // tracks what the user is viewing
@@ -524,6 +536,16 @@ function handleSSEEvent(event, data, container, msgDiv, onToken, onRewrite) {
       try {
         const d = JSON.parse(data);
         S.lastFeedback = { values: d.values || {} };
+        renderInspector();
+      } catch (_) {}
+      break;
+    }
+    case "direction_notes": {
+      // Director-authored notes recorded this turn; display-only, surfaced in the
+      // inspector's Direction Notes block (live here, and from the director-log on revisit).
+      try {
+        const d = JSON.parse(data);
+        S.lastDirectionNotes = { notes: d.notes || [] };
         renderInspector();
       } catch (_) {}
       break;
@@ -747,12 +769,14 @@ export async function sendMessage() {
 // ── Regenerate
 export async function regenerate(msgId) {
   if (!S.activeConvId || !canStartGeneration()) return;
+  optimisticDropDirectionNotesFrom(msgId);
   await runStreamRequest(convUrl(S.activeConvId, "messages", msgId, "regenerate"), agentPayload(), msgId);
 }
 
 // ── Super Regenerate
 export async function superRegenerate(msgId) {
   if (!S.activeConvId || !canStartGeneration()) return;
+  optimisticDropDirectionNotesFrom(msgId);
   await runStreamRequest(convUrl(S.activeConvId, "messages", msgId, "super_regenerate"), agentPayload(), msgId);
 }
 
@@ -801,5 +825,6 @@ export async function submitMagicRewrite(msgId) {
   if (!direction) return;
   if (!S.activeConvId || !canStartGeneration()) return;
   S.magicInputMsgId = null;
+  optimisticDropDirectionNotesFrom(msgId);
   await runStreamRequest(convUrl(S.activeConvId, "messages", msgId, "magic_rewrite"), { direction }, msgId);
 }

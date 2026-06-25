@@ -289,6 +289,11 @@ def apply_patches(draft: str, patches: list[dict]) -> tuple[str, list[str]]:
     logger.debug("Applying %d patches to draft (%d chars)", len(patches), len(draft))
 
     for i, p in enumerate(patches):
+        # A malformed tool call can place a non-dict where the schema expects a
+        # {search, replace} object; skip it rather than crash on .get().
+        if not isinstance(p, dict):
+            logger.debug("Patch %d: non-dict element (%s), skipping", i, type(p).__name__)
+            continue
         search = _unescape_llm_artifacts(p.get("search", ""))
         replace = _unescape_llm_artifacts(p.get("replace", ""))
         if not search:

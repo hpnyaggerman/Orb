@@ -66,10 +66,25 @@ body {
   border-left: 1px solid var(--border);
 }
 
-/* Suppress the slide animation when swapping between the two panels;
+#direction-notes-panel {
+  width: 0;
+  min-width: 0;
+  background: var(--bg-primary);
+  overflow: hidden;
+  transition: width .25s, min-width .25s;
+}
+
+#direction-notes-panel.open {
+  width: var(--inspector-width);
+  min-width: var(--inspector-width);
+  border-left: 1px solid var(--border);
+}
+
+/* Suppress the slide animation when swapping between panels;
    closing a panel entirely still animates. */
 #inspector.no-anim,
-#tools-panel.no-anim {
+#tools-panel.no-anim,
+#direction-notes-panel.no-anim {
   transition: none;
 }
 

@@ -166,13 +166,21 @@ export function renderInteractiveFragments() {
       const enabled = f.enabled === true || f.enabled === 1;
       const toggleId = `interactive-frag-toggle-${f.id}`;
       const userBadge =
-        f.field_type === "feedback" ? ` <span class="frag-type-badge" title="Feedback fragment">F</span>` : "";
-      // Feedback fragments are gated by the "Editor Feedback" feature flag; grey
-      // them out (and explain why on hover) when that feature is disabled.
-      const featureDisabled = f.field_type === "feedback" && !S.feedbackEnabled;
-      const itemTitle = featureDisabled
+        f.field_type === "feedback"
+          ? ` <span class="frag-type-badge" title="Feedback fragment">F</span>`
+          : f.field_type === "direction_note"
+            ? ` <span class="frag-type-badge" title="Direction-note fragment">D</span>`
+            : "";
+      // Feedback and direction-note fragments are gated by their own feature switch;
+      // grey them out (and explain why on hover) when that switch is off.
+      const feedbackDisabled = f.field_type === "feedback" && !S.feedbackEnabled;
+      const directionNoteDisabled = f.field_type === "direction_note" && !S.directionNotesRecord;
+      const featureDisabled = feedbackDisabled || directionNoteDisabled;
+      const itemTitle = feedbackDisabled
         ? "Editor Feedback feature is disabled — enable it in Agents panel to use this fragment"
-        : esc(f.description);
+        : directionNoteDisabled
+          ? "Direction Notes recording is off -- turn on Writing in the Agents panel to use this fragment"
+          : esc(f.description);
       return `
     <div class="fragment-item${featureDisabled ? " frag-feature-disabled" : ""}" draggable="true" data-id="${esc(f.id)}" title="${itemTitle}" onclick="showInteractiveFragmentModal('${f.id}')">
       <div class="frag-drag-handle" onclick="event.stopPropagation()">⋮⋮</div>
@@ -296,6 +304,13 @@ const INTERACTIVE_FRAGMENT_EXAMPLES = {
     injection_label: "e.g. Tension",
     description: "Track a value that evolves each turn, e.g. 'calm' -> 'uneasy' -> 'breaking point'",
   },
+  direction_note: {
+    id: "e.g. trajectory",
+    label: "e.g. Trajectory",
+    injection_label: "e.g. Direction of travel",
+    description:
+      "A lasting note the director records and keeps on this branch, e.g. 'where the story is heading and the established facts that pin it'",
+  },
   feedback: {
     id: "e.g. next_actions",
     label: "e.g. Next Actions",
@@ -315,6 +330,9 @@ export function updateInteractiveFragmentExample(fieldType) {
   set("interactive-frag-label", ex.label);
   set("interactive-frag-inj-label", ex.injection_label);
   set("interactive-frag-desc", ex.description);
+  // The recording-timing selector applies only to direction-note fragments.
+  const timingRow = document.getElementById("interactive-frag-timing-row");
+  if (timingRow) timingRow.style.display = fieldType === "direction_note" ? "" : "none";
 }
 
 export function showInteractiveFragmentModal(fragId = null) {
@@ -328,6 +346,7 @@ export function showInteractiveFragmentModal(fragId = null) {
     required: false,
     injection_label: "",
     sort_order: 0,
+    direction_note_timing: "post_turn",
   };
   const ex = INTERACTIVE_FRAGMENT_EXAMPLES[d.field_type] || INTERACTIVE_FRAGMENT_EXAMPLES.string;
 
@@ -348,8 +367,16 @@ export function showInteractiveFragmentModal(fragId = null) {
           <option value="array" ${d.field_type === "array" ? "selected" : ""}>list</option>
           <option value="progressive" ${d.field_type === "progressive" ? "selected" : ""}>progressive</option>
           <option value="feedback" ${d.field_type === "feedback" ? "selected" : ""}>feedback (note to you)</option>
+          <option value="direction_note" ${d.field_type === "direction_note" ? "selected" : ""}>direction note (persists)</option>
         </select>
       </div>
+    </div>
+    <div class="field" id="interactive-frag-timing-row" style="${d.field_type === "direction_note" ? "" : "display:none"}">
+      <label>When recorded <span style="font-size:10px;color:var(--text-muted)">(direction notes only)</span></label>
+      <select id="interactive-frag-timing-select">
+        <option value="post_turn" ${d.direction_note_timing !== "pre_writer" ? "selected" : ""}>End of turn</option>
+        <option value="pre_writer" ${d.direction_note_timing === "pre_writer" ? "selected" : ""}>Before writer</option>
+      </select>
     </div>
     <div class="field"><label>Description <span style="font-size:10px;color:var(--text-muted)">(shown to the LLM in the tool schema)</span></label>
       <textarea id="interactive-frag-desc" rows="4" placeholder="${esc(ex.description)}">${esc(d.description)}</textarea></div>
@@ -376,6 +403,7 @@ export async function saveInteractiveFragment(isEdit) {
     field_type: document.getElementById("interactive-frag-type").value,
     required: document.getElementById("interactive-frag-required").checked,
     injection_label: document.getElementById("interactive-frag-inj-label").value.trim(),
+    direction_note_timing: document.getElementById("interactive-frag-timing-select").value,
   };
   const validation = validate.validateInteractiveFragment(d);
   if (!validation.valid) {
