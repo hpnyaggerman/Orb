@@ -16,6 +16,7 @@ from backend.database import (
     add_message,
     create_character_card,
     create_conversation,
+    create_direction_notes,
     get_character_card,
     get_message_by_id,
     get_workflow_attachments_for_message,
@@ -43,14 +44,14 @@ _SCENE = {
 }
 
 
-def _post_ctx(cid: str, char_id: str, draft: str) -> PostCtx:
+def _post_ctx(cid: str, char_id: str, draft: str, *, history=(), settings=None) -> PostCtx:
     return PostCtx(
         conversation_id=cid,
-        history=(),
+        history=history,
         draft=draft,
         effective_msg="hello",
         director_output=MappingProxyType({}),
-        settings=MappingProxyType({}),
+        settings=MappingProxyType(settings or {}),
         prefix=(),
         enabled_tools=MappingProxyType({}),
         turn_scratch={},
@@ -278,12 +279,12 @@ async def test_on_demand_test_unifies_config_without_llm(client, monkeypatch):
     assert captured["negative"]
 
 
-def _ondemand_ctx(cid: str, char_id: str, history=()) -> OnDemandCtx:
+def _ondemand_ctx(cid: str, char_id: str, history=(), settings=None) -> OnDemandCtx:
     return OnDemandCtx(
         conversation_id=cid,
         history=history,
         last_user_message="hello",
-        settings=MappingProxyType({}),
+        settings=MappingProxyType(settings or {}),
         client=None,
         character_id=char_id,
         character=None,
@@ -461,3 +462,79 @@ async def test_regenerate_uses_rich_prefix(client, monkeypatch):
     assert out[0]["workflow_id"] == WID
     assert captured["prefix"][0]["role"] == "system"
     assert "You are a test bot." in captured["prefix"][0]["content"]
+
+
+# --- direction-note injection into the two passes ----------------------------
+
+
+def _capture_passes(monkeypatch) -> dict:
+    """Stub both passes to record the direction_notes block each receives, returning a
+    usable scene/prompt so the surrounding render path still completes."""
+    seen: dict = {}
+
+    async def cap_analyze(**kwargs):
+        seen["analyze"] = kwargs.get("direction_notes")
+        yield {"type": "result", "args": _SCENE}
+
+    async def cap_compose(**kwargs):
+        seen["compose"] = kwargs.get("direction_notes")
+        yield {"type": "result", "args": {"positive_prompt": "a tester, hat"}}
+
+    monkeypatch.setattr(hooks, "analyze_scene", cap_analyze)
+    monkeypatch.setattr(hooks, "compose_prompt", cap_compose)
+    return seen
+
+
+async def _seed_note(cid: str, char_id: str, *, content: str = "She lost her left arm.") -> dict:
+    """Seed a reply with one direction note on it; return a history-message dict carrying
+    the anchor's id and turn_index, shaped like the rows the hooks read from ctx.history."""
+    asst_id = await _seed_reply(cid, char_id)
+    await create_direction_notes(
+        cid,
+        asst_id,
+        [{"interactive_fragment_id": "characterization", "interactive_fragment_label": "Characterization", "content": content}],
+    )
+    msg = await get_message_by_id(asst_id)
+    assert msg is not None
+    return {"id": asst_id, "role": "assistant", "content": msg["content"], "turn_index": msg["turn_index"]}
+
+
+async def test_resolve_direction_notes_renders_when_injecting(client):
+    cid, char_id = "conv1", "char1"
+    hist_msg = await _seed_note(cid, char_id)
+    ctx = _ondemand_ctx(cid, char_id, settings={"direction_notes_inject": "director"})
+    block = await hooks._resolve_direction_notes(ctx, [hist_msg])
+    assert "**Direction Notes**" in block
+    assert "Characterization" in block
+    assert "She lost her left arm." in block
+
+
+async def test_resolve_direction_notes_off_returns_empty(client):
+    cid, char_id = "conv1", "char1"
+    hist_msg = await _seed_note(cid, char_id)
+    ctx = _ondemand_ctx(cid, char_id, settings={"direction_notes_inject": "off"})
+    assert await hooks._resolve_direction_notes(ctx, [hist_msg]) == ""
+
+
+async def test_resolve_direction_notes_empty_without_notes(client):
+    cid, char_id = await _seed()
+    ctx = _ondemand_ctx(cid, char_id, settings={"direction_notes_inject": "both"})
+    # Injection is on, but the branch carries no notes, so the block is empty.
+    assert await hooks._resolve_direction_notes(ctx, [{"id": 1, "turn_index": 0}]) == ""
+
+
+async def test_post_pipeline_threads_notes_into_both_passes(client, monkeypatch):
+    cid, char_id = "conv1", "char1"
+    hist_msg = await _seed_note(cid, char_id)
+    await set_workflow_character_state(char_id, WID, {"enabled": True, "prompt": "a tester"})
+    seen = _capture_passes(monkeypatch)
+    _stub_render(monkeypatch)
+
+    ctx = _post_ctx(cid, char_id, "She smiles.", history=(hist_msg,), settings={"direction_notes_inject": "both"})
+    _ = [ev async for ev in hooks.post_pipeline(ctx)]
+
+    # Both passes receive the same rendered block, so the scene analyzer and the prompt
+    # composer agree on the standing direction.
+    assert "She lost her left arm." in (seen["analyze"] or "")
+    assert "**Direction Notes**" in (seen["analyze"] or "")
+    assert seen["compose"] == seen["analyze"]

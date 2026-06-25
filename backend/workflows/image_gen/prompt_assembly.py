@@ -249,10 +249,14 @@ def build_generation_metadata(positive: str, negative: str, params: dict, comfy_
     }
 
 
-def analyze_instruction(char_prompt: str) -> str:
+def analyze_instruction(char_prompt: str, direction_notes: str = "") -> str:
     """The Pass-1 instruction: extract the scene strictly from what the history
     evidences, defaulting any unestablished attribute to the character's default
     rather than inferring it from genre convention.
+
+    *direction_notes* is the pre-rendered Direction Notes block (empty when injection
+    is off or the branch has none); appended after the character default so the scene
+    extraction carries forward lasting developments the immediate moment may not restate.
     """
     base = (
         "Analyze the moment below and call analyze_scene using ONLY what the history "
@@ -269,14 +273,23 @@ def analyze_instruction(char_prompt: str) -> str:
     )
     if char_prompt and char_prompt.strip():
         base += "\n\nDefault appearance and outfit for the main character:\n" + char_prompt.strip()
+    if direction_notes and direction_notes.strip():
+        base += (
+            "\n\nLasting developments already established on this branch -- treat as true and "
+            "fold any that change a character's appearance, outfit, or the setting into the "
+            "scene you extract:\n" + direction_notes.strip()
+        )
     return base
 
 
-def compose_instruction(guideline: str, char_prompt: str, persona_prompt: str) -> str:
+def compose_instruction(guideline: str, char_prompt: str, persona_prompt: str, direction_notes: str = "") -> str:
     """The Pass-2 framing: guideline plus the character and persona base prompts.
 
     The analyzed scene is appended after this block by the caller so it lands last
-    in the model's context.
+    in the model's context. *direction_notes* is the pre-rendered Direction Notes block
+    (empty when injection is off or the branch has none); it rides this framing, before
+    the scene, so lasting developments reach the composed prompt without displacing the
+    scene from the final position.
     """
     parts = ["Compose ONE positive image-generation prompt depicting exactly the scene described last."]
     if guideline and guideline.strip():
@@ -285,6 +298,11 @@ def compose_instruction(guideline: str, char_prompt: str, persona_prompt: str) -
         parts.append("Character base description:\n" + char_prompt.strip())
     if persona_prompt and persona_prompt.strip():
         parts.append("User-persona base description:\n" + persona_prompt.strip())
+    if direction_notes and direction_notes.strip():
+        parts.append(
+            "Lasting developments already established -- apply any that affect appearance, "
+            "outfit, or setting to the prompt:\n" + direction_notes.strip()
+        )
     parts.append("Apply each outfit delta onto the base description, then call compose_image_prompt.")
     return "\n\n".join(parts)
 

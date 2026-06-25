@@ -32,12 +32,13 @@ async def analyze_scene(
     char_prompt: str,
     moment: str,
     settings: Any,
+    direction_notes: str = "",
     pass_id: str | None = None,
     kv_tracker: Any = None,
     enabled_tools: Any = None,
     schema_overrides: Any = None,
 ) -> AsyncIterator[dict]:
-    tail = [{"role": "user", "content": analyze_instruction(char_prompt) + "\n\n" + moment}]
+    tail = [{"role": "user", "content": analyze_instruction(char_prompt, direction_notes) + "\n\n" + moment}]
     async for event in forced_tool_call(
         client=client,
         prefix=prefix,
@@ -64,13 +65,14 @@ async def compose_prompt(
     char_prompt: str,
     persona_prompt: str,
     settings: Any,
+    direction_notes: str = "",
     pass_id: str | None = None,
     kv_tracker: Any = None,
     enabled_tools: Any = None,
     schema_overrides: Any = None,
 ) -> AsyncIterator[dict]:
     tail = [
-        {"role": "user", "content": compose_instruction(guideline, char_prompt, persona_prompt)},
+        {"role": "user", "content": compose_instruction(guideline, char_prompt, persona_prompt, direction_notes)},
         {"role": "user", "content": render_scene_block(scene)},
     ]
     async for event in forced_tool_call(
