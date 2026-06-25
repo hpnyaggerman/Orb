@@ -9,7 +9,9 @@ from ..models import DirectionNoteRow
 
 async def create_direction_notes(conversation_id: str, message_id: int, notes: Sequence[Mapping[str, Any]]) -> list[int]:
     """Persist labelled notes (``interactive_fragment_id``/``interactive_fragment_label``/``content``) for one
-    assistant message; returns the new row ids."""
+    message; returns the new row ids. The anchor is any message on the branch: the model's
+    recorded notes key to the turn's assistant reply, a user-authored note to the message the
+    Notes button sat on (user or assistant)."""
     ids: list[int] = []
     now = datetime.now(timezone.utc).isoformat()
     async with get_db() as db:

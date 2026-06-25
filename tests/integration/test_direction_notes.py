@@ -496,6 +496,46 @@ async def test_user_note_route_creates_and_lists(client, db, llm_mock):
     ).status_code == 400
 
 
+async def test_user_note_anchors_to_user_message(client, db, llm_mock):
+    cid = "conv-dn-user-msg"
+    await dbmod.create_conversation(cid, "dn", "Bot", "a scenario")
+    # The Notes button surfaces on user messages, so a note can anchor to the user's own turn
+    # rather than the reply. The route already takes any on-conversation message id; this pins
+    # that a user-message anchor persists, lists with that message's turn, and injects on the
+    # next turn exactly as a reply-anchored note does. direction_notes_record stays off -- the
+    # note is route-authored, not recorded by the model step.
+    await client.put(
+        "/api/settings",
+        json={"enable_agent": True, "enabled_tools": {"direct_scene": True}, "direction_notes_inject": "director"},
+    )
+    direct_scene = [{"type": "function", "function": {"name": "direct_scene", "arguments": {"moods": []}}}]
+    llm_mock.enqueue_director(direct_scene)
+    llm_mock.enqueue_writer("She waits.")
+    await _drain(handle_turn(cid, "hello"))
+
+    user_msg = [m for m in await dbmod.get_messages(cid) if m["role"] == "user"][-1]
+    created = await client.post(
+        f"/api/conversations/{cid}/direction-notes",
+        json={"message_id": user_msg["id"], "label": "Mine", "content": _NOTE},
+    )
+    assert created.status_code == 200
+
+    rows = await dbmod.get_direction_notes_for_message(user_msg["id"])
+    assert [(r["interactive_fragment_id"], r["content"]) for r in rows] == [("human", _NOTE)]
+
+    # The list route stamps the note with its anchor message's turn -- the user message's, here.
+    listing = (await client.get(f"/api/conversations/{cid}/direction-notes")).json()
+    assert listing[0]["message_id"] == user_msg["id"]
+    assert listing[0]["turn_index"] == user_msg["turn_index"]
+
+    # Next turn: the director's direct_scene prompt sees the note, proving a user-anchored note
+    # injects like any other on-path note.
+    llm_mock.enqueue_director(direct_scene)
+    llm_mock.enqueue_writer("She looks around.")
+    await _drain(handle_turn(cid, "again"))
+    assert _NOTE in _director_scene_prompt(llm_mock)
+
+
 async def test_per_fragment_records_one_call_per_fragment(client, db, llm_mock):
     cid = "conv-dn-perfrag"
     await dbmod.create_conversation(cid, "dn", "Bot", "a scenario")
