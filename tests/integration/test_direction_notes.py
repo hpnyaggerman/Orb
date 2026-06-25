@@ -427,6 +427,26 @@ async def test_get_for_path_empty_and_membership(client, db, llm_mock):
     assert [r["content"] for r in rows] == ["on path"]
 
 
+async def test_get_for_path_orders_by_branch_not_row_id(client, db, llm_mock):
+    cid = "conv-dn-order"
+    await dbmod.create_conversation(cid, "dn", "Bot", "a scenario")
+    early, _ = await dbmod.add_message(cid, "user", "early", 0)
+    mid, _ = await dbmod.add_message(cid, "assistant", "reply", 1, parent_id=early)
+    late, _ = await dbmod.add_message(cid, "user", "late", 2, parent_id=mid)
+
+    # Record on the later message first, then the earlier one, so the earlier-turn note gets the
+    # higher row id -- the exact shape a user authoring a note onto a past message produces.
+    note = {"interactive_fragment_id": "human", "interactive_fragment_label": "N", "content": "late-turn note"}
+    await dbmod.create_direction_notes(cid, late, [note])
+    await dbmod.create_direction_notes(cid, early, [{**note, "content": "early-turn note"}])
+
+    # Branch order, not row-id order: the early-message note comes first despite its newer row.
+    # Ordering by id alone (the bug) would invert these.
+    rows = await dbmod.get_direction_notes_for_path(cid, [early, mid, late])
+    assert [r["content"] for r in rows] == ["early-turn note", "late-turn note"]
+    assert [r["message_id"] for r in rows] == [early, late]
+
+
 async def test_per_fragment_timing_runs_both_steps(client, db, llm_mock):
     cid = "conv-dn-timing"
     await dbmod.create_conversation(cid, "dn", "Bot", "a scenario")
