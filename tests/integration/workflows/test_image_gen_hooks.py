@@ -10,9 +10,24 @@ from __future__ import annotations
 from types import MappingProxyType
 
 import pytest
+from fastapi.responses import StreamingResponse
 
-from backend.database import create_character_card, create_conversation
-from backend.workflows import PostCtx, RerollGenCtx, set_workflow_character_state
+from backend.database import (
+    add_message,
+    create_character_card,
+    create_conversation,
+    get_character_card,
+    get_message_by_id,
+    get_workflow_attachments_for_message,
+)
+from backend.workflows import (
+    OnDemandCtx,
+    PostCtx,
+    RegenCtx,
+    RerollGenCtx,
+    _readonly,
+    set_workflow_character_state,
+)
 from backend.workflows.image_gen import hooks
 from backend.workflows.image_gen.comfy import ComfyError
 
@@ -261,3 +276,167 @@ async def test_on_demand_test_unifies_config_without_llm(client, monkeypatch):
     assert "by someone" in captured["positive"]
     assert "sitting in front of a table" in captured["positive"]
     assert captured["negative"]
+
+
+def _ondemand_ctx(cid: str, char_id: str, history=()) -> OnDemandCtx:
+    return OnDemandCtx(
+        conversation_id=cid,
+        history=history,
+        last_user_message="hello",
+        settings=MappingProxyType({}),
+        client=None,
+        character_id=char_id,
+        character=None,
+    )
+
+
+async def _seed_reply(cid: str = "conv1", char_id: str = "char1", reply: str = "She smiles.") -> int:
+    """Seed a conversation with a user message and an assistant reply; return the
+    assistant message id the production path anchors on."""
+    await _seed(cid, char_id)
+    user_id, _ = await add_message(cid, "user", "hello", 0)
+    asst_id, _ = await add_message(cid, "assistant", reply, 1, parent_id=user_id)
+    return asst_id
+
+
+async def test_production_trigger_streams_and_persists(client, monkeypatch):
+    cid, char_id = "conv1", "char1"
+    asst_id = await _seed_reply(cid, char_id)
+    _stub_passes(monkeypatch)
+    _stub_render(monkeypatch)
+
+    resp = await client.post(
+        f"/api/conversations/{cid}/workflows/{WID}/trigger",
+        json={"action": "generate", "message_id": asst_id},
+    )
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("text/event-stream")
+    body = resp.text
+    assert "event: phase_status" in body
+    assert "event: image_generated" in body
+
+    atts = await get_workflow_attachments_for_message(asst_id)
+    assert len(atts) == 1
+    assert atts[0]["workflow_id"] == WID
+    assert atts[0]["mime_type"] == "image/png"
+
+
+async def test_production_generates_without_enable_flag(client, monkeypatch):
+    # The per-character enable flag gates only auto-generation; the manual button is
+    # an explicit request, so production renders with no flag set.
+    cid, char_id = "conv1", "char1"
+    asst_id = await _seed_reply(cid, char_id)
+    _stub_passes(monkeypatch)
+    _stub_render(monkeypatch)
+
+    anchor = await get_message_by_id(asst_id)
+    events = [ev async for ev in hooks._generate_stream(_ondemand_ctx(cid, char_id), anchor)]
+
+    assert any("event: image_generated" in e and "null" not in e for e in events)
+    assert len(await get_workflow_attachments_for_message(asst_id)) == 1
+
+
+async def test_production_degrades_on_comfy_error(client, monkeypatch):
+    cid, char_id = "conv1", "char1"
+    asst_id = await _seed_reply(cid, char_id)
+    _stub_passes(monkeypatch)
+
+    async def boom(graph, *, base_url, timeout, poll_interval=0.75):
+        raise ComfyError("unreachable")
+
+    monkeypatch.setattr(hooks, "generate_image", boom)
+
+    anchor = await get_message_by_id(asst_id)
+    events = [ev async for ev in hooks._generate_stream(_ondemand_ctx(cid, char_id), anchor)]
+
+    assert any("event: image_generated" in e and "null" in e for e in events)
+    assert await get_workflow_attachments_for_message(asst_id) == []
+
+
+async def test_production_rejects_non_assistant_target(client):
+    cid, char_id = "conv1", "char1"
+    asst_id = await _seed_reply(cid, char_id)
+    ctx = _ondemand_ctx(cid, char_id)
+    anchor = await get_message_by_id(asst_id)
+    assert anchor is not None
+    user_id = anchor["parent_id"]
+
+    assert "error" in await hooks._generate(ctx, {})
+    assert "error" in await hooks._generate(ctx, {"message_id": "x"})
+    assert "error" in await hooks._generate(ctx, {"message_id": 999999})
+    assert "error" in await hooks._generate(ctx, {"message_id": user_id})
+    ok = await hooks._generate(ctx, {"message_id": asst_id})
+    assert isinstance(ok, StreamingResponse)
+
+
+async def test_production_prefix_carries_system_framing(client, monkeypatch):
+    # The prefix must carry the system prompt + character framing the auto path
+    # gets, not bare role/content history.
+    cid, char_id = "conv1", "char1"
+    asst_id = await _seed_reply(cid, char_id)
+    captured = {}
+
+    async def capture_analyze(**kwargs):
+        captured["prefix"] = kwargs.get("prefix")
+        yield {"type": "result", "args": _SCENE}
+
+    async def fake_compose(**kwargs):
+        yield {"type": "result", "args": {"positive_prompt": "x"}}
+
+    monkeypatch.setattr(hooks, "analyze_scene", capture_analyze)
+    monkeypatch.setattr(hooks, "compose_prompt", fake_compose)
+    _stub_render(monkeypatch)
+
+    ctx = OnDemandCtx(
+        conversation_id=cid,
+        history=(),
+        last_user_message="hello",
+        settings=MappingProxyType({"system_prompt": "You are a test bot."}),
+        client=None,
+        character_id=char_id,
+        character=_readonly(await get_character_card(char_id)),
+    )
+    anchor = await get_message_by_id(asst_id)
+    _ = [ev async for ev in hooks._generate_stream(ctx, anchor)]
+
+    prefix = captured["prefix"]
+    assert prefix[0]["role"] == "system"
+    assert "You are a test bot." in prefix[0]["content"]
+
+
+async def test_regenerate_uses_rich_prefix(client, monkeypatch):
+    # regenerate shares the same generation core + rebuilt prefix as the auto and
+    # production paths, so its re-render carries the system prompt + framing too.
+    cid, char_id = "conv1", "char1"
+    asst_id = await _seed_reply(cid, char_id)
+    captured = {}
+
+    async def capture_analyze(**kwargs):
+        captured["prefix"] = kwargs.get("prefix")
+        yield {"type": "result", "args": _SCENE}
+
+    async def fake_compose(**kwargs):
+        yield {"type": "result", "args": {"positive_prompt": "x"}}
+
+    monkeypatch.setattr(hooks, "analyze_scene", capture_analyze)
+    monkeypatch.setattr(hooks, "compose_prompt", fake_compose)
+    _stub_render(monkeypatch)
+
+    ctx = RegenCtx(
+        conversation_id=cid,
+        message_id=asst_id,
+        attachment_id=1,
+        original_attachment=MappingProxyType({}),
+        history=(),
+        last_user_message="hello",
+        settings=MappingProxyType({"system_prompt": "You are a test bot."}),
+        client=None,
+        character_id=char_id,
+        character=_readonly(await get_character_card(char_id)),
+    )
+    out = await hooks.regenerate(ctx, {})
+
+    assert len(out) == 1
+    assert out[0]["workflow_id"] == WID
+    assert captured["prefix"][0]["role"] == "system"
+    assert "You are a test bot." in captured["prefix"][0]["content"]
