@@ -347,7 +347,9 @@ DIRECTION_NOTE_PREAMBLE = (
     "one and record into it anything from what just happened that must hold for the rest of the "
     "roleplay. Whatever you record is permanent: it returns on every later reply and steers the "
     "rest of the story, so a category takes only what genuinely must constrain what follows -- if "
-    "nothing this turn belongs in a category, leave it empty."
+    "nothing this turn belongs in a category, leave it empty. Record only the bare fact in each "
+    "category -- no leading label, category name, or turn number. Those are attached automatically; "
+    "where earlier entries appear tagged that way, the tag is for your reference only."
 )
 
 
