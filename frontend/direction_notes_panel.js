@@ -36,9 +36,9 @@ function renderRows() {
     el.innerHTML = `<div class="notes-empty">No direction notes on this branch yet. The director records them when Direction Notes is on.</div>`;
     return;
   }
-  // Turn order (the route returns oldest-first by id, which equals turn order on a
-  // branch); within a turn, fragment order. Each note carries its fragment's label so
-  // the source is obvious without bucketing notes away from their chronology.
+  // The route returns notes in branch order (anchor-message position on the path), then
+  // creation order within a message. Each note carries its fragment's label so the source
+  // is obvious without bucketing notes away from their chronology.
   el.innerHTML = notes
     .map((n) => {
       const isUser = n.interactive_fragment_id === USER_NOTE_ID;
