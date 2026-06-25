@@ -76,6 +76,7 @@ nav:
           - Scene Direction: features/director.md
           - Agentic Lorebook: features/agentic-lorebook.md
           - Feedback Fragments: features/feedback-fragments.md
+          - Direction Notes: features/direction-notes.md
       - Editing & Quality:
           - Anti-slop: features/anti-slop.md
           - Anti-repetition: features/anti-repetition.md

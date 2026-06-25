@@ -154,6 +154,23 @@ SEED_INTERACTIVE_FRAGMENTS = [
         "sort_order": 5,
         "enabled": False,
     },
+    {
+        "id": "characterization",
+        "label": "Characterization",
+        "description": (
+            "Record the substantial, long-lasting changes this turn's events have caused in a "
+            "character's established characterization -- how they act, how they relate to the user "
+            "and other characters, or what they believe about the world or themselves. A single "
+            "character may change in several of these ways at once; record every change that "
+            "qualifies -- several, one, or none at all -- naming the character, the change, and its cause."
+        ),
+        "field_type": "direction_note",
+        "required": False,
+        "injection_label": "Characterization",
+        "sort_order": 6,
+        "enabled": False,
+        "direction_note_timing": "post_turn",
+    },
 ]
 
 DEFAULT_ENABLED_TOOLS = {
@@ -201,6 +218,8 @@ DEFAULT_SETTINGS = {
     "agent_shared_system_prompt": "",
     "feedback_enabled": 0,
     "director_individual_fragments": 0,
+    "direction_notes_record": 0,
+    "direction_notes_inject": "off",
     "workflows_globally_enabled": 1,
 }
 

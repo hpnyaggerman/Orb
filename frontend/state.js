@@ -45,8 +45,11 @@ export const S = {
   reasoningWriter: "",
   reasoningEditor: "", // also carries the feedback sub-step's reasoning (folded into the editor channel)
   lastFeedback: null, // {values: {...}} from the editor feedback sub-step for the current/streamed turn (null when none)
+  lastDirectionNotes: null, // {notes: [...]} recorded by the direction-note sub-step this turn (null when none)
   feedbackEnabled: false,
   directorIndividualFragments: false,
+  directionNotesRecord: false, // master Writing switch; a fragment also needs its own enabled + timing
+  directionNotesInject: "off", // injection target: off | director | writer | both (read side, independent of recording)
   reasoningPassActive: 0,
   reasoningPassSelected: 0,
   reasoningUserOverride: false,

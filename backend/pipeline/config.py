@@ -17,7 +17,12 @@ from typing import Any, Mapping, Sequence
 
 from ..core import ChatMessage, Macros
 from ..database.models import PhraseGroup
-from ..inference import CachedBase, LLMClient, enabled_schemas
+from ..inference import (
+    CachedBase,
+    LLMClient,
+    build_direction_note_tool,
+    enabled_schemas,
+)
 from ..workflows.enablement import disabled_workflow_tool_names
 from .passes.director import build_direct_scene_override
 from .passes.editor import _feedback_active, build_feedback_override
@@ -26,7 +31,7 @@ from .passes.editor.length_guard import (
     apply_length_guard_tools,
     resolve_length_guard,
 )
-from .predicates import agent_enabled, is_dual_model
+from .predicates import agent_enabled, direction_note_recording_active, is_dual_model
 from .state import ModelLane, _PipelineConfig
 
 
@@ -107,17 +112,17 @@ def _resolve_pipeline_config(
 
 def _split_interactive_fragments(
     fragments: Sequence[Mapping[str, Any]],
-) -> tuple[list[Mapping[str, Any]], list[Mapping[str, Any]]]:
-    """Split interactive fragments into writer vs. feedback groups.
+) -> tuple[list[Mapping[str, Any]], list[Mapping[str, Any]], list[Mapping[str, Any]]]:
+    """Split interactive fragments into writer, feedback, and direction-note groups.
 
-    Returns ``(writer_fragments, feedback_fragments)``. Feedback-type fragments
-    are surfaced to the user via the post-writer feedback step and never reach
-    the writer prompt; all others shape the ``direct_scene`` tool and Scene
-    Direction block.
+    Feedback-type fragments surface to the user via the post-writer feedback step;
+    direction-note-type fragments feed the direction-note step; all others shape the
+    ``direct_scene`` tool and Scene Direction block. The three groups are disjoint.
     """
-    writer = [df for df in fragments if df.get("field_type") != "feedback"]
+    writer = [df for df in fragments if df.get("field_type") not in ("feedback", "direction_note")]
     feedback = [df for df in fragments if df.get("field_type") == "feedback"]
-    return writer, feedback
+    direction_note_fragments = [df for df in fragments if df.get("field_type") == "direction_note"]
+    return writer, feedback, direction_note_fragments
 
 
 def _build_writer_tools_blob(
@@ -129,16 +134,20 @@ def _build_writer_tools_blob(
 ) -> dict:
     """Build the dynamic tool-schema overrides shared across all cached calls.
 
-    Mutates *enabled_tools* in place to add ``give_feedback`` when the feedback
-    step is active. Returns a ``schema_overrides`` dict (``direct_scene`` and
-    optionally ``give_feedback``) held byte-stable across every cached call in a
-    turn so the LLM's KV cache is not busted.
+    Mutates *enabled_tools* in place to enable ``give_feedback`` when the feedback
+    step is active and ``record_direction_note`` when the direction-note step is.
+    Returns a ``schema_overrides`` dict (``direct_scene`` and optionally
+    ``give_feedback``) held byte-stable across every cached call in a turn so the
+    LLM's KV cache is not busted.
 
     Called by ``_prepare_turn``.
     """
-    writer_fragments, feedback_fragments = _split_interactive_fragments(interactive_fragments)
+    writer_fragments, feedback_fragments, direction_note_fragments = _split_interactive_fragments(interactive_fragments)
     overrides: dict = {"direct_scene": build_direct_scene_override(writer_fragments, agentic_lorebook=agentic_lorebook)}
     if _feedback_active(settings, feedback_fragments, agent_on=agent_enabled(settings)):
         overrides["give_feedback"] = build_feedback_override(feedback_fragments)
         enabled_tools["give_feedback"] = True
+    if direction_note_recording_active(settings, direction_note_fragments, agent_on=agent_enabled(settings)):
+        overrides["record_direction_note"] = build_direction_note_tool(direction_note_fragments)
+        enabled_tools["record_direction_note"] = True
     return overrides

@@ -4,6 +4,8 @@
 // keep working.
 import { api } from "./api.js";
 import { renderContextSize, renderMessages } from "./chat_core.js";
+import { USER_NOTE_ID } from "./direction_notes_panel.js";
+import { closeUtilityPanel, isUtilityPanelOpen, openUtilityPanel } from "./panels.js";
 import { S, effectiveWorkflowEnabled } from "./state.js";
 import { $, esc } from "./utils.js";
 
@@ -376,6 +378,28 @@ export function buildFeedbackHtml(values) {
   </div>`;
 }
 
+// One labelled row per note, in the order recorded this turn (fragment order), reusing
+// the feedback block's styling so the look matches the rest of the Inspector. Notes
+// arrive as {interactive_fragment_id, interactive_fragment_label, content}; user-authored
+// ones are tagged so they read the same here as in the Notes panel.
+export function buildDirectionNotesHtml(notes) {
+  if (!Array.isArray(notes) || !notes.length) return "";
+  const body = notes
+    .map((n) => {
+      const isUser = n.interactive_fragment_id === USER_NOTE_ID;
+      const badge = isUser ? ` <span class="notes-row-user-badge">You</span>` : "";
+      return `<div class="feedback-row${isUser ? " user-note" : ""}">
+        <span class="feedback-row-label">${esc(n.interactive_fragment_label || "")}${badge}</span>
+        <div class="feedback-row-value">${esc(String(n.content))}</div>
+      </div>`;
+    })
+    .join("");
+  return `<div class="inspector-block">
+    <h4>Direction Notes (this turn)</h4>
+    <div class="feedback-card">${body}</div>
+  </div>`;
+}
+
 function _buildInjectionBlockHtml(inj) {
   const openAttr = S.injectionBlockOpen ? " open" : "";
   return `<details class="inspector-block"${openAttr} ontoggle="S.injectionBlockOpen=this.open;saveInspectorOpenStates()">
@@ -407,32 +431,10 @@ export function clearRefineDiff() {
 }
 
 export function toggleInspector() {
-  const inspector = $("inspector");
-  const toolsPanel = $("tools-panel");
-  const btn = $("inspector-toggle");
-  const toolsBtn = $("tools-panel-btn");
-  const wasOpen = inspector.classList.contains("open");
-  const switching = !wasOpen && toolsPanel.classList.contains("open");
-
-  if (wasOpen) {
-    inspector.classList.remove("open");
-    btn.classList.remove("btn-active");
-  } else if (switching) {
-    // Both panels are the same width: swap instantly with no slide animation.
-    inspector.classList.add("no-anim");
-    toolsPanel.classList.add("no-anim");
-    toolsPanel.classList.remove("open");
-    toolsBtn.classList.remove("btn-active");
-    inspector.classList.add("open");
-    btn.classList.add("btn-active");
-    // Force a synchronous reflow so the swapped state is committed with
-    // transitions disabled before we re-enable them.
-    void inspector.offsetWidth;
-    inspector.classList.remove("no-anim");
-    toolsPanel.classList.remove("no-anim");
+  if (isUtilityPanelOpen("inspector")) {
+    closeUtilityPanel("inspector", "inspector-toggle");
   } else {
-    inspector.classList.add("open");
-    btn.classList.add("btn-active");
+    openUtilityPanel("inspector", "inspector-toggle", renderInspector);
   }
 }
 
@@ -481,6 +483,7 @@ function _renderInspectorMain() {
       </div>
       ${_buildReasoningHtml()}
       ${buildFeedbackHtml(insp.feedback)}
+      ${buildDirectionNotesHtml(insp.direction_notes)}
       ${tc.length ? _buildToolCallsHtml(tc) : ""}
       ${inj ? _buildInjectionBlockHtml(inj) : ""}
       ${
@@ -502,13 +505,15 @@ function _renderInspectorMain() {
 
   if (!hasDirectorData) {
     const fbHtml = buildFeedbackHtml(S.lastFeedback && S.lastFeedback.values);
+    const pnHtml = buildDirectionNotesHtml(S.lastDirectionNotes && S.lastDirectionNotes.notes);
     // Canonical order: context-size, reasoning, feedback (matches the settled
     // director-data branch so nothing shifts once director output arrives).
     $("inspector-content").innerHTML = `
        <div class="inspector-block" id="inspector-context-size"></div>
        ${_buildReasoningHtml()}
        ${fbHtml}
-       ${fbHtml ? "" : `<div style="color:var(--text-muted);font-size:12px;">Send a message to see director output</div>`}`;
+       ${pnHtml}
+       ${fbHtml || pnHtml ? "" : `<div style="color:var(--text-muted);font-size:12px;">Send a message to see director output</div>`}`;
     renderContextSize();
     return;
   }
@@ -529,6 +534,7 @@ function _renderInspectorMain() {
     </div>
     ${_buildReasoningHtml()}
     ${buildFeedbackHtml(S.lastFeedback && S.lastFeedback.values)}
+    ${buildDirectionNotesHtml(S.lastDirectionNotes && S.lastDirectionNotes.notes)}
     ${tc.length ? _buildToolCallsHtml(tc) : ""}
     ${inj ? _buildInjectionBlockHtml(inj) : ""}
     ${

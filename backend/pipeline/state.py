@@ -86,6 +86,7 @@ _RESULT_FIELDS = (
     "reasoning_writer",
     "reasoning_editor",
     "feedback_values",
+    "direction_notes",
     "staged_attachments",
     "staged_message_state",
 )
@@ -137,6 +138,9 @@ class TurnState:
     progressive_fields: dict = field(default_factory=dict)
     selected_lorebook_entries: list[str] = field(default_factory=list)
     inj_block: str = ""
+    # Scene Direction before the direction-notes block is appended; read by the
+    # pre-writer notes step so the notes are not listed to it a second time.
+    scene_direction: str = ""
     writer_lorebook_block: str = ""
 
     # --- writer / editor outputs ---
@@ -146,6 +150,7 @@ class TurnState:
     reasoning_writer: str = ""
     reasoning_editor: str = ""
     feedback_values: dict = field(default_factory=dict)
+    direction_notes: list[dict] = field(default_factory=list)
 
     # --- post-pipeline workflow staging (set by the orchestrator) ---
     staged_attachments: list[dict] = field(default_factory=list)

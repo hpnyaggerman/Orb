@@ -7,7 +7,7 @@ it needs and the shapes stay discoverable in one place.
 
 from __future__ import annotations
 
-from typing import Any, List, Optional
+from typing import Any, List, Literal, Optional
 
 from pydantic import BaseModel, field_validator
 
@@ -49,8 +49,22 @@ class SettingsUpdate(BaseModel):
     agent_shared_system_prompt: Optional[str] = None
     feedback_enabled: Optional[bool] = None
     director_individual_fragments: Optional[bool] = None
+    direction_notes_record: Optional[bool] = None
+    direction_notes_inject: Optional[Literal["off", "director", "writer", "both"]] = None
     inspector_open_states: Optional[dict] = None
     workflows_globally_enabled: Optional[bool] = None
+
+
+class DirectionNoteUpdate(BaseModel):
+    content: str
+
+
+class DirectionNoteCreate(BaseModel):
+    # message_id anchors the note to a turn (its turn_index is derived at read time);
+    # the route rejects an id that is not an assistant message in this conversation.
+    message_id: int
+    label: str
+    content: str
 
 
 class WorkflowConfigUpdate(BaseModel):
@@ -130,6 +144,7 @@ class InteractiveFragmentCreate(BaseModel):
     enabled: bool = True
     injection_label: str
     sort_order: int = 0
+    direction_note_timing: Literal["pre_writer", "post_turn"] = "post_turn"
 
 
 class InteractiveFragmentUpdate(BaseModel):
@@ -140,6 +155,7 @@ class InteractiveFragmentUpdate(BaseModel):
     enabled: Optional[bool] = None
     injection_label: Optional[str] = None
     sort_order: Optional[int] = None
+    direction_note_timing: Optional[Literal["pre_writer", "post_turn"]] = None
 
 
 class WorldCreate(BaseModel):

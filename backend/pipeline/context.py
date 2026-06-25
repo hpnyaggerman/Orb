@@ -27,7 +27,6 @@ from ..database.models import (
     ActiveLorebookEntryRow,
     CharacterCardRow,
     ConversationRow,
-    DirectorStateRow,
     InteractiveFragmentRow,
     MoodFragmentRow,
     PhraseGroup,
@@ -66,7 +65,9 @@ class PipelineContext:
     settings: SettingsRow
     conv: ConversationRow
     card: Optional[CharacterCardRow]
-    director: DirectorStateRow
+    # Seeded from director_state, then carried as mutable per-turn director state
+    # (active moods, progressive fields, direction notes); not all keys are columns.
+    director: dict[str, Any]
     mood_fragments: list[MoodFragmentRow]
     interactive_fragments: list[InteractiveFragmentRow]
     phrase_bank: list[PhraseGroup]
@@ -96,7 +97,7 @@ async def _load_pipeline_context(conversation_id: str, *, abort_token: AbortToke
     if not conv:
         return None
 
-    director = await db.get_director_state(conversation_id)
+    director: dict[str, Any] = dict(await db.get_director_state(conversation_id))
     mood_fragments = await db.get_mood_fragments()
     mood_fragments = [f for f in mood_fragments if f.get("enabled", True)]
     # Prune active moods that reference disabled fragments.

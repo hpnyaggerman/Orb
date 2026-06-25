@@ -98,6 +98,8 @@ class _SettingsBase(TypedDict):
     agent_shared_system_prompt: str
     feedback_enabled: int
     director_individual_fragments: int
+    direction_notes_record: int
+    direction_notes_inject: str
     workflows_globally_enabled: int
 
 
@@ -352,6 +354,8 @@ class InteractiveFragmentRow(TypedDict):
     enabled: int
     injection_label: str
     sort_order: int
+    # 'pre_writer' | 'post_turn'; which recording step fills the note. Read only for direction_note fragments.
+    direction_note_timing: str
 
 
 class MoodFragmentRow(TypedDict):
@@ -363,6 +367,18 @@ class MoodFragmentRow(TypedDict):
     prompt_text: str
     negative_prompt: str
     enabled: int
+
+
+class DirectionNoteRow(TypedDict):
+    """A row from ``direction_notes`` (``SELECT *``)."""
+
+    id: int
+    conversation_id: str
+    message_id: int
+    interactive_fragment_id: str
+    interactive_fragment_label: str
+    content: str
+    created_at: str
 
 
 class DirectorStateRow(TypedDict):
