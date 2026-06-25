@@ -158,6 +158,40 @@ def test_render_scene_block_tolerates_garbage():
     assert prompt_assembly.render_scene_block({"outfits": ["not a dict"]}) == ""
 
 
+# --- direction-note weave into the two pass instructions ---------------------
+
+_NOTES_BLOCK = "**Direction Notes**\n- (Characterization, turn 2) She lost her left arm."
+
+
+def test_analyze_instruction_omits_direction_notes_when_empty():
+    # The new parameter defaults to no block, leaving the instruction unchanged.
+    out = prompt_assembly.analyze_instruction("a knight")
+    assert "Lasting developments" not in out
+    assert out == prompt_assembly.analyze_instruction("a knight", "")
+
+
+def test_analyze_instruction_appends_direction_notes_after_char_block():
+    out = prompt_assembly.analyze_instruction("a knight", _NOTES_BLOCK)
+    assert _NOTES_BLOCK in out
+    # Notes trail the character default; the caller then appends the moment after the
+    # whole instruction, so the moment still lands last.
+    assert out.index("a knight") < out.index(_NOTES_BLOCK)
+
+
+def test_compose_instruction_omits_direction_notes_when_empty():
+    out = prompt_assembly.compose_instruction("guide", "a knight", "a mage")
+    assert "Lasting developments" not in out
+    assert out == prompt_assembly.compose_instruction("guide", "a knight", "a mage", "")
+
+
+def test_compose_instruction_keeps_notes_before_final_directive():
+    out = prompt_assembly.compose_instruction("guide", "a knight", "a mage", _NOTES_BLOCK)
+    assert _NOTES_BLOCK in out
+    # The closing compose_image_prompt directive stays last in the framing, so the scene
+    # the caller appends as the next message still lands last overall.
+    assert out.index(_NOTES_BLOCK) < out.index("compose_image_prompt")
+
+
 # --- sentinel injection ------------------------------------------------------
 
 

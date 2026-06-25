@@ -21,6 +21,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+from typing import AsyncIterator
 
 from fastapi.responses import StreamingResponse
 
@@ -29,11 +30,13 @@ from backend.workflows.toolkit import (
     Macros,
     build_prefix,
     get_conversation,
+    get_direction_notes_for_path,
     get_message_by_id,
     get_user_personas,
     get_workflow_character_state,
     get_workflow_config,
     insert_workflow_attachment,
+    render_direction_notes_block,
     set_workflow_character_state,
 )
 
@@ -85,6 +88,36 @@ def _resolve_prompts(ctx, cfg: dict, char_state: dict | None) -> tuple[str, str]
     if persona_id is not None:
         persona_prompt = (cfg.get("persona_prompts") or {}).get(str(persona_id)) or ""
     return char_prompt, persona_prompt
+
+
+async def _resolve_direction_notes(ctx, path_messages) -> str:
+    """The active-branch direction notes rendered as the block both passes receive, or ''
+    when injection is off or the branch carries none.
+
+    Gated by the global injection switch (``direction_notes_inject`` != "off"), so the image
+    passes follow the same read-side setting as the director and writer rather than a switch
+    of their own. Notes are fetched for *path_messages* -- the branch the depicted reply sits
+    on -- and each is tagged with its authoring fragment's label and the turn it was recorded
+    on, reusing the same renderer the writer's Scene Direction block uses.
+    """
+    if (ctx.settings.get("direction_notes_inject", "off") or "off") == "off":
+        return ""
+    path = [m for m in path_messages if m.get("id") is not None]
+    if not path:
+        return ""
+    rows = await get_direction_notes_for_path(ctx.conversation_id, [m["id"] for m in path])
+    if not rows:
+        return ""
+    turn_by_message = {m["id"]: m.get("turn_index") for m in path}
+    notes = [
+        {
+            "interactive_fragment_label": r["interactive_fragment_label"],
+            "content": r["content"],
+            "turn_index": turn_by_message.get(r["message_id"]),
+        }
+        for r in rows
+    ]
+    return render_direction_notes_block(notes)
 
 
 def _moment(user_message: str, response: str) -> str:
@@ -206,6 +239,7 @@ async def _generate_core(
     char_prompt: str,
     persona_prompt: str,
     moment: str,
+    direction_notes: str = "",
     cfg: dict,
     settings,
     kv_tracker=None,
@@ -233,6 +267,7 @@ async def _generate_core(
         prefix=prefix,
         char_prompt=char_prompt,
         moment=moment,
+        direction_notes=direction_notes,
         settings=settings,
         pass_id=f"{WORKFLOW_ID}:analyze",
         kv_tracker=kv_tracker,
@@ -257,6 +292,7 @@ async def _generate_core(
         guideline=resolve_guideline(cfg),
         char_prompt=char_prompt,
         persona_prompt=persona_prompt,
+        direction_notes=direction_notes,
         settings=settings,
         pass_id=f"{WORKFLOW_ID}:compose",
         kv_tracker=kv_tracker,
@@ -303,12 +339,14 @@ async def post_pipeline(ctx):
         return
     cfg = normalize_config(await get_workflow_config(WORKFLOW_ID))
     char_prompt, persona_prompt = _resolve_prompts(ctx, cfg, char_state)
+    direction_notes = await _resolve_direction_notes(ctx, ctx.history)
     async for event in _generate_core(
         client=ctx.client,
         prefix=ctx.prefix,
         char_prompt=char_prompt,
         persona_prompt=persona_prompt,
         moment=_moment(ctx.effective_msg, ctx.draft),
+        direction_notes=direction_notes,
         cfg=cfg,
         settings=ctx.settings,
         kv_tracker=ctx.kv_tracker,
@@ -338,6 +376,7 @@ async def regenerate(ctx, body):
     char_prompt, persona_prompt = _resolve_prompts(ctx, cfg, char_state)
     conv = await get_conversation(ctx.conversation_id)
     prefix = await _build_offturn_prefix(ctx, conv, ctx.history) if conv else _cold_prefix(ctx.history)
+    direction_notes = await _resolve_direction_notes(ctx, ctx.history)
 
     att = None
     async for event in _generate_core(
@@ -346,6 +385,7 @@ async def regenerate(ctx, body):
         char_prompt=char_prompt,
         persona_prompt=persona_prompt,
         moment=_moment("", text),
+        direction_notes=direction_notes,
         cfg=cfg,
         settings=ctx.settings,
     ):
@@ -475,51 +515,61 @@ async def _generate(ctx, body):
     return StreamingResponse(_generate_stream(ctx, anchor), media_type="text/event-stream")
 
 
-async def _generate_stream(ctx, anchor):
+async def _generate_stream(ctx, anchor) -> AsyncIterator[str]:
     """Drive the shared generation core for ``anchor`` and persist the result.
 
     The image depicts the assistant reply, so the moment pairs that reply with the
     user message it answers -- the anchor's parent. With no turn in flight the
     passes read a freshly rebuilt prefix -- the same system prompt and character
     framing the in-turn passes get -- over the history up to the anchor, never the
-    turns after it, and forgo KV reuse. The terminal ``image_generated`` event
-    carries the new attachment id, or null when generation degraded to no image.
-    """
-    text = (anchor.get("content") or "").strip()
-    if not text:
-        yield _sse(_phase_done())
-        return
-    user_message = ""
-    parent_id = anchor.get("parent_id")
-    if parent_id:
-        parent = await get_message_by_id(parent_id)
-        user_message = (parent or {}).get("content") or ""
-    before = []
-    for message in ctx.history or ():
-        if message.get("id") == anchor["id"]:
-            break
-        before.append(message)
-    conv = await get_conversation(ctx.conversation_id)
-    prefix = await _build_offturn_prefix(ctx, conv, before) if conv else _cold_prefix(before)
-    cfg = normalize_config(await get_workflow_config(WORKFLOW_ID))
-    char_state = await get_workflow_character_state(ctx.character_id, WORKFLOW_ID) if ctx.character_id else None
-    char_prompt, persona_prompt = _resolve_prompts(ctx, cfg, char_state)
+    turns after it, and forgo KV reuse.
 
+    The whole body is guarded so the stream always ends with a clean
+    ``image_generated`` terminal event. An uncaught exception in a streaming
+    response body aborts the chunked transfer without its terminating chunk,
+    leaving the client's reader waiting on a stream that never closes; degrading to
+    a null result keeps the UI unblocked. The terminal carries the new attachment
+    id, or null when generation produced no image.
+    """
     new_id = None
-    async for event in _generate_core(
-        client=ctx.client,
-        prefix=prefix,
-        char_prompt=char_prompt,
-        persona_prompt=persona_prompt,
-        moment=_moment(user_message, text),
-        cfg=cfg,
-        settings=ctx.settings,
-    ):
-        if event.get("type") == "artifact":
-            try:
-                new_id, _ = await insert_workflow_attachment(anchor["id"], event["attachment"])
-            except (ValueError, LookupError, OSError):
-                logger.exception("image_gen: production insert failed for message %s", anchor.get("id"))
-        elif event.get("event"):
-            yield _sse(event)
+    try:
+        text = (anchor.get("content") or "").strip()
+        if text:
+            user_message = ""
+            parent_id = anchor.get("parent_id")
+            if parent_id:
+                parent = await get_message_by_id(parent_id)
+                user_message = (parent or {}).get("content") or ""
+            before = []
+            for message in ctx.history or ():
+                if message.get("id") == anchor["id"]:
+                    break
+                before.append(message)
+            conv = await get_conversation(ctx.conversation_id)
+            prefix = await _build_offturn_prefix(ctx, conv, before) if conv else _cold_prefix(before)
+            cfg = normalize_config(await get_workflow_config(WORKFLOW_ID))
+            char_state = await get_workflow_character_state(ctx.character_id, WORKFLOW_ID) if ctx.character_id else None
+            char_prompt, persona_prompt = _resolve_prompts(ctx, cfg, char_state)
+            direction_notes = await _resolve_direction_notes(ctx, before + [anchor])
+            async for event in _generate_core(
+                client=ctx.client,
+                prefix=prefix,
+                char_prompt=char_prompt,
+                persona_prompt=persona_prompt,
+                moment=_moment(user_message, text),
+                direction_notes=direction_notes,
+                cfg=cfg,
+                settings=ctx.settings,
+            ):
+                if event.get("type") == "artifact":
+                    logger.info("image_gen: render fetched; inserting attachment for message %s", anchor["id"])
+                    new_id, _ = await insert_workflow_attachment(anchor["id"], event["attachment"])
+                elif event.get("event"):
+                    yield _sse(event)
+        else:
+            yield _sse(_phase_done())
+    except Exception:
+        logger.exception("image_gen: production generation failed for message %s", anchor.get("id"))
+        yield _sse(_phase_done())
+    logger.info("image_gen: production generation done for message %s (attachment %s)", anchor.get("id"), new_id)
     yield _sse({"event": "image_generated", "data": {"attachment_id": new_id}})

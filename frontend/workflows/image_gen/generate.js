@@ -67,8 +67,15 @@ async function consumeStream(resp) {
     for (const line of lines) {
       if (line.startsWith("event: ")) event = line.slice(7).trim();
       else if (line.startsWith("data: ") && event) {
-        handleEvent(event, line.slice(6));
+        const ev = event;
+        handleEvent(ev, line.slice(6));
         event = null;
+        // The terminal event is the explicit done signal; finish on it rather than
+        // waiting for the stream to close, which can stall and hang the reader.
+        if (ev === "image_generated") {
+          await reader.cancel();
+          return;
+        }
       }
     }
   }
