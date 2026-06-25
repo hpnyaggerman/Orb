@@ -2,18 +2,19 @@
 passes/director/direction_note.py -- Direction-note step.
 
 Asks the model, via a forced ``record_direction_note`` call, whether anything from
-this turn should persist for the rest of the branch. Runs as a standalone sub-call
-gated by the master Writing switch and the enabled ``field_type='direction_note'``
-fragments whose timing matches this placement; each filled parameter becomes one
-labelled note (empty when nothing is worth recording).
+this turn should persist for the rest of the branch. Gated by the master Writing
+switch and the enabled ``field_type='direction_note'`` fragments whose timing matches
+this placement; each filled parameter becomes one labelled note (empty when nothing is
+worth recording). Issues one call for the whole timing group, or one per fragment when
+the per-fragment director toggle is on.
 
 The wire schema in the shared per-turn tool blob is the union of every direction-note
-fragment, held byte-stable so both placements reuse the cached base and only force the
-tool choice. Each call is handed just its timing group, which shapes the request text
-and the extraction. The trailing depends on placement: the post-turn placement replays
-the writer's user message and reply to extend the warm writer/editor prefix; the
-pre-writer placement appends only the request, carrying this turn's scene direction
-inside it.
+fragment, held byte-stable so every call reuses the cached base and only forces the
+tool choice. A call narrows the request text and the extraction to its own fragments --
+the timing group, or a single fragment when the per-fragment toggle splits the group.
+The trailing depends on placement: the post-turn placement replays the writer's user
+message and reply to extend the warm writer/editor prefix; the pre-writer placement
+appends only the request, carrying this turn's scene direction inside it.
 
 Errors and aborts are swallowed into an empty result. The post-turn placement runs
 immediately before the turn's ``_result`` is emitted, so a propagating exception
@@ -91,7 +92,10 @@ async def direction_note_step(
     kv_tracker=None,
     reasoning_on: bool = False,
 ) -> AsyncIterator[dict]:
-    """Yield reasoning chunks during the call, then a single done dict.
+    """Yield reasoning chunks during the call(s), then a single done dict.
+
+    One forced ``record_direction_note`` call for the whole group, or one per fragment
+    when the per-fragment director toggle is on; notes from every call are combined.
 
     Yields:
         ``{"type": "reasoning", "delta": str}``
@@ -101,52 +105,65 @@ async def direction_note_step(
         yield {"type": "done", "result": DirectionNoteResult()}
         return
 
-    # This placement's timing group only -- echoed into the request so the model is asked
-    # to fill just these categories. The wire schema in the shared base is the wider union.
-    tool_schema = build_direction_note_tool(direction_note_fragments)
-
-    request = build_direction_note_prompt(
-        active_notes,
-        direction_note_fragments,
-        inj_block=inj_block if placement == "pre_writer" else None,
-        reasoning_on=reasoning_on,
-        tool_schema=tool_schema,
-    )
-
-    if placement == "post_turn":
-        # Replay the writer exchange so the call extends the warm writer/editor prefix.
-        trailing: list[ChatMessage] = [
-            {"role": "user", "content": writer_user_msg or ""},
-            {"role": "assistant", "content": reply_text or ""},
-            {"role": "user", "content": request},
-        ]
-    else:
-        trailing = [{"role": "user", "content": request}]
+    # The per-fragment director toggle gives each category its own call so its attention is
+    # not split across the others; off, the whole group shares one call. The split is
+    # request-text-only -- the wire schema stays the shared-base union, so the extra calls
+    # reuse the cached prefix rather than busting it. Every call sees only the prior-branch
+    # notes: this turn's sibling notes are deliberately not fed forward, which would re-mix
+    # the categories the split just separated.
+    per_fragment_on = bool(settings.get("director_individual_fragments", 0))
+    groups = [[df] for df in direction_note_fragments] if per_fragment_on else [list(direction_note_fragments)]
 
     hyperparams = extract_hyperparams(settings, defaults={"temperature": 0.4, "max_tokens": 2048})
 
-    resp: dict = {}
-    try:
-        async for event in base.complete(
-            client,
-            label="direction_note",
-            trailing=trailing,
-            tool_choice=RECORD_DIRECTION_NOTE_CHOICE,
-            kv_tracker=kv_tracker,
-            **hyperparams,
-            **reasoning_cfg(reasoning_on),
-        ):
-            if event["type"] == "reasoning":
-                yield {"type": "reasoning", "delta": event["delta"]}
-            elif event["type"] == "done":
-                resp = event["message"]
-    except Exception:
-        logger.exception("Direction-note step failed; recording nothing this turn")
-        yield {"type": "done", "result": DirectionNoteResult()}
-        return
+    notes: list[dict] = []
+    raws: list[str] = []
+    for group in groups:
+        if client.is_aborted:
+            break
 
-    agent_raw = json.dumps(resp, default=str)
-    logger.info("Direction-note step output:\n%s", agent_raw)
-    notes = extract_direction_notes(parse_tool_calls(resp), direction_note_fragments)
+        request = build_direction_note_prompt(
+            active_notes,
+            group,
+            inj_block=inj_block if placement == "pre_writer" else None,
+            reasoning_on=reasoning_on,
+            tool_schema=build_direction_note_tool(group),
+        )
+        if placement == "post_turn":
+            # Replay the writer exchange so each call extends the warm writer/editor prefix.
+            trailing: list[ChatMessage] = [
+                {"role": "user", "content": writer_user_msg or ""},
+                {"role": "assistant", "content": reply_text or ""},
+                {"role": "user", "content": request},
+            ]
+        else:
+            trailing = [{"role": "user", "content": request}]
 
-    yield {"type": "done", "result": DirectionNoteResult(notes=notes, agent_raw=agent_raw)}
+        resp: dict = {}
+        try:
+            async for event in base.complete(
+                client,
+                label="direction_note",
+                trailing=trailing,
+                tool_choice=RECORD_DIRECTION_NOTE_CHOICE,
+                kv_tracker=kv_tracker,
+                **hyperparams,
+                **reasoning_cfg(reasoning_on),
+            ):
+                if event["type"] == "reasoning":
+                    yield {"type": "reasoning", "delta": event["delta"]}
+                elif event["type"] == "done":
+                    resp = event["message"]
+        except Exception:
+            # A failed call records nothing for its group but must neither drop the groups
+            # already recorded nor propagate: the post-turn placement runs just before the
+            # turn's ``_result``, where an exception would skip persisting the finished reply.
+            logger.exception("Direction-note call failed; skipping this group")
+            continue
+
+        raw = json.dumps(resp, default=str)
+        logger.info("Direction-note step output:\n%s", raw)
+        raws.append(raw)
+        notes.extend(extract_direction_notes(parse_tool_calls(resp), group))
+
+    yield {"type": "done", "result": DirectionNoteResult(notes=notes, agent_raw="\n".join(raws))}

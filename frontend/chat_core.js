@@ -138,10 +138,12 @@ export function buildMsgToolbar(m, childByParent = null) {
       ? `<span class="magic-input-wrap" id="magic-wrap-${m.id}"><input class="magic-input" type="text" placeholder="Direction/Fix..." id="magic-input-${m.id}" onkeydown="handleMagicKey(event,${m.id})" autofocus><button class="magic-apply" onclick="submitMagicRewrite(${m.id})" title="Apply">${ICON_SEND}</button></span>`
       : "";
 
-  // Gated on the master recording switch, the same switch that surfaces the Notes panel,
+  // Shows on any persisted, non-greeting message: a note anchors to its own message and both
+  // roles are valid anchors, so a note on a user message is as legitimate as one on a reply.
+  // Gated on the master recording switch -- the same switch that surfaces the Notes panel --
   // so the panel the button opens is always reachable when the button shows.
   const noteBtn =
-    isAssistant && m.id && !isGreeting && S.directionNotesRecord
+    m.id && !isGreeting && S.directionNotesRecord
       ? S.hasMultipleTabs
         ? `<button disabled title="Close other tabs to add a note">${ICON_NOTE}</button>`
         : `<button onclick="addUserDirectionNote(${m.id})" title="Add direction note">${ICON_NOTE}</button>`

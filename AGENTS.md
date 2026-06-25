@@ -87,7 +87,7 @@ Orb/
 │   │   │                    # handle_* + _generate_reply driver (setup→pipeline→persist)
 │   │   │                    # + regen helpers (_resolve_target_and_parent/_prepare_regen_context)
 │   │   ├── orchestrator.py  # The three-pass coordinator: _run_pipeline (director→writer→
-│   │   │                    # editor + POST_PIPELINE hooks) + _make_result (TurnState → _result)
+│   │   │                    # editor + POST_PIPELINE hooks + direction-note steps) + _make_result (TurnState → _result)
 │   │   ├── context.py       # Inbound: PipelineContext + _load_pipeline_context (builds the
 │   │   │                    # LLM clients — tests patch context.LLMClient), _build_prefix(es),
 │   │   │                    # the LorebookTurn (via the pure lorebook slice in features/), _TurnSetup +
@@ -99,7 +99,7 @@ Orb/
 │   │   ├── workflow_bridge.py # The pipeline↔workflows seam: _iterate_pre_pipeline_hooks +
 │   │   │                    # _run_post_pipeline + _stage_workflow_attachment + _PostPipelineResult
 │   │   ├── predicates.py    # Dependency-free leaf (the package's core/): agent_enabled,
-│   │   │                    # is_dual_model, resolve_persona_id
+│   │   │                    # is_dual_model, resolve_persona_id, direction_note_* gates
 │   │   ├── state.py         # Per-turn contract dataclasses:
 │   │   │                    # ModelLane, _PipelineConfig, TurnState (mutable per-turn bag
 │   │   │                    # threaded through stages), LorebookTurn (lorebook inputs threaded
@@ -109,9 +109,10 @@ Orb/
 │   │       ├── director/    # Director pass package
 │   │       │   ├── __init__.py  # Re-exports: DirectorResult, director_pass, director_stage,
 │   │       │   │                # _agentic_lorebook_active, build_direct_scene_override,
-│   │       │   │                # build_lorebook_catalog
+│   │       │   │                # build_lorebook_catalog, DirectionNoteResult, direction_note_step, extract_direction_notes
 │   │       │   ├── director.py  # director_pass (raw LLM loop) + director_stage (full stage:
-│   │       │   │                # pass + rewrite + style injection + lorebook block)
+│   │       │   │                # pass + rewrite + style injection + lorebook + direction-notes block)
+│   │       │   ├── direction_note.py # record_direction_note step: persists Director notes across a branch (pre-writer/post-turn)
 │   │       │   └── prompt_rewrite.py # apply_rewrite, order_director_tools, suppresses_reasoning
 │   │       ├── writer.py    # writer_pass (raw LLM loop) + writer_stage (builds
 │   │       │                # writer_content, streams tokens, folds latency into TurnState)
@@ -209,6 +210,8 @@ Orb/
 │   ├── presets.js           # Presets/backups UI: export, import, apply, restore, snapshot library
 │   ├── settings.js          # Settings panel, endpoint/model config UI
 │   ├── lorebooks.js         # World/lorebook entry management
+│   ├── direction_notes_panel.js # Direction Notes right-rail panel (list/add/edit/delete branch notes)
+│   ├── panels.js            # Shared right-rail utility-panel slot (tools/inspector/notes, mutually exclusive)
 │   ├── modal.js             # Generic modal utilities
 │   ├── mobile.js            # Mobile-specific handlers
 │   ├── utils.js             # $() helper, esc(), debounce, etc.
@@ -326,7 +329,7 @@ never from another slice, `pipeline/`, `workflows/`, or `api/`.
 
 | Table | Purpose | Key Columns |
 |-------|---------|-------------|
-| `settings` | Global singleton config (id=1) | endpoint_url, model_name, enabled_tools (JSON — registered tools only), length_guard_* (enabled/enforce/max_words/max_paragraphs), agentic_lorebook_enabled, feedback_enabled, reasoning_enabled_passes, active_persona_id, active_endpoint_id, agent_*, workflow_config (JSON), generated_chars (lifetime LLM-output char counter; NULL = unseeded), attachment_cache_budget_bytes, attachment_access_counter |
+| `settings` | Global singleton config (id=1) | endpoint_url, model_name, enabled_tools (JSON — registered tools only), length_guard_* (enabled/enforce/max_words/max_paragraphs), agentic_lorebook_enabled, feedback_enabled, direction_notes_record, direction_notes_inject (`off`/`director`/`writer`/`both`), reasoning_enabled_passes, active_persona_id, active_endpoint_id, agent_*, workflow_config (JSON), generated_chars (lifetime LLM-output char counter; NULL = unseeded), attachment_cache_budget_bytes, attachment_access_counter |
 | `endpoints` | LLM API endpoints | url, api_key, active_model_config_id, agent_active_model_config_id → model_configs.id |
 | `model_configs` | Per-endpoint model settings | endpoint_id, model_name, temperature, top_p, top_k, min_p, repetition_penalty, max_tokens, system_prompt, role |
 | `conversations` | Chat sessions | character_card_id, character_name, character_scenario, post_history_instructions, active_leaf_id → messages.id, persona_lock_id → user_personas.id, workflow_state (JSON) |
@@ -339,10 +342,11 @@ never from another slice, `pipeline/`, `workflows/`, or `api/`.
 | Table | Purpose | Key Columns |
 |-------|---------|-------------|
 | `director_state` | Per-conversation Director memory | conversation_id (PK), active_moods (JSON), keywords (JSON), progressive_fields (JSON) |
-| `interactive_fragments` | Dynamic Director parameters | id, label, description, field_type (`string`/`array`/`progressive`/`feedback`), required, enabled, injection_label, sort_order. A `feedback` fragment is surfaced to the user as a post-writer note via `give_feedback` instead of steering the Writer (gated by `settings.feedback_enabled`). |
+| `interactive_fragments` | Dynamic Director parameters | id, label, description, field_type (`string`/`array`/`progressive`/`feedback`/`direction_note`), required, enabled, injection_label, sort_order, direction_note_timing (`pre_writer`/`post_turn`). A `feedback` fragment is surfaced to the user as a post-writer note via `give_feedback` instead of steering the Writer (gated by `settings.feedback_enabled`). A `direction_note` fragment records a lasting note via `record_direction_note` that persists across the branch (gated by `settings.direction_notes_record`); see the `direction_notes` table. |
 | `mood_fragments` | Named mood presets | id, label, description, prompt_text, negative_prompt, enabled |
 | `phrase_bank` | Banned phrases for editor audit | id, variants (JSON array of strings) |
 | `conversation_logs` | Per-turn Director audit trail | conversation_id, turn_index, message_id, agent_raw_output, tool_calls (JSON), active_moods_after, progressive_fields_after (JSON), injection_block, agent_latency_ms |
+| `direction_notes` | Persistent Director/user notes carried across a branch | id, conversation_id, message_id (the turn the note is stamped to), interactive_fragment_id (`human` for user-authored), interactive_fragment_label, content, created_at |
 
 ### World/Lorebook Tables
 
@@ -376,6 +380,8 @@ erDiagram
     conversations ||--|| director_state : has
     conversations ||--o{ conversation_logs : has
     messages ||--o{ conversation_logs : "message_id"
+    conversations ||--o{ direction_notes : has
+    messages ||--o{ direction_notes : "message_id"
     messages ||--o{ user_attachments : "user uploads"
     messages ||--o{ workflow_attachments : "workflow artifacts"
     workflow_attachments ||--o{ workflow_attachments : "parent_attachment_id (variant group)"
@@ -433,7 +439,7 @@ The dependency rule is one-way: every other layer points its dependencies **inwa
 
 When the database layer genuinely needs higher-layer *behavior* at a fixed seam — e.g. `add_message` persisting workflow attachments inside its own write transaction — it declares the contract and the higher layer registers an implementation (dependency inversion): `database/queries/messages.py` owns `register_workflow_attachment_persister`, and `workflows/attachment_cache.py` registers `insert_workflow_attachments` into it at import. Don't reintroduce a lazy `import backend.workflows` inside a `database/` function to dodge the rule — that hides the inversion from the import graph without removing it.
 
-- **The TypedDicts label plain dicts, with zero runtime change.** The query layer still returns ordinary `dict(row)` objects; each query stamps the shape at its boundary with `cast(SomeRow, ...)` (a `TypedDict` is not assignable from a bare `dict`). So `row["col"]` access is checked against the schema without any wrapper object, validation, or runtime cost. Each `queries/*.py` module imports just the contract(s) for its tables (`SettingsRow`, `ConversationRow`/`ConversationListRow`, `MessageRow`/`MessageWithAttachments`, `EndpointRow`, `ModelConfigRow`, `WorldRow`, `LorebookEntryRow`, `CharacterCardRow`, `DirectorStateRow`, `InteractiveFragmentRow`, `MoodFragmentRow`, `UserPersonaRow`, `ConversationLogRow`, `PhraseBankRow`, and the attachment rows).
+- **The TypedDicts label plain dicts, with zero runtime change.** The query layer still returns ordinary `dict(row)` objects; each query stamps the shape at its boundary with `cast(SomeRow, ...)` (a `TypedDict` is not assignable from a bare `dict`). So `row["col"]` access is checked against the schema without any wrapper object, validation, or runtime cost. Each `queries/*.py` module imports just the contract(s) for its tables (`SettingsRow`, `ConversationRow`/`ConversationListRow`, `MessageRow`/`MessageWithAttachments`, `EndpointRow`, `ModelConfigRow`, `WorldRow`, `LorebookEntryRow`, `CharacterCardRow`, `DirectorStateRow`, `InteractiveFragmentRow`, `MoodFragmentRow`, `UserPersonaRow`, `ConversationLogRow`, `DirectionNoteRow`, `PhraseBankRow`, and the attachment rows).
 - **Every row-shaped query return is typed; only free-form blobs stay `dict`.** A query that returns table rows uses a contract. The lone exception is the per-workflow JSON state/config accessors (`get_workflow_state`, `get_workflow_message_state`, `get_workflow_character_state`, `get_workflow_config`) — these decode an arbitrary per-workflow slot with no fixed schema, so they correctly return bare `dict`/`dict | None`. Don't invent a contract for those.
 - **JSON columns are typed as their *decoded* shape** (`dict`/`list`) **only on the queries that actually decode them.** Where a query leaves the column as a raw JSON string it stays `str` — e.g. `MessageRow.progressive_fields` is `dict` because `get_path_to_leaf()` decodes it, while `get_message_by_id()` leaves it a string; `ConversationLogRow` decodes `tool_calls`/`active_moods_after` to lists but leaves `progressive_fields_after` a raw string.
 - **SQLite has no boolean type**, so flag columns (`enabled`, `required`, `case_insensitive`, `constant`, …) are typed `int` to match the 0/1 that `dict(row)` returns — not `bool`.
@@ -512,7 +518,12 @@ When the database layer genuinely needs higher-layer *behavior* at a fixed seam 
 ### Inspector
 - `GET /api/conversations/{cid}/director` — Director state
 - `GET /api/conversations/{cid}/logs` — Conversation logs
-- `GET /api/conversations/{cid}/messages/{id}/director-log` — Per-message Director log
+- `GET /api/conversations/{cid}/messages/{id}/director-log` — Per-message Director log (includes the message's `direction_notes`)
+
+### Direction Notes
+- `GET /api/conversations/{cid}/direction-notes` — List the active branch's notes (each with `turn_index`)
+- `POST /api/conversations/{cid}/direction-notes` — Create a user-authored note stamped to a message
+- `PUT/DELETE /api/conversations/{cid}/direction-notes/{fid}` — Edit/delete a note
 
 ### Secondary Workflows
 See [docs/architecture/secondary-workflow.md](docs/architecture/secondary-workflow.md) §8 for per-route contracts (bodies, locks, error codes).
@@ -546,7 +557,7 @@ See [docs/architecture/secondary-workflow.md](docs/architecture/secondary-workfl
 ```mermaid
 flowchart TD
     settings["settings (row)"] --> active_endpoint["settings.active_endpoint_id → endpoints[id]"]
-    settings --> enabled_tools["settings.enabled_tools → JSON (model-callable tools only)<br/>{direct_scene, rewrite_user_prompt, editor_apply_patch, editor_rewrite}<br/>(internal, flag-gated, not in this UI map: editor_rewrite via length guard, give_feedback via feedback flag)"]
+    settings --> enabled_tools["settings.enabled_tools → JSON (model-callable tools only)<br/>{direct_scene, rewrite_user_prompt, editor_apply_patch, editor_rewrite}<br/>(internal, flag-gated, not in this UI map: editor_rewrite via length guard, give_feedback via feedback flag, record_direction_note via direction-notes recording)"]
     settings --> reasoning["settings.reasoning_enabled_passes → JSON<br/>{director, writer, editor}"]
     settings --> persona["settings.active_persona_id → user_personas[id]"]
     settings --> agent["settings.agent_endpoint_id → endpoints[id]<br/>settings.agent_shared_system_prompt"]
@@ -561,7 +572,7 @@ Multiple model configs per endpoint. Active one selected via `endpoints.active_m
 
 **Persona resolution.** `settings.active_persona_id` is only the *global default*. The effective persona for a turn is resolved by `resolve_persona_id()` (`pipeline/predicates.py`) top-down: conversation pin (`conversations.persona_lock_id`) → character pin (`character_cards.persona_lock_id`) → global default. The frontend mirror is `effectivePersonaId()` in `utils.js`. Pins are managed from the user menu (`settings_personas.js`); see [docs/features/persona-pinning.md](docs/features/persona-pinning.md).
 
-**Director feature flags** (not model-callable tools, so they live in their own `settings` columns like the length guard — see *Adding a Feature Flag* below): `agentic_lorebook_enabled` lets the Director pick lorebook entries from a catalog instead of the keyword scan ([docs/features/agentic-lorebook.md](docs/features/agentic-lorebook.md)), and `feedback_enabled` gates the post-writer `give_feedback` step that surfaces `feedback`-type fragments to the user ([docs/features/feedback-fragments.md](docs/features/feedback-fragments.md)).
+**Director feature flags** (not model-callable tools, so they live in their own `settings` columns like the length guard — see *Adding a Feature Flag* below): `agentic_lorebook_enabled` lets the Director pick lorebook entries from a catalog instead of the keyword scan ([docs/features/agentic-lorebook.md](docs/features/agentic-lorebook.md)), and `feedback_enabled` gates the post-writer `give_feedback` step that surfaces `feedback`-type fragments to the user ([docs/features/feedback-fragments.md](docs/features/feedback-fragments.md)). `direction_notes_record` gates the `record_direction_note` step that persists `direction_note`-type fragments across a branch, and `direction_notes_inject` (`off`/`director`/`writer`/`both`) feeds stored notes back to the Director and/or Writer, independently of recording ([docs/features/direction-notes.md](docs/features/direction-notes.md)).
 
 ## Single-Model vs Dual-Model Mode
 
@@ -596,7 +607,7 @@ Because the writer's KV cache now lives on a different server than the agent pas
 
 - **State** (`state.js`): Single global `S` object. No reactive framework — components call `render*()` functions after state mutations.
 - **Rendering** (`chat.js`): `renderMessages()` rebuilds the entire message list from `S.messages`. Inspector panel rendered by `renderInspector()`.
-- **Streaming**: SSE events parsed in `chat.js` — `director_start`, `director_done`, `prompt_rewritten`, `token`, `reasoning`, `writer_rewrite`, `editor_done`, `user_message_created`, `done`, `error`, plus workflow-driven events (`phase_status` for the phase pill, `workflow_attachments_rejected`, and any custom passthrough event a workflow hook yields, dispatched via `S.workflowEventHandlers`). `_result`, `_refined_result`, and other underscore-prefixed events are backend-internal, consumed before reaching the frontend. Tokens accumulate into the current message div in real-time.
+- **Streaming**: SSE events parsed in `chat.js` — `director_start`, `director_done`, `prompt_rewritten`, `token`, `reasoning`, `writer_rewrite`, `editor_done`, `direction_notes`, `user_message_created`, `done`, `error`, plus workflow-driven events (`phase_status` for the phase pill, `workflow_attachments_rejected`, and any custom passthrough event a workflow hook yields, dispatched via `S.workflowEventHandlers`). `_result`, `_refined_result`, and other underscore-prefixed events are backend-internal, consumed before reaching the frontend. Tokens accumulate into the current message div in real-time.
 - **API** (`api.js`): All backend calls via `fetch()`. SSE streams handled by `EventSource`-like parsing in `chat.js`.
 - **Branching**: Messages use `parent_id` forming a tree. `conversations.active_leaf_id` selects the visible leaf. UI shows branch count/index with prev/next navigation buttons.
 
