@@ -336,6 +336,27 @@ async def test_production_generates_without_enable_flag(client, monkeypatch):
     assert len(await get_workflow_attachments_for_message(asst_id)) == 1
 
 
+async def test_production_completes_when_insert_fails(client, monkeypatch):
+    # An insert failure must not abort the stream: the terminal events still flow so
+    # the client unblocks (degraded to no image) instead of hanging on a stream that
+    # never closes.
+    cid, char_id = "conv1", "char1"
+    asst_id = await _seed_reply(cid, char_id)
+    _stub_passes(monkeypatch)
+    _stub_render(monkeypatch)
+
+    async def boom_insert(*args, **kwargs):
+        raise RuntimeError("db exploded")
+
+    monkeypatch.setattr(hooks, "insert_workflow_attachment", boom_insert)
+
+    anchor = await get_message_by_id(asst_id)
+    events = [ev async for ev in hooks._generate_stream(_ondemand_ctx(cid, char_id), anchor)]
+
+    assert any("event: image_generated" in e and "null" in e for e in events)
+    assert any("event: phase_status" in e and "done" in e for e in events)
+
+
 async def test_production_degrades_on_comfy_error(client, monkeypatch):
     cid, char_id = "conv1", "char1"
     asst_id = await _seed_reply(cid, char_id)

@@ -21,6 +21,7 @@ from __future__ import annotations
 import base64
 import json
 import logging
+from typing import AsyncIterator
 
 from fastapi.responses import StreamingResponse
 
@@ -475,51 +476,59 @@ async def _generate(ctx, body):
     return StreamingResponse(_generate_stream(ctx, anchor), media_type="text/event-stream")
 
 
-async def _generate_stream(ctx, anchor):
+async def _generate_stream(ctx, anchor) -> AsyncIterator[str]:
     """Drive the shared generation core for ``anchor`` and persist the result.
 
     The image depicts the assistant reply, so the moment pairs that reply with the
     user message it answers -- the anchor's parent. With no turn in flight the
     passes read a freshly rebuilt prefix -- the same system prompt and character
     framing the in-turn passes get -- over the history up to the anchor, never the
-    turns after it, and forgo KV reuse. The terminal ``image_generated`` event
-    carries the new attachment id, or null when generation degraded to no image.
-    """
-    text = (anchor.get("content") or "").strip()
-    if not text:
-        yield _sse(_phase_done())
-        return
-    user_message = ""
-    parent_id = anchor.get("parent_id")
-    if parent_id:
-        parent = await get_message_by_id(parent_id)
-        user_message = (parent or {}).get("content") or ""
-    before = []
-    for message in ctx.history or ():
-        if message.get("id") == anchor["id"]:
-            break
-        before.append(message)
-    conv = await get_conversation(ctx.conversation_id)
-    prefix = await _build_offturn_prefix(ctx, conv, before) if conv else _cold_prefix(before)
-    cfg = normalize_config(await get_workflow_config(WORKFLOW_ID))
-    char_state = await get_workflow_character_state(ctx.character_id, WORKFLOW_ID) if ctx.character_id else None
-    char_prompt, persona_prompt = _resolve_prompts(ctx, cfg, char_state)
+    turns after it, and forgo KV reuse.
 
+    The whole body is guarded so the stream always ends with a clean
+    ``image_generated`` terminal event. An uncaught exception in a streaming
+    response body aborts the chunked transfer without its terminating chunk,
+    leaving the client's reader waiting on a stream that never closes; degrading to
+    a null result keeps the UI unblocked. The terminal carries the new attachment
+    id, or null when generation produced no image.
+    """
     new_id = None
-    async for event in _generate_core(
-        client=ctx.client,
-        prefix=prefix,
-        char_prompt=char_prompt,
-        persona_prompt=persona_prompt,
-        moment=_moment(user_message, text),
-        cfg=cfg,
-        settings=ctx.settings,
-    ):
-        if event.get("type") == "artifact":
-            try:
-                new_id, _ = await insert_workflow_attachment(anchor["id"], event["attachment"])
-            except (ValueError, LookupError, OSError):
-                logger.exception("image_gen: production insert failed for message %s", anchor.get("id"))
-        elif event.get("event"):
-            yield _sse(event)
+    try:
+        text = (anchor.get("content") or "").strip()
+        if text:
+            user_message = ""
+            parent_id = anchor.get("parent_id")
+            if parent_id:
+                parent = await get_message_by_id(parent_id)
+                user_message = (parent or {}).get("content") or ""
+            before = []
+            for message in ctx.history or ():
+                if message.get("id") == anchor["id"]:
+                    break
+                before.append(message)
+            conv = await get_conversation(ctx.conversation_id)
+            prefix = await _build_offturn_prefix(ctx, conv, before) if conv else _cold_prefix(before)
+            cfg = normalize_config(await get_workflow_config(WORKFLOW_ID))
+            char_state = await get_workflow_character_state(ctx.character_id, WORKFLOW_ID) if ctx.character_id else None
+            char_prompt, persona_prompt = _resolve_prompts(ctx, cfg, char_state)
+            async for event in _generate_core(
+                client=ctx.client,
+                prefix=prefix,
+                char_prompt=char_prompt,
+                persona_prompt=persona_prompt,
+                moment=_moment(user_message, text),
+                cfg=cfg,
+                settings=ctx.settings,
+            ):
+                if event.get("type") == "artifact":
+                    logger.info("image_gen: render fetched; inserting attachment for message %s", anchor["id"])
+                    new_id, _ = await insert_workflow_attachment(anchor["id"], event["attachment"])
+                elif event.get("event"):
+                    yield _sse(event)
+        else:
+            yield _sse(_phase_done())
+    except Exception:
+        logger.exception("image_gen: production generation failed for message %s", anchor.get("id"))
+        yield _sse(_phase_done())
+    logger.info("image_gen: production generation done for message %s (attachment %s)", anchor.get("id"), new_id)
     yield _sse({"event": "image_generated", "data": {"attachment_id": new_id}})
