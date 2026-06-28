@@ -274,9 +274,7 @@ async def _prepare_turn(
 
     # When agentic lorebook is active the keyword scan is skipped; the Director
     # picks entries from a catalog instead and the writer block is built post-director.
-    agentic_active = agentic_lorebook_active(
-        settings, enabled_tools_pre_merge, ctx.lorebook_entries, agent_on=agent_enabled(settings)
-    )
+    agentic_active = agentic_lorebook_active(settings, ctx.lorebook_entries, agent_on=agent_enabled(settings))
     lorebook = LorebookTurn(
         entries=ctx.lorebook_entries,
         messages=lorebook_messages,

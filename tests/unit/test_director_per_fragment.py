@@ -80,14 +80,10 @@ class TestStepPrompt:
     def test_moods_stage_targets_moods_only(self):
         out = build_director_scene_step_prompt("msg", ["tense"], _MOODS, target_fragment=None)
         assert "Fill ONLY: moods" in out
+        # Lorebook selection is no longer part of direct_scene (own select_lorebook tool).
         assert "selected_lorebook_entries" not in out
         assert "Available writing moods" in out
         assert "[tense]" in out
-
-    def test_moods_stage_names_lorebook_when_catalog_present(self):
-        out = build_director_scene_step_prompt("msg", [], _MOODS, target_fragment=None, lorebook_catalog="ENTRY CATALOG")
-        assert "Fill ONLY: moods, selected_lorebook_entries" in out
-        assert "ENTRY CATALOG" in out
 
     def test_fragment_stage_targets_one_field(self):
         out = build_director_scene_step_prompt("msg", [], _MOODS, target_fragment=_FRAGMENTS[0])
@@ -134,7 +130,7 @@ class TestPerFragmentLoop:
         base = _FakeBase(_FRAGMENTS, responses)
         result = await _run(base, _FRAGMENTS, {"director_individual_fragments": 1})
 
-        assert len(base.calls) == 4  # one moods/lorebook call + one per fragment
+        assert len(base.calls) == 4  # one moods call + one per fragment
         assert result.active_moods == ["tense"]  # fragment-stage moods are ignored
         assert result.extra_fields == {"user_intent": "wants X", "keywords": ["a", "b"]}  # empty next_event skipped
         assert len(result.calls) == 4

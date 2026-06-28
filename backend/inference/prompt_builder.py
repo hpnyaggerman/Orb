@@ -230,7 +230,6 @@ def build_director_tool_prompt(
     interactive_fragments: Sequence[Mapping[str, Any]] | None = None,
     progressive_state: dict | None = None,
     tool_schema: dict | None = None,
-    lorebook_catalog: str = "",
 ) -> str:
     tool = TOOLS.get(tool_name)
     if not tool:
@@ -245,10 +244,6 @@ def build_director_tool_prompt(
         moods = ", ".join(active_moods) or "none"
         frags = "\n".join(f"* [{f['id']}] - use in case: {f['description']}" for f in mood_fragments)
         parts.append(f"Previously active moods: {moods}\n\nAvailable writing moods:\n{frags}")
-        # Agentic lorebook catalog rides the OOC trailing (not the system prompt /
-        # tools blob) so the Writer reuses the shared history KV the Director warms.
-        if lorebook_catalog:
-            parts.append(lorebook_catalog)
         progressive_lines = [
             f"* [{df['id']}] ({df['description']}): {(progressive_state or {}).get(df['id'])}"
             for df in (interactive_fragments or [])
@@ -277,26 +272,22 @@ def build_director_scene_step_prompt(
     target_fragment: Mapping[str, Any] | None = None,
     decided_fields: Sequence[tuple[str, Any]] = (),
     progressive_prior: Any = None,
-    lorebook_catalog: str = "",
 ) -> str:
     """Build one ``direct_scene`` request that targets a single output.
 
-    With ``target_fragment`` None the model is asked only for ``moods`` and the
-    lorebook selection; otherwise only for the named fragment, with the values
-    already chosen this turn (``decided_fields``) shown so it can build on them.
+    With ``target_fragment`` None the model is asked only for ``moods``; otherwise
+    only for the named fragment, with the values already chosen this turn
+    (``decided_fields``) shown so it can build on them.
     """
     schema = tool_schema if tool_schema is not None else TOOLS["direct_scene"]["schema"]
     desc = schema["function"]["description"]
     parts = [DIRECTOR_PREAMBLE + (REASONING_GUIDANCE if reasoning_on else "")]
 
     if target_fragment is None:
-        wanted = "moods" + (", selected_lorebook_entries" if lorebook_catalog else "")
-        parts.append(f"Call ONLY direct_scene - {desc}\nFill ONLY: {wanted}. Leave every scene-direction field empty.")
+        parts.append(f"Call ONLY direct_scene - {desc}\nFill ONLY: moods. Leave every scene-direction field empty.")
         moods = ", ".join(active_moods) or "none"
         frags = "\n".join(f"* [{f['id']}] - use in case: {f['description']}" for f in mood_fragments)
         parts.append(f"Previously active moods: {moods}\n\nAvailable writing moods:\n{frags}")
-        if lorebook_catalog:
-            parts.append(lorebook_catalog)
     else:
         fid = target_fragment["id"]
         hint = {"array": "list of strings", "progressive": "single value, evolves across turns"}.get(
@@ -313,6 +304,24 @@ def build_director_scene_step_prompt(
             parts.append(f"Previous value (update it): {progressive_prior}")
 
     parts.append(f'User\'s next message (context):\n"""{user_message}"""')
+    # Close the [OOC: aside opened in DIRECTOR_PREAMBLE; the whole instruction is the aside.
+    return "\n\n".join(parts) + "]"
+
+
+def build_lorebook_select_prompt(catalog: str, *, reasoning_on: bool = False) -> str:
+    """Build the request for the standalone agentic-lorebook ``select_lorebook`` step.
+
+    The catalog of selectable entries rides this OOC trailing (not the system prompt
+    or the tools blob), so the call reuses the shared history KV the other passes warm.
+    """
+    parts = [
+        DIRECTOR_PREAMBLE + (REASONING_GUIDANCE if reasoning_on else ""),
+        (
+            "Call ONLY select_lorebook. From the catalog below, choose the entries relevant to the "
+            "current scene; leave the selection empty if none apply."
+        ),
+        catalog,
+    ]
     # Close the [OOC: aside opened in DIRECTOR_PREAMBLE; the whole instruction is the aside.
     return "\n\n".join(parts) + "]"
 

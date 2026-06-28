@@ -102,6 +102,7 @@ class TestEnabledSchemasBaseline:
             "editor_rewrite",
             "give_feedback",
             "record_direction_note",
+            "select_lorebook",
         ]
 
     def test_dict_filter_returns_insertion_order_subset(self):
@@ -159,4 +160,5 @@ class TestRegisterTool:
             "editor_rewrite",
             "give_feedback",
             "record_direction_note",
+            "select_lorebook",
         ]

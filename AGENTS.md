@@ -108,11 +108,12 @@ Orb/
 │   │   └── passes/
 │   │       ├── director/    # Director pass package
 │   │       │   ├── __init__.py  # Re-exports: DirectorResult, director_pass, director_stage,
-│   │       │   │                # _agentic_lorebook_active, build_direct_scene_override,
-│   │       │   │                # build_lorebook_catalog, DirectionNoteResult, direction_note_step, extract_direction_notes
+│   │       │   │                # apply_tool_calls, build_direct_scene_override, DirectionNoteResult,
+│   │       │   │                # direction_note_step, extract_direction_notes, lorebook_select_step
 │   │       │   ├── director.py  # director_pass (raw LLM loop) + director_stage (full stage:
 │   │       │   │                # pass + rewrite + style injection + lorebook + direction-notes block)
 │   │       │   ├── direction_note.py # record_direction_note step: persists Director notes across a branch (pre-writer/post-turn)
+│   │       │   ├── lorebook_select.py # select_lorebook step: agentic lorebook pick (own forced call, decoupled from direct_scene)
 │   │       │   └── prompt_rewrite.py # apply_rewrite, order_director_tools, suppresses_reasoning
 │   │       ├── writer.py    # writer_pass (raw LLM loop) + writer_stage (builds
 │   │       │                # writer_content, streams tokens, folds latency into TurnState)
@@ -557,7 +558,7 @@ See [docs/architecture/secondary-workflow.md](docs/architecture/secondary-workfl
 ```mermaid
 flowchart TD
     settings["settings (row)"] --> active_endpoint["settings.active_endpoint_id → endpoints[id]"]
-    settings --> enabled_tools["settings.enabled_tools → JSON (model-callable tools only)<br/>{direct_scene, rewrite_user_prompt, editor_apply_patch, editor_rewrite}<br/>(internal, flag-gated, not in this UI map: editor_rewrite via length guard, give_feedback via feedback flag, record_direction_note via direction-notes recording)"]
+    settings --> enabled_tools["settings.enabled_tools → JSON (model-callable tools only)<br/>{direct_scene, rewrite_user_prompt, editor_apply_patch, editor_rewrite}<br/>(internal, flag-gated, not in this UI map: editor_rewrite via length guard, give_feedback via feedback flag, record_direction_note via direction-notes recording, select_lorebook via agentic_lorebook_enabled)"]
     settings --> reasoning["settings.reasoning_enabled_passes → JSON<br/>{director, writer, editor}"]
     settings --> persona["settings.active_persona_id → user_personas[id]"]
     settings --> agent["settings.agent_endpoint_id → endpoints[id]<br/>settings.agent_shared_system_prompt"]
@@ -572,7 +573,7 @@ Multiple model configs per endpoint. Active one selected via `endpoints.active_m
 
 **Persona resolution.** `settings.active_persona_id` is only the *global default*. The effective persona for a turn is resolved by `resolve_persona_id()` (`pipeline/predicates.py`) top-down: conversation pin (`conversations.persona_lock_id`) → character pin (`character_cards.persona_lock_id`) → global default. The frontend mirror is `effectivePersonaId()` in `utils.js`. Pins are managed from the user menu (`settings_personas.js`); see [docs/features/persona-pinning.md](docs/features/persona-pinning.md).
 
-**Director feature flags** (not model-callable tools, so they live in their own `settings` columns like the length guard — see *Adding a Feature Flag* below): `agentic_lorebook_enabled` lets the Director pick lorebook entries from a catalog instead of the keyword scan ([docs/features/agentic-lorebook.md](docs/features/agentic-lorebook.md)), and `feedback_enabled` gates the post-writer `give_feedback` step that surfaces `feedback`-type fragments to the user ([docs/features/feedback-fragments.md](docs/features/feedback-fragments.md)). `direction_notes_record` gates the `record_direction_note` step that persists `direction_note`-type fragments across a branch, and `direction_notes_inject` (`off`/`director`/`writer`/`both`) feeds stored notes back to the Director and/or Writer, independently of recording ([docs/features/direction-notes.md](docs/features/direction-notes.md)).
+**Director feature flags** (not model-callable tools, so they live in their own `settings` columns like the length guard — see *Adding a Feature Flag* below): `agentic_lorebook_enabled` lets the Director pick lorebook entries from a catalog (in addition to the keyword scan) via its own forced `select_lorebook` call — independent of `direct_scene` ([docs/features/agentic-lorebook.md](docs/features/agentic-lorebook.md)), and `feedback_enabled` gates the post-writer `give_feedback` step that surfaces `feedback`-type fragments to the user ([docs/features/feedback-fragments.md](docs/features/feedback-fragments.md)). `direction_notes_record` gates the `record_direction_note` step that persists `direction_note`-type fragments across a branch, and `direction_notes_inject` (`off`/`director`/`writer`/`both`) feeds stored notes back to the Director and/or Writer, independently of recording ([docs/features/direction-notes.md](docs/features/direction-notes.md)).
 
 ## Single-Model vs Dual-Model Mode
 

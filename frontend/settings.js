@@ -456,20 +456,19 @@ export function renderToolsPanel() {
   $("agent-master-card").classList.toggle("tool-on", S.agentEnabled);
   $("tools-panel-btn").style.opacity = S.agentEnabled ? "1" : "0.5";
 
-  // Agentic Lorebook depends on the Director (direct_scene). When the Director
-  // is off, the toggle is greyed out / disabled with a "requires Director" hint,
-  // and the backend falls back to the keyword scan regardless of this flag.
+  // Agentic Lorebook is independent of Direction (direct_scene): the picks run in
+  // their own select_lorebook call, so it works whenever the Agent is on with at
+  // least one non-constant lorebook entry.
   const alOn = S.agenticLorebookEnabled;
-  const directorOn = !!S.enabledTools.direct_scene;
-  const agenticLorebookCard = `<div class="tool-card ${alOn ? "tool-on" : ""}"${directorOn ? "" : ' style="opacity:0.5"'}>
+  const agenticLorebookCard = `<div class="tool-card ${alOn ? "tool-on" : ""}">
     <div class="tool-card-header">
       <span class="tool-card-name">Agentic Lorebook</span>
       <label class="tog" onclick="event.stopPropagation()">
-        <input type="checkbox" ${alOn ? "checked" : ""} ${directorOn ? "" : "disabled"} onchange="toggleAgenticLorebook(this.checked)">
+        <input type="checkbox" ${alOn ? "checked" : ""} onchange="toggleAgenticLorebook(this.checked)">
         <span class="tog-slider"></span>
       </label>
     </div>
-    <div class="tool-card-desc">Let Director manage Lorebook entries.${directorOn ? "" : " <em>Requires Director.</em>"}</div>
+    <div class="tool-card-desc">Let the Agent pick relevant Lorebook entries each turn.</div>
   </div>`;
 
   const cardById = {};

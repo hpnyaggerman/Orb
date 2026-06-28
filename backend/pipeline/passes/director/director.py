@@ -28,6 +28,7 @@ from ....inference import (
 )
 from ...predicates import direction_note_to_director, direction_note_to_writer
 from . import progressive
+from .lorebook_select import LorebookSelectResult, lorebook_select_step
 from .prompt_rewrite import (
     apply_rewrite,
     extract_rewritten_message,
@@ -47,8 +48,6 @@ logger = logging.getLogger(__name__)
 
 def build_direct_scene_override(
     writer_fragments: Sequence[Mapping[str, Any]],
-    *,
-    agentic_lorebook: bool,
 ) -> dict:
     """Build the ``direct_scene`` tool schema from *writer_fragments*.
 
@@ -56,7 +55,7 @@ def build_direct_scene_override(
     reaches the schema through the director module rather than importing the
     schema builder directly — symmetric to ``build_feedback_override``.
     """
-    return build_direct_scene_tool(writer_fragments, agentic_lorebook=agentic_lorebook)
+    return build_direct_scene_tool(writer_fragments)
 
 
 @dataclass
@@ -76,7 +75,6 @@ class DirectorResult:
     latency: int = 0
     rewritten_msg: str | None = None
     extra_fields: dict = field(default_factory=dict)
-    selected_lorebook_entries: list[str] = field(default_factory=list)
 
 
 # ── Tool-call result unpacking ────────────────────────────────────────────────
@@ -85,32 +83,26 @@ class DirectorResult:
 def apply_tool_calls(
     tool_calls: list[dict],
     current_moods: list[str],
-) -> tuple[list[str], str | None, dict, list[str]]:
+) -> tuple[list[str], str | None, dict]:
     """Extract values from tool calls.
 
-    Returns ``(moods, refined_message, extra_fields, selected_lorebook_entries)``.
-    ``extra_fields`` holds all ``direct_scene`` args except moods and lorebook
-    entries. ``selected_lorebook_entries`` is pulled out explicitly so it never
-    renders as a Scene Direction field.
+    Returns ``(moods, refined_message, extra_fields)``. ``extra_fields`` holds all
+    ``direct_scene`` args except moods. (Lorebook selection is handled separately
+    by the ``select_lorebook`` step, not this tool.)
     """
     moods = list(current_moods)
     refined: str | None = None
     extra_fields: dict = {}
-    selected_lorebook_entries: list[str] = []
 
     for tc in tool_calls:
         args = tc.get("arguments", {})
         if tc["name"] == "direct_scene":
             moods = args.get("moods", [])
-            al = args.get("selected_lorebook_entries")
-            selected_lorebook_entries = [str(x) for x in al] if isinstance(al, list) else []
-            extra_fields = {
-                k: v for k, v in args.items() if k not in ("moods", "selected_lorebook_entries") and v not in (None, "", [])
-            }
+            extra_fields = {k: v for k, v in args.items() if k != "moods" and v not in (None, "", [])}
         elif tc["name"] == "rewrite_user_prompt":
             refined = extract_rewritten_message(args)
 
-    return (moods, refined, extra_fields, selected_lorebook_entries)
+    return (moods, refined, extra_fields)
 
 
 # ── Agent pass ────────────────────────────────────────────────────────────────
@@ -129,7 +121,6 @@ async def director_pass(
     kv_tracker=None,
     reasoning_on: bool = True,
     lorebook_block: str = "",
-    lorebook_catalog: str = "",
     progressive_state: dict | None = None,
     direction_notes_block: str = "",
 ) -> AsyncIterator[dict]:
@@ -145,7 +136,6 @@ async def director_pass(
 
     refined_msg: str | None = None
     extra_fields: dict = {}
-    selected_lorebook_entries: list[str] = []
     all_calls: list[dict] = []
     last_raw = ""
 
@@ -190,8 +180,8 @@ async def director_pass(
             hyperparams = extract_hyperparams(settings, defaults={"temperature": 0.25, "max_tokens": 8192})
 
             # One forced call per fragment, each shown the values already chosen
-            # this turn so later fragments build on earlier ones. Moods and the
-            # lorebook selection are resolved first, in a call of their own.
+            # this turn so later fragments build on earlier ones. Moods are
+            # resolved first, in a call of their own.
             decided: list[tuple[str, Any]] = []
             for stage in [None, *interactive_fragments]:
                 if client.is_aborted:
@@ -206,7 +196,6 @@ async def director_pass(
                     target_fragment=stage,
                     decided_fields=decided,
                     progressive_prior=(progressive_state or {}).get(stage["id"]) if stage else None,
-                    lorebook_catalog=lorebook_catalog if stage is None else "",
                 )
                 step_tail = lorebook_prefix + notes_prefix + step_tail
                 content = build_multimodal_content(step_tail, attachments)
@@ -238,12 +227,10 @@ async def director_pass(
                     continue
                 all_calls.extend(parsed)
                 if stage is None:
-                    # Reuse the shared unpacker so moods and lorebook behave exactly
-                    # as in the combined call; any fragment values it returns are
-                    # dropped, each fragment being produced in its own call.
-                    active_moods, _, _, new_lorebook = apply_tool_calls(parsed, active_moods)
-                    if new_lorebook:
-                        selected_lorebook_entries = new_lorebook
+                    # Reuse the shared unpacker so moods behave exactly as in the
+                    # combined call; any fragment values it returns are dropped,
+                    # each fragment being produced in its own call.
+                    active_moods, _, _ = apply_tool_calls(parsed, active_moods)
                 else:
                     args = next((tc.get("arguments", {}) for tc in parsed if tc.get("name") == "direct_scene"), {})
                     val = args.get(stage["id"])
@@ -260,7 +247,6 @@ async def director_pass(
             interactive_fragments=interactive_fragments,
             progressive_state=progressive_state,
             tool_schema=tool_schema,
-            lorebook_catalog=lorebook_catalog,
         )
         tail = lorebook_prefix + (notes_prefix if name == "direct_scene" else "") + tool_tail
         content = build_multimodal_content(tail, attachments)
@@ -292,13 +278,11 @@ async def director_pass(
         logger.info("Agent tool=%s output:\n%s", name, last_raw)
         if parsed := parse_tool_calls(resp):
             all_calls.extend(parsed)
-            active_moods, new_refined, new_extra, new_lorebook = apply_tool_calls(parsed, active_moods)
+            active_moods, new_refined, new_extra = apply_tool_calls(parsed, active_moods)
             if new_refined:
                 refined_msg = new_refined
             if new_extra:
                 extra_fields.update(new_extra)
-            if new_lorebook:
-                selected_lorebook_entries = new_lorebook
         else:
             logger.info("Agent tool=%s: model skipped", name)
 
@@ -311,7 +295,6 @@ async def director_pass(
             latency=int((time.monotonic() - t0) * 1000),
             rewritten_msg=refined_msg,
             extra_fields=extra_fields,
-            selected_lorebook_entries=selected_lorebook_entries,
         ),
     }
 
@@ -367,7 +350,6 @@ async def director_stage(
             kv_tracker=kv_tracker,
             reasoning_on=cfg.director_reasoning_on,
             lorebook_block=lorebook.block,
-            lorebook_catalog=lorebook.catalog,
             progressive_state=prior_progressive,
             direction_notes_block=notes_block if direction_note_to_director(settings) else "",
         ):
@@ -385,7 +367,6 @@ async def director_stage(
                 state.latency = result.latency
                 state.rewritten_msg = result.rewritten_msg
                 state.extra_fields = result.extra_fields
-                state.selected_lorebook_entries = result.selected_lorebook_entries
                 state.progressive_fields = progressive.select(state.extra_fields, writer_fragments)
         state.effective_msg, did_rewrite = apply_rewrite(state.user_message, state.rewritten_msg)
         if did_rewrite:
@@ -398,6 +379,29 @@ async def director_stage(
     # either is equivalent.
     if cfg.agent_lane.client.is_aborted:
         return
+
+    # --- Agentic lorebook selection ---
+    # Its own forced select_lorebook call, independent of direct_scene, so agentic
+    # lorebook works whether or not the Director's scene-direction tool is enabled.
+    # Runs before director_done so its picks ride state.calls into the inspector/log.
+    if lorebook.agentic:
+        async for event in lorebook_select_step(
+            cfg.agent_lane.client,
+            cfg.agent_lane.base,
+            settings=settings,
+            catalog=lorebook.catalog,
+            kv_tracker=kv_tracker,
+            reasoning_on=cfg.director_reasoning_on,
+        ):
+            if event["type"] == "reasoning":
+                state.reasoning_director += event["delta"]
+                yield {"event": "reasoning", "data": {"pass": "director", "delta": event["delta"]}}
+            elif event["type"] == "done":
+                sel: LorebookSelectResult = event["result"]
+                state.selected_lorebook_entries = sel.selected
+                # Append to the turn's calls so the picks stay visible in the
+                # conversation log / inspector (they used to ride direct_scene's args).
+                state.calls = [*state.calls, *sel.calls]
 
     # Style injection
     direct_scene_enabled = cfg.agent_on and bool(cfg.enabled_tools.get("direct_scene", False))

@@ -31,16 +31,18 @@ AGENTIC_LOREBOOK_SCAN_DEPTH = 2
 
 def agentic_lorebook_active(
     settings: Mapping[str, Any],
-    enabled_tools: Mapping[str, bool],
     lorebook_entries: Sequence[Mapping[str, Any]],
     *,
     agent_on: bool,
 ) -> bool:
     """Return True when the director should pick lorebook entries this turn.
 
-    Requires the feature flag, ``direct_scene`` enabled, and at least one
-    non-constant entry. Constant entries are always injected and never managed
-    by the director, so a pool of only constants does not enable agentic mode.
+    Requires the feature flag, the global agent on, and at least one non-constant
+    entry. It is independent of ``direct_scene``: the picks run in their own
+    forced ``select_lorebook`` call, so agentic lorebook works whether or not the
+    Director's scene-direction tool is enabled. Constant entries are always
+    injected and never managed by the director, so a pool of only constants does
+    not enable agentic mode.
 
     *agent_on* is passed in (rather than recomputed) so ``agent_enabled`` stays
     the single source of truth — mirroring ``resolve_length_guard``.
@@ -48,8 +50,6 @@ def agentic_lorebook_active(
     if not bool(settings.get("agentic_lorebook_enabled", 0)):
         return False
     if not agent_on:
-        return False
-    if not bool(enabled_tools.get("direct_scene", False)):
         return False
     return any(not e.get("constant") for e in lorebook_entries)
 
