@@ -413,15 +413,18 @@ class _FakeClient:
     is_aborted = False
 
 
-def test_select_prompt_includes_catalog():
-    out = build_lorebook_select_prompt("THE CATALOG", reasoning_on=False)
+def test_select_prompt_includes_catalog_and_user_message():
+    # The pending user message must ride the prompt: during the director pass it is not
+    # yet in the shared history, so without it the model can't judge scene relevance.
+    out = build_lorebook_select_prompt("THE CATALOG", "WHAT THE USER ASKED", reasoning_on=False)
     assert "THE CATALOG" in out
+    assert "WHAT THE USER ASKED" in out
     assert "select_lorebook" in out
 
 
 async def test_select_step_extracts_names():
     base = _FakeSelectBase({"selected_lorebook_entries": ["Dragon", "Castle"]})
-    events = [e async for e in lorebook_select_step(_FakeClient(), base, settings={}, catalog="cat")]  # type: ignore[arg-type]
+    events = [e async for e in lorebook_select_step(_FakeClient(), base, settings={}, catalog="cat", user_message="hi")]  # type: ignore[arg-type]
     result = events[-1]["result"]
     assert result.selected == ["Dragon", "Castle"]
     assert result.calls and result.calls[0]["name"] == "select_lorebook"
@@ -430,5 +433,5 @@ async def test_select_step_extracts_names():
 async def test_select_step_empty_catalog_skips():
     # No catalog → no call, empty selection (deterministic lorebook still applies downstream).
     base = _FakeSelectBase({"selected_lorebook_entries": ["X"]})
-    events = [e async for e in lorebook_select_step(_FakeClient(), base, settings={}, catalog="")]  # type: ignore[arg-type]
+    events = [e async for e in lorebook_select_step(_FakeClient(), base, settings={}, catalog="", user_message="hi")]  # type: ignore[arg-type]
     assert events[-1]["result"].selected == []

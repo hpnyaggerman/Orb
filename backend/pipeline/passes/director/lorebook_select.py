@@ -52,6 +52,7 @@ async def lorebook_select_step(
     *,
     settings: Mapping[str, object],
     catalog: str,
+    user_message: str,
     kv_tracker=None,
     reasoning_on: bool = False,
 ) -> AsyncIterator[dict]:
@@ -67,7 +68,7 @@ async def lorebook_select_step(
         yield {"type": "done", "result": LorebookSelectResult()}
         return
 
-    request = build_lorebook_select_prompt(catalog, reasoning_on=reasoning_on)
+    request = build_lorebook_select_prompt(catalog, user_message, reasoning_on=reasoning_on)
     trailing = [{"role": "user", "content": request}]
     hyperparams = extract_hyperparams(settings, defaults={"temperature": 0.25, "max_tokens": 2048})
 

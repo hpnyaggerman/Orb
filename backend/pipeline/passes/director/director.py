@@ -390,6 +390,7 @@ async def director_stage(
             cfg.agent_lane.base,
             settings=settings,
             catalog=lorebook.catalog,
+            user_message=state.user_message,
             kv_tracker=kv_tracker,
             reasoning_on=cfg.director_reasoning_on,
         ):

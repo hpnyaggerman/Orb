@@ -308,19 +308,24 @@ def build_director_scene_step_prompt(
     return "\n\n".join(parts) + "]"
 
 
-def build_lorebook_select_prompt(catalog: str, *, reasoning_on: bool = False) -> str:
+def build_lorebook_select_prompt(catalog: str, user_message: str, *, reasoning_on: bool = False) -> str:
     """Build the request for the standalone agentic-lorebook ``select_lorebook`` step.
 
     The catalog of selectable entries rides this OOC trailing (not the system prompt
     or the tools blob), so the call reuses the shared history KV the other passes warm.
+    The pending *user_message* trails the catalog: during the director pass it is not
+    yet in the shared history, so without it the model can't judge relevance (it would
+    only see the prior turn). Placed last so the stable preamble+catalog prefix caches.
     """
     parts = [
         DIRECTOR_PREAMBLE + (REASONING_GUIDANCE if reasoning_on else ""),
         (
             "Call ONLY select_lorebook. From the catalog below, choose ONLY the entries relevant to the "
-            "current scene; leave the selection empty if none apply."
+            "current scene and the user's next message (quoted after the catalog); leave the selection "
+            "empty if none apply."
         ),
         catalog,
+        f'User\'s next message:\n"""{user_message}"""',
     ]
     # Close the [OOC: aside opened in DIRECTOR_PREAMBLE; the whole instruction is the aside.
     return "\n\n".join(parts) + "]"
