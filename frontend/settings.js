@@ -245,6 +245,7 @@ export function toggleToolsPanel() {
 export async function setAgentEnabled(on) {
   S.agentEnabled = on;
   $("tools-panel-btn").style.opacity = on ? "1" : "0.5";
+  renderToolsPanel();
   await persistSettings({ enable_agent: on });
 }
 
@@ -580,6 +581,7 @@ export function renderToolsPanel() {
 
   // Grouped by pipeline stage: Director (before the writer) vs Editor (post-writing cleanup).
   const divider = (label) => `<div class="tools-divider"><span>${label}</span></div>`;
+  $("tools-list").classList.toggle("workflows-off", !S.agentEnabled);
   $("tools-list").innerHTML =
     divider("Director") +
     cardById.direct_scene +

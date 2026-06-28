@@ -73,6 +73,12 @@ input[type="range"]::-moz-range-track {
   background: var(--accent-glow);
 }
 
+/* Director/Editor items grayed out and inert while Main Workflows is off. */
+#tools-list.workflows-off .tool-card {
+  opacity: 0.5;
+  pointer-events: none;
+}
+
 .tool-card-header {
   display: flex;
   align-items: center;
