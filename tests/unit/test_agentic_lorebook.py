@@ -130,6 +130,17 @@ class TestComputeAgenticLorebookBlock:
         block = compute_agentic_lorebook_block(entries, ["Low", "High"])
         assert block.index("High") < block.index("Low")
 
+    def test_render_order_stable_under_input_permutation(self):
+        # Equal priority: order must come from sort_order/id, not input order,
+        # so a fixed active set renders byte-identically across turns (KV cache).
+        a = {**_entry("Raiden"), "id": 1, "sort_order": 0}
+        b = {**_entry("Inazuma"), "id": 2, "sort_order": 0}
+        c = {**_entry("Yae"), "id": 3, "sort_order": 0}
+        first = render_lorebook_block([a, b, c])
+        second = render_lorebook_block([b, c, a])  # permuted input
+        assert first == second
+        assert first.index("Raiden") < first.index("Inazuma") < first.index("Yae")
+
     def test_substring_scan_activates_in_parallel(self):
         # Director overlooks "Natlan", but the keyword scan catches it.
         entries = [_entry("Natlan", keywords=["Natlan"])]

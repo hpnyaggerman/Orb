@@ -317,7 +317,7 @@ def build_lorebook_select_prompt(catalog: str, *, reasoning_on: bool = False) ->
     parts = [
         DIRECTOR_PREAMBLE + (REASONING_GUIDANCE if reasoning_on else ""),
         (
-            "Call ONLY select_lorebook. From the catalog below, choose the entries relevant to the "
+            "Call ONLY select_lorebook. From the catalog below, choose ONLY the entries relevant to the "
             "current scene; leave the selection empty if none apply."
         ),
         catalog,

@@ -165,13 +165,14 @@ def render_lorebook_block(
     """Render already-selected lorebook entries into the ``**Lorebook**`` block.
 
     The single rendering point for every activation path. Entries are sorted by
-    priority DESC; names and content are macro-resolved. Returns ``""`` when
-    *entries* is empty.
+    priority DESC, then sort_order ASC, id ASC (the canonical lorebook order, so
+    the block bytes are stable across turns regardless of input order — KV cache);
+    names and content are macro-resolved. Returns ``""`` when *entries* is empty.
     """
     if not entries:
         return ""
 
-    matched = sorted(entries, key=lambda e: e.get("priority", 100), reverse=True)
+    matched = sorted(entries, key=lambda e: (-e.get("priority", 100), e.get("sort_order", 0), e.get("id", 0)))
 
     resolve = macros.resolve_message if macros else (lambda t: t)
     parts = ["**Lorebook**"]
