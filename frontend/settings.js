@@ -184,7 +184,7 @@ export function renderSettings() {
 const TOOL_DEFS = [
   {
     id: "direct_scene",
-    name: "Director",
+    name: "Direction",
     desc: "Gives written direction and manages fragments based on scene context.",
   },
   {
@@ -472,7 +472,8 @@ export function renderToolsPanel() {
     <div class="tool-card-desc">Let Director manage Lorebook entries.${directorOn ? "" : " <em>Requires Director.</em>"}</div>
   </div>`;
 
-  const toolCards = TOOL_DEFS.map((t) => {
+  const cardById = {};
+  for (const t of TOOL_DEFS) {
     const on = !!S.enabledTools[t.id];
     const auditChecks = AUDIT_TYPE_DEFS.map(
       (a) => `<label class="lg-enforce-label" title="${a.title}">
@@ -480,17 +481,23 @@ export function renderToolsPanel() {
                ${a.label}
              </label>`,
     ).join("");
-    const extras =
-      t.id === "editor_apply_patch" && on
-        ? `<div class="lg-config">
+    let extras = "";
+    if (t.id === "editor_apply_patch" && on)
+      extras = `<div class="lg-config">
              <div class="audit-types">${auditChecks}</div>
              <label class="lg-enforce-label" title="Highlight edited sentences with green/red strikethrough when the editor pass rewrites the writer's output.">
                <input type="checkbox" ${S.showEditorDiff ? "checked" : ""} onchange="toggleShowEditorDiff(this.checked)">
                Show diff highlights
              </label>
-           </div>`
-        : "";
-    const card = `<div class="tool-card ${on ? "tool-on" : ""}">
+           </div>`;
+    else if (t.id === "direct_scene" && on)
+      extras = `<div class="lg-config">
+             <label class="lg-enforce-label" title="Director fills each interactive fragment in its own LLM call. More focused output; higher latency.">
+               <input type="checkbox" ${S.directorIndividualFragments ? "checked" : ""} onchange="toggleDirectorIndividualFragments(this.checked)">
+               Individual fragment processing
+             </label>
+           </div>`;
+    cardById[t.id] = `<div class="tool-card ${on ? "tool-on" : ""}">
       <div class="tool-card-header">
         <span class="tool-card-name">${t.name}</span>
         <label class="tog" onclick="event.stopPropagation()">
@@ -501,9 +508,7 @@ export function renderToolsPanel() {
       <div class="tool-card-desc">${t.desc}</div>
       ${extras}
     </div>`;
-    // The Agentic Lorebook card sits directly below the Prompt Rewriter card.
-    return t.id === "rewrite_user_prompt" ? card + agenticLorebookCard : card;
-  }).join("");
+  }
 
   const lgOn = S.lengthGuardEnabled;
   const lgEnforce = S.lengthGuardEnforce;
@@ -551,18 +556,6 @@ export function renderToolsPanel() {
     <div class="tool-card-desc">After each reply, surfaces a note to you (e.g. what you could do next). Runs only when at least one interactive fragment has its Field Type set to "feedback".</div>
   </div>`;
 
-  const ifpOn = S.directorIndividualFragments;
-  const individualFragmentsCard = `<div class="tool-card ${ifpOn ? "tool-on" : ""}">
-    <div class="tool-card-header">
-      <span class="tool-card-name">Individual Fragment Processing</span>
-      <label class="tog" onclick="event.stopPropagation()">
-        <input type="checkbox" ${ifpOn ? "checked" : ""} onchange="toggleDirectorIndividualFragments(this.checked)">
-        <span class="tog-slider"></span>
-      </label>
-    </div>
-    <div class="tool-card-desc">Director fills each interactive fragment in its own LLM call. More focused output; higher latency.</div>
-  </div>`;
-
   const dnRecord = S.directionNotesRecord === true;
   const dnInject = S.directionNotesInject || "off";
   const directionNotesCard = `<div class="tool-card ${dnRecord || dnInject !== "off" ? "tool-on" : ""}">
@@ -583,10 +576,21 @@ export function renderToolsPanel() {
         <option value="both" ${dnInject === "both" ? "selected" : ""}>Director and writer</option>
       </select>
     </div>
-    <div class="tool-card-desc">Recording writes a lasting note per enabled "direction_note" fragment, kept on this branch; each fragment sets when it records (before the writer, or end of turn). Injection feeds stored notes back to the director, the writer, or both, and is independent of recording.</div>
+    <div class="tool-card-desc">Lets the AI keep lasting notes as the story unfolds. <b>Recording</b> saves them; <b>Injection</b> feeds saved notes back to the director, writer, or both.</div>
   </div>`;
 
-  $("tools-list").innerHTML = toolCards + lengthGuardCard + feedbackCard + individualFragmentsCard + directionNotesCard;
+  // Grouped by pipeline stage: Director (before the writer) vs Editor (post-writing cleanup).
+  const divider = (label) => `<div class="tools-divider"><span>${label}</span></div>`;
+  $("tools-list").innerHTML =
+    divider("Director") +
+    cardById.direct_scene +
+    cardById.rewrite_user_prompt +
+    agenticLorebookCard +
+    directionNotesCard +
+    divider("Editor") +
+    cardById.editor_apply_patch +
+    lengthGuardCard +
+    feedbackCard;
 
   const secEl = $("tools-list-secondary");
   if (secEl) {
