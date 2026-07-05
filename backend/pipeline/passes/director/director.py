@@ -58,6 +58,25 @@ def build_direct_scene_override(
     return build_direct_scene_tool(writer_fragments)
 
 
+def _step_schema(tool_schema: dict, keep: str) -> dict | None:
+    """Single-field variant of the ``direct_scene`` parameters for one step call.
+
+    Passed as the per-call ``json_schema`` decoding constraint so the model
+    physically cannot fill any field but the step's target — text mode applies
+    it to the grammar (prompt bytes and KV cache untouched); the chat transport
+    drops it and relies on the post-parse filter in the loop below.
+    """
+    params = tool_schema["function"]["parameters"]
+    prop = params.get("properties", {}).get(keep)
+    if prop is None:
+        return None
+    return {
+        "type": "object",
+        "properties": {keep: prop},
+        "required": [keep] if keep in (params.get("required") or []) else [],
+    }
+
+
 @dataclass
 class DirectorResult:
     """Typed result of the director pass, yielded as the ``done`` event payload.
@@ -206,25 +225,43 @@ async def director_pass(
                     json.dumps([*base.prefix, *trailing], indent=2, ensure_ascii=False),
                 )
                 resp = {}
-                async for event in base.complete(
-                    client,
-                    label="director:direct_scene",
-                    trailing=trailing,
-                    tool_choice=TOOLS["direct_scene"]["choice"],
-                    kv_tracker=kv_tracker,
-                    **hyperparams,
-                    **reasoning_params,
-                ):
-                    if event["type"] == "reasoning":
-                        yield {"type": "reasoning", "delta": event["delta"]}
-                    elif event["type"] == "done":
-                        resp = event["message"]
+                try:
+                    async for event in base.complete(
+                        client,
+                        label="director:direct_scene",
+                        trailing=trailing,
+                        tool_choice=TOOLS["direct_scene"]["choice"],
+                        kv_tracker=kv_tracker,
+                        json_schema=_step_schema(tool_schema, target) if tool_schema else None,
+                        **hyperparams,
+                        **reasoning_params,
+                    ):
+                        if event["type"] == "reasoning":
+                            yield {"type": "reasoning", "delta": event["delta"]}
+                        elif event["type"] == "done":
+                            resp = event["message"]
+                except Exception:
+                    # A failed call skips this fragment but must not propagate: the
+                    # remaining fragments and the writer still run, like the
+                    # lorebook-select and direction-note steps. Aborting the turn
+                    # here would also skip persisting the finished reply.
+                    logger.exception("Agent tool=direct_scene target=%s: call failed; skipping", target)
+                    continue
                 last_raw = json.dumps(resp, default=str)
                 logger.info("Agent tool=direct_scene target=%s output:\n%s", target, last_raw)
                 parsed = parse_tool_calls(resp)
                 if not parsed:
                     logger.info("Agent tool=direct_scene target=%s: model skipped", target)
                     continue
+                # The model often fills fields besides the step's target despite the
+                # "Fill ONLY" instruction (the byte-stable schema still offers them
+                # all). Only the target is kept below, so strip the extras from the
+                # recorded call too — otherwise the inspector/tool-call log shows
+                # every step re-deciding fragments already settled earlier.
+                keep = "moods" if stage is None else stage["id"]
+                for tc in parsed:
+                    if tc.get("name") == "direct_scene":
+                        tc["arguments"] = {k: v for k, v in tc.get("arguments", {}).items() if k == keep}
                 all_calls.extend(parsed)
                 if stage is None:
                     # Reuse the shared unpacker so moods behave exactly as in the
@@ -257,23 +294,29 @@ async def director_pass(
             json.dumps([*base.prefix, *trailing], indent=2, ensure_ascii=False),
         )
         resp: dict = {}
-        # Errors are not caught here: a failed tool call propagates out of the
-        # pass and aborts the turn, like the writer/editor passes.
+        # A failed call skips this tool but must not propagate: the remaining
+        # tools and the writer still run, like the lorebook-select and
+        # direction-note steps. Aborting the turn here would also skip
+        # persisting the finished reply.
         reasoning_params = reasoning_cfg(reasoning_on and not suppresses_reasoning(name))
         hyperparams = extract_hyperparams(settings, defaults={"temperature": 0.25, "max_tokens": 8192})
-        async for event in base.complete(
-            client,
-            label=f"director:{name}",
-            trailing=trailing,
-            tool_choice=TOOLS[name]["choice"],
-            kv_tracker=kv_tracker,
-            **hyperparams,
-            **reasoning_params,
-        ):
-            if event["type"] == "reasoning":
-                yield {"type": "reasoning", "delta": event["delta"]}
-            elif event["type"] == "done":
-                resp = event["message"]
+        try:
+            async for event in base.complete(
+                client,
+                label=f"director:{name}",
+                trailing=trailing,
+                tool_choice=TOOLS[name]["choice"],
+                kv_tracker=kv_tracker,
+                **hyperparams,
+                **reasoning_params,
+            ):
+                if event["type"] == "reasoning":
+                    yield {"type": "reasoning", "delta": event["delta"]}
+                elif event["type"] == "done":
+                    resp = event["message"]
+        except Exception:
+            logger.exception("Agent tool=%s: call failed; skipping", name)
+            continue
         last_raw = json.dumps(resp, default=str)
         logger.info("Agent tool=%s output:\n%s", name, last_raw)
         if parsed := parse_tool_calls(resp):
