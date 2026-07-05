@@ -291,10 +291,17 @@ def _normalize_quotes(text: str) -> str:
     return text.translate(_QUOTE_MAP)
 
 
-def _strip_outer_asterisks(text: str) -> str:
-    """Strip leading/trailing markdown emphasis asterisks (and the whitespace
-    just inside them).  Internal asterisks are left untouched."""
-    return text.strip().strip("*").strip()
+# Boundary markers the audit report's sentence splitter eats off a sentence end
+# (closing quotes, emphasis * / _). A search copied from the report is therefore
+# often missing a trailing marker the draft still has, or carrying a now-dangling
+# leading quote. Straight ' is excluded so contractions/possessives survive.
+_OUTER_MARKERS = '*_"“”‘’'
+
+
+def _strip_outer_markers(text: str) -> str:
+    """Strip leading/trailing emphasis (*, _) and quote markers, plus the
+    whitespace just inside them.  Internal markers are left untouched."""
+    return text.strip().strip(_OUTER_MARKERS).strip()
 
 
 def apply_patches(draft: str, patches: list[dict]) -> tuple[str, list[str]]:
@@ -317,6 +324,23 @@ def apply_patches(draft: str, patches: list[dict]) -> tuple[str, list[str]]:
             err = f"Error: Patch {i} is a no-op (search === replace). You must provide different replacement text."
             errors.append(err)
             continue
+
+        # The audit report's sentence splitter strips trailing boundary markers
+        # (closing quote, emphasis *) and can leave a dangling opening quote, so
+        # a search copied from the report often has one marker too few or too
+        # many versus the draft. Match on the marker-stripped core and replace
+        # the core, leaving the draft's own surrounding markers in place — this
+        # keeps quotes/emphasis balanced whether the draft has an extra trailing
+        # marker (…octave.*) or the search a spurious leading quote ("Do not…).
+        # Falls through when the core is ambiguous (markers were load-bearing for
+        # uniqueness) so the exact strategies below can target the marked span.
+        core_search = _strip_outer_markers(search)
+        core_replace = _strip_outer_markers(replace)
+        if core_search and core_search != core_replace and (core_search != search or core_replace != replace):
+            if draft.count(core_search) == 1:
+                draft = draft.replace(core_search, core_replace, 1)
+                logger.debug("Patch %d OK (marker-core): %r → %r", i, core_search[:60], core_replace[:60])
+                continue
 
         count = draft.count(search)
 
@@ -342,28 +366,6 @@ def apply_patches(draft: str, patches: list[dict]) -> tuple[str, list[str]]:
                     f"Error: Multiple matches ({norm_count}) for {search[:80]!r} (after quote normalization). Use more context."
                 )
                 continue
-
-            # Fallback: the model often wraps a single sentence in its own
-            # `*...*` when the draft only has block-level asterisks around the
-            # whole narration span, so the outer `*` don't line up. Retry with
-            # leading/trailing asterisks stripped from both sides.
-            trimmed_search = _strip_outer_asterisks(search)
-            if trimmed_search and trimmed_search != search:
-                trimmed_count = draft.count(trimmed_search)
-                if trimmed_count == 1:
-                    draft = draft.replace(trimmed_search, _strip_outer_asterisks(replace), 1)
-                    logger.debug(
-                        "Patch %d OK (asterisk-trimmed): %r → %r",
-                        i,
-                        trimmed_search[:60],
-                        replace[:60],
-                    )
-                    continue
-                elif trimmed_count > 1:
-                    errors.append(
-                        f"Error: Multiple matches ({trimmed_count}) for {search[:80]!r} (after asterisk trimming). Use more context."
-                    )
-                    continue
 
             errors.append(f"Error: {search[:80]!r} not found in draft.")
 
@@ -1031,11 +1033,11 @@ def _prefill_targets(report: AuditReport, draft: str) -> list[tuple[str, str]]:
     targets: list[tuple[str, str]] = []
     seen: set[str] = set()
     for span, why in raw:
-        # Flagged sentences keep the narration's outer `*` (format_report strips
-        # them only for display). Anchoring the prefilled search on them makes the
-        # model's asterisk-free replace eat the paragraph's opening/closing marker,
-        # so match on the plain text and leave the `*` wrapping untouched.
-        span = _strip_outer_asterisks(span)
+        # Flagged sentences keep the narration's outer markers (`*`, quotes) that
+        # format_report strips only for display. Anchoring the prefilled search on
+        # them makes the model's marker-free replace eat the paragraph's opening/
+        # closing marker, so match on the plain text and leave the wrapping intact.
+        span = _strip_outer_markers(span)
         if not span or span in seen or draft.count(span) != 1:
             continue
         seen.add(span)

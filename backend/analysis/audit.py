@@ -250,11 +250,19 @@ def run_audit(
 # Format into text report
 
 
-def _strip_asterisks(s: str) -> str:
-    """Strip leading/trailing asterisks (and surrounding whitespace) from a
-    snippet. Markdown emphasis markers like ``**`` confuse the rewrite model,
-    which only needs the underlying text."""
-    return s.strip().strip("*").strip()
+# Outer markers the sentence splitter can leave dangling on a reported snippet:
+# emphasis (* _) and quotes. The splitter eats a closing marker off a sentence
+# end but keeps the opening one, so a quoted line surfaces as `"…done.` — an
+# unbalanced snippet the rewrite model then copies verbatim into its search
+# string. Stripping outer markers gives the model the underlying text to match.
+# Straight ' is excluded so contractions/possessives survive.
+_OUTER_MARKERS = '*_"“”‘’'
+
+
+def _strip_markers(s: str) -> str:
+    """Strip leading/trailing emphasis (*, _) and quote markers, plus surrounding
+    whitespace, from a snippet. Internal markers are left untouched."""
+    return s.strip().strip(_OUTER_MARKERS).strip()
 
 
 def format_report(report: AuditReport) -> str:
@@ -269,7 +277,7 @@ def format_report(report: AuditReport) -> str:
         lines = ["Banned Phrases"]
         for fs in cr.flagged_sentences:
             for hit in fs.cliches:
-                lines.append(f'   - "{_strip_asterisks(hit.phrase)}" in sentence: {_strip_asterisks(fs.sentence)}')
+                lines.append(f'   - "{_strip_markers(hit.phrase)}" in sentence: {_strip_markers(fs.sentence)}')
         sections.append("\n".join(lines))
 
     # 2. Repetitive openers
@@ -277,9 +285,9 @@ def format_report(report: AuditReport) -> str:
     if mr.flagged_openers:
         lines = ["Repetitive Openers"]
         for fo in mr.flagged_openers:
-            lines.append(f'   - "{_strip_asterisks(fo.opener)}" ({fo.max_run} consecutive sentences):')
+            lines.append(f'   - "{_strip_markers(fo.opener)}" ({fo.max_run} consecutive sentences):')
             for s in fo.sentences[:4]:
-                lines.append(f"     • {_strip_asterisks(s)}")
+                lines.append(f"     • {_strip_markers(s)}")
         sections.append("\n".join(lines))
 
     # 3. Repetitive templates
@@ -287,16 +295,16 @@ def format_report(report: AuditReport) -> str:
     if tr.flagged_templates:
         lines = ["Repetitive Templates"]
         for ft in tr.flagged_templates:
-            lines.append(f'   - "{_strip_asterisks(ft.template)}" ({ft.count} sentences):')
+            lines.append(f'   - "{_strip_markers(ft.template)}" ({ft.count} sentences):')
             for s in ft.sentences[:4]:
-                lines.append(f"     • {_strip_asterisks(s)}")
+                lines.append(f"     • {_strip_markers(s)}")
         sections.append("\n".join(lines))
 
     # 4. Not-but patterns
     if report.not_but_result:
         lines = ["Contrastive Negation Patterns (Not X, but Y)"]
         for nb in report.not_but_result:
-            sentence = _strip_asterisks(nb.get("sentence", ""))
+            sentence = _strip_markers(nb.get("sentence", ""))
             is_parallel = nb.get("is_parallel", False)
             parallel_note = " (parallel structure)" if is_parallel else ""
             lines.append(f'   - Sentence: "{sentence}"{parallel_note}')
@@ -314,9 +322,9 @@ def format_report(report: AuditReport) -> str:
         for sentence, fps in groups.items():
             for j, fp in enumerate(fps):
                 suffix = ":" if sentence and j == len(fps) - 1 else ""
-                lines.append(f'   - "{_strip_asterisks(fp.phrase)}" (in {fp.count} previous messages){suffix}')
+                lines.append(f'   - "{_strip_markers(fp.phrase)}" (in {fp.count} previous messages){suffix}')
             if sentence:
-                lines.append(f"     • {_strip_asterisks(sentence)}")
+                lines.append(f"     • {_strip_markers(sentence)}")
         sections.append("\n".join(lines))
 
     # 6. Structural repetition
@@ -325,7 +333,7 @@ def format_report(report: AuditReport) -> str:
         lines = ["Structural Repetition"]
         lines.append(f"   - All {len(sr.messages)} messages share a similar block structure")
         if sr.shared_skeleton:
-            skeleton_str = " → ".join(_strip_asterisks(part) for part in sr.shared_skeleton)
+            skeleton_str = " → ".join(_strip_markers(part) for part in sr.shared_skeleton)
             lines.append(f'   - Shared skeleton: "{skeleton_str}"')
         sections.append("\n".join(lines))
 
@@ -333,9 +341,7 @@ def format_report(report: AuditReport) -> str:
     if report.echo_result and report.echo_result.flagged_echoes:
         lines = ["Interrogative Dialogue (parroting the user's dialogue back as a question)"]
         for fe in report.echo_result.flagged_echoes:
-            lines.append(
-                f'   - "{_strip_asterisks(fe.echo)}" repeats the user\'s words: "{_strip_asterisks(fe.matched_phrase)}"'
-            )
+            lines.append(f'   - "{_strip_markers(fe.echo)}" repeats the user\'s words: "{_strip_markers(fe.matched_phrase)}"')
         sections.append("\n".join(lines))
 
     sections.append("\n*** END OF REPORT ***")
