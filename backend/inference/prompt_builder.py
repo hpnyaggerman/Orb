@@ -241,9 +241,8 @@ def build_director_tool_prompt(
         _tool_call_instruction(tool_name, schema),
     ]
     if tool_name == "direct_scene":
-        moods = ", ".join(active_moods) or "none"
-        frags = "\n".join(f"* [{f['id']}] - use in case: {f['description']}" for f in mood_fragments)
-        parts.append(f"Previously active moods: {moods}\n\nAvailable writing moods:\n{frags}")
+        # Scene context (progressive/interactive) before the mood options, mirroring
+        # the per-fragment builder: settle the scene, then pick moods that fit it.
         progressive_lines = [
             f"* [{df['id']}] ({df['description']}): {(progressive_state or {}).get(df['id'])}"
             for df in (interactive_fragments or [])
@@ -251,6 +250,7 @@ def build_director_tool_prompt(
         ]
         if progressive_lines:
             parts.append("Previous progressive fields - dynamically update these:\n" + "\n".join(progressive_lines))
+        parts.append(_moods_options_block(active_moods, mood_fragments))
         parts.append(f'User\'s next message (for context, take this into account when directing):\n"""{user_message}"""')
     elif tool_name == "rewrite_user_prompt":
         parts.append(build_rewrite_prompt(user_message))
@@ -260,6 +260,13 @@ def build_director_tool_prompt(
 
 def _render_decided(value: Any) -> str:
     return ", ".join(str(x) for x in value) if isinstance(value, list) else str(value)
+
+
+def _moods_options_block(active_moods: Sequence[str], mood_fragments: Sequence[Mapping[str, Any]]) -> str:
+    """The "previously active + available moods" block shared by both director prompts."""
+    moods = ", ".join(active_moods) or "none"
+    frags = "\n".join(f"* [{f['id']}] - use in case: {f['description']}" for f in mood_fragments)
+    return f"Previously active moods: {moods}\n\nAvailable writing moods:\n{frags}"
 
 
 def build_director_scene_step_prompt(
@@ -285,9 +292,13 @@ def build_director_scene_step_prompt(
 
     if target_fragment is None:
         parts.append(f"Call ONLY direct_scene - {desc}\nFill ONLY: moods.")
-        moods = ", ".join(active_moods) or "none"
-        frags = "\n".join(f"* [{f['id']}] - use in case: {f['description']}" for f in mood_fragments)
-        parts.append(f"Previously active moods: {moods}\n\nAvailable writing moods:\n{frags}")
+        # Moods run last this turn, so show the scene already directed and let the
+        # model pick moods that fit it (distinct heading from the interactive
+        # branch's "build on / do not contradict" — moods only need to match).
+        scene = [f"- {label}: {_render_decided(value)}" for label, value in decided_fields if value]
+        if scene:
+            parts.append("Scene direction decided this turn (pick moods that fit it):\n" + "\n".join(scene))
+        parts.append(_moods_options_block(active_moods, mood_fragments))
     else:
         fid = target_fragment["id"]
         hint = {"array": "list of strings", "progressive": "single value, evolves across turns"}.get(
@@ -522,6 +533,16 @@ def build_style_injection(
     """
     parts = ["**Scene Direction**"]
 
+    # Moods first, interactive fragments last: the writer reads this block, and
+    # the concrete scene steer (interactive) belongs closest to the end for
+    # recency/attention. (The director's *processing* order is the opposite —
+    # it decides interactive first, then moods; see build_director_scene_step_prompt.)
+    for f in active:
+        parts.append(f["prompt_text"])
+    for f in deactivated or []:
+        if neg := f.get("negative_prompt", "").strip():
+            parts.append(neg)
+
     for df in sorted(interactive_fragments or [], key=lambda x: x.get("sort_order", 0)):
         val = (extra_fields or {}).get(df["id"])
         if not val:
@@ -535,11 +556,5 @@ def build_style_injection(
             parts.append(f"{label} ({df['description']}): {transition}")
         else:
             parts.append(f"{label}: {val}")
-
-    for f in active:
-        parts.append(f["prompt_text"])
-    for f in deactivated or []:
-        if neg := f.get("negative_prompt", "").strip():
-            parts.append(neg)
 
     return "\n\n".join(parts)

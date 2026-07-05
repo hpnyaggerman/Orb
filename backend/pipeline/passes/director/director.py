@@ -200,9 +200,10 @@ async def director_pass(
 
             # One forced call per fragment, each shown the values already chosen
             # this turn so later fragments build on earlier ones. Moods are
-            # resolved first, in a call of their own.
+            # resolved last, in a call of their own, so they are picked to fit the
+            # scene already directed (the moods step is shown the decided fields).
             decided: list[tuple[str, Any]] = []
-            for stage in [None, *interactive_fragments]:
+            for stage in [*interactive_fragments, None]:
                 if client.is_aborted:
                     break
                 target = stage["id"] if stage else "moods"

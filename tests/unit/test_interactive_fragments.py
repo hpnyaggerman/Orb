@@ -430,6 +430,13 @@ class TestBuildStyleInjection:
         result = build_style_injection([], interactive_fragments=frags, extra_fields=extra)
         assert result.index("A Label") < result.index("B Label")
 
+    def test_moods_rendered_before_interactive(self):
+        # Moods first, interactive last (recency → writer attention).
+        active = [{"id": "tense", "prompt_text": "Write with tension.", "negative_prompt": ""}]
+        frags = [{"id": "next_event", "field_type": "string", "injection_label": "Next event", "sort_order": 0}]
+        result = build_style_injection(active, interactive_fragments=frags, extra_fields={"next_event": "She escapes."})
+        assert result.index("Write with tension.") < result.index("Next event: She escapes.")
+
 
 # ── compute_style_injection_block ────────────────────────────────────────────
 
