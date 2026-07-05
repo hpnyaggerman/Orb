@@ -115,6 +115,17 @@ class _CleanupStreamingResponse(StreamingResponse):
                 await _safe_aclose(cast(AsyncGenerator[Any, None], self.body_iterator))
 
 
+# Seconds of stream silence after which we emit an SSE comment to keep the
+# connection warm. A turn has long token-free stretches — the reasoning-off
+# director pass, and (worst) the text-mode editor's prefill loop, which fires
+# many forced /completion calls back-to-back while emitting nothing to the
+# browser. An idle-timeout proxy in front of Orb (nginx proxy_read_timeout
+# defaults to 60s) tears down such a silent SSE, which strands the still-running
+# backend and drops the frontend to a stale draft. 15s stays comfortably under
+# common proxy timeouts.
+_SSE_KEEPALIVE_SECS = 15
+
+
 async def _sse_stream(
     gen,
     request: Request,
@@ -131,6 +142,11 @@ async def _sse_stream(
 
     A background watcher also polls request.is_disconnected() as a fallback
     for cases like the user closing the browser tab without clicking Stop.
+
+    During long token-free stretches (director/editor thinking silently) a
+    ``: keepalive`` SSE comment is emitted every ``_SSE_KEEPALIVE_SECS`` so an
+    idle-timeout proxy can't drop the connection mid-turn. The comment carries no
+    event/data line, so the frontend parser ignores it.
     """
 
     async def _watch_disconnect() -> None:
@@ -166,7 +182,24 @@ async def _sse_stream(
             if abort_token is not None:
                 _active_aborts[cid] = abort_token
         watcher = asyncio.create_task(_watch_disconnect())
-        async for event in gen:
+        gen_iter = gen.__aiter__()
+        while True:
+            nxt = asyncio.ensure_future(gen_iter.__anext__())
+            try:
+                # Race the next event against the keepalive interval: a silent
+                # gap emits a comment frame and keeps waiting on the same task.
+                while True:
+                    done_set, _ = await asyncio.wait({nxt}, timeout=_SSE_KEEPALIVE_SECS)
+                    if nxt in done_set:
+                        break
+                    yield ": keepalive\n\n"
+            except BaseException:
+                nxt.cancel()
+                raise
+            try:
+                event = nxt.result()
+            except StopAsyncIteration:
+                break
             evt_type = event["event"]
             evt_data = event.get("data", "")
             if isinstance(evt_data, dict):
