@@ -131,6 +131,7 @@ class SettingsRow(_SettingsBase, total=False):
     inspector_open_states: dict
     workflow_config: str  # left raw; decoded per-slot by get_workflow_config()
     workflow_enabled: dict[str, bool]  # decoded by get_settings(); per-workflow on/off, missing key => on
+    local_ml_enabled: dict[str, bool]  # decoded by get_settings(); per-local-ML-feature on/off, missing key => on
     # Per-endpoint transport mode, surfaced by the get_settings() overlay from
     # the active/agent endpoint row (default 'chat'). agent_completion_mode
     # falls back to completion_mode when the agent shares the writer endpoint.
@@ -470,3 +471,13 @@ class CharacterCardRow(TypedDict, total=False):
     workflow_state: str | None
     persona_lock_id: int | None
     has_avatar: bool
+    has_expressions: bool
+
+
+class CharacterExpressionRow(TypedDict):
+    """A row from ``character_expressions`` — one expression image per (card, label)."""
+
+    character_card_id: str
+    label: str
+    data_b64: str
+    mime: str

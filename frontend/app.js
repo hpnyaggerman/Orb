@@ -57,11 +57,13 @@ import {
   charTagInput,
   charTagKeydown,
   charTagRemoveChip,
+  clearExpressions,
   createCharacter,
   deleteCharacter,
   deleteInteractiveFragment,
   deleteMoodFragment,
   exportCharacter,
+  handleExpressionsZip,
   handleImportFile,
   importInternetChar,
   loadCharacters,
@@ -148,11 +150,13 @@ import {
   activatePersona,
   applyTheme,
   deletePersona,
+  downloadLocalMlModel,
   editPersona,
   initTheme,
   initThemeList,
   loadSettings,
   onHybridInput,
+  toggleLocalMlEnabled,
   saveLengthGuardConfig,
   savePersona,
   saveSetting,
@@ -188,6 +192,7 @@ import {
   saveUserDirectionNote,
   toggleDirectionNotesPanel,
 } from "./direction_notes_panel.js";
+import { scoreSlop } from "./slop_score.js";
 import { S } from "./state.js";
 import { initTabLock, setLockStateChangeCallback } from "./tabLock.js";
 import { $ } from "./utils.js";
@@ -260,6 +265,9 @@ Object.assign(window, {
   togglePreventPromptOverrides,
   toggleWorkflowsGlobal,
   toggleWorkflowEnabled,
+  downloadLocalMlModel,
+  toggleLocalMlEnabled,
+  scoreSlop,
   // phrase bank
   showPhraseBankModal,
   showAddPhraseGroupModal,
@@ -299,6 +307,8 @@ Object.assign(window, {
   addAltGreeting,
   triggerAvatarCrop,
   exportCharacter,
+  handleExpressionsZip,
+  clearExpressions,
   showCharacterBrowserModal,
   setCharBrowserView,
   onCharBrowserSearch,

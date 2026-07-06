@@ -265,6 +265,34 @@
   50% { background: var(--accent-glow); }
 }
 
+/* Slop scorer: tint flagged sentences (alpha scaled by confidence via --slop-a),
+   a small superscript % after each, and a summary chip under the toolbar. */
+.message .msg-body .seg.slop-flag {
+  background: color-mix(in srgb, var(--red, #c45d5d) var(--slop-a, 30%), transparent);
+  border-radius: 2px;
+}
+.message .msg-body .slop-badge {
+  font-size: .7em;
+  opacity: .75;
+  margin-left: 1px;
+  color: var(--red, #c45d5d);
+  vertical-align: super;
+}
+.msg-toolbar .msg-btn-slop {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .5px;
+}
+.slop-chip {
+  display: inline-block;
+  margin-top: 4px;
+  padding: 2px 8px;
+  font-size: .75rem;
+  color: var(--text-muted);
+  background: var(--bg-hover);
+  border-radius: 10px;
+}
+
 .wf-seg-caret {
   position: fixed;
   display: none;
@@ -730,8 +758,16 @@
   margin: 2px 0;
 }
 
+#chat-input-field {
+  position: relative;
+  flex: 1;
+  display: flex;
+}
+
 #chat-input {
   flex: 1;
+  width: 100%;
+  box-sizing: border-box;
   min-height: 42px;
   max-height: 150px;
   padding: 10px 14px;
@@ -745,6 +781,27 @@
 }
 
 #chat-input:focus { border-color: var(--accent-dim); }
+
+/* Ghost-text overlay: a mirror sized exactly like the textarea. The draft is
+   re-rendered transparent so the gray suggestion lands right after the caret.
+   Only shown when the caret is at the end of the draft (see chat_composer.js). */
+#chat-ghost {
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  padding: 10px 14px;
+  border: 1px solid transparent;
+  font-family: var(--font-prose);
+  font-size: calc(var(--font-prose-size) - 1px);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+  overflow: hidden;
+  pointer-events: none;
+  color: transparent;
+}
+
+#chat-ghost .ghost-suggestion { color: var(--text-secondary); opacity: .55; }
 
 #send-btn,
 #stop-btn {
