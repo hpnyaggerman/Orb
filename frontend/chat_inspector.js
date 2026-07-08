@@ -552,10 +552,17 @@ function _renderInspectorMain() {
 // Expression polling: while the avatar popup is open and the character has an
 // uploaded expression pack, watch the latest assistant message on a 1s tick and
 // swap the popup image to the matching expression. The tick is only a scheduler:
-// the classified unit is the last few *sentences*, so the network call fires
-// when a sentence completes, not every second.
+// the classified unit is the last few *sentences*, but because generation speed
+// is unknowable (3 sentences in 1s or 60s), cadence is normalized in time:
+// never more than one call per _EXPR_MIN_INTERVAL_MS, and if no sentence has
+// completed for _EXPR_STALE_MS while text keeps streaming in, the partial
+// sentence is classified rather than leaving the expression frozen.
 const _EXPR_TAIL_SENTENCES = 3;
+const _EXPR_MIN_INTERVAL_MS = 2000;
+const _EXPR_STALE_MS = 5000;
+const _EXPR_MIN_GROWTH_CHARS = 40; // don't classify a fragment like "She"
 let _exprTimer = null;
+let _exprLastCallAt = 0;
 
 async function _expressionTick(charId) {
   const img = document.getElementById("avatar-popup-image");
@@ -564,13 +571,27 @@ async function _expressionTick(charId) {
     ? S.streamingContent
     : [...S.messages].reverse().find((m) => m.role === "assistant" && m.id)?.content;
   if (!full) return;
+  const now = Date.now();
+  if (now - _exprLastCallAt < _EXPR_MIN_INTERVAL_MS) return; // fast models: rate floor
   // Classify only the sentence tail: recency is enforced here by input selection
   // (the model never sees older moods), not by trusting the classifier to weight
   // late text. While streaming, the trailing fragment is dropped so `text` only
   // changes — and the API only fires — when a sentence completes.
-  const text = sentenceTail(full, _EXPR_TAIL_SENTENCES, S.isStreaming);
+  let text = sentenceTail(full, _EXPR_TAIL_SENTENCES, S.isStreaming);
+  if (
+    (!text || img._exprText === text) &&
+    S.isStreaming &&
+    now - _exprLastCallAt >= _EXPR_STALE_MS &&
+    full.length - (img._exprFullLen || 0) >= _EXPR_MIN_GROWTH_CHARS
+  ) {
+    // Slow models: a sentence has been streaming for a while without completing —
+    // classify it anyway, fragment included.
+    text = sentenceTail(full, _EXPR_TAIL_SENTENCES, false);
+  }
   if (!text || img._exprText === text) return;
   img._exprText = text;
+  img._exprFullLen = full.length;
+  _exprLastCallAt = now;
   let label;
   try {
     ({ label } = await api.post("/local-ml/classify-emotion", { text }));
@@ -607,7 +628,9 @@ export async function showAvatarPopup() {
     img.src = `/api/characters/${charId}/avatar?t=${Date.now()}`;
     img._exprSrc = null;
     img._exprText = null;
+    img._exprFullLen = 0;
   }
+  _exprLastCallAt = 0; // fresh popup: first tick classifies immediately
   popup.classList.remove("hidden");
 
   let labels = [];
