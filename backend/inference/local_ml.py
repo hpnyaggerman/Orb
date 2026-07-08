@@ -282,8 +282,10 @@ async def ascore(feature: str, sentences: Sequence[str]) -> list[float]:
 # --- Emotion classification (character expressions) ----------------------------
 # Same RANK-pooling embed() path as the scorer, but a 28-class go-emotions head:
 # argmax over the first 28 logits → GO_EMOTIONS[i]. No softmax — we only need the
-# single top label. Classify-local char cap (the scorer's per-sentence 2000 would
-# ride n_ctx=512 on a full message tail).
+# single top label. The tail slice below is purely an n_ctx=512 guard, NOT a
+# recency heuristic: the model (DistilBERT/go-emotions, trained on short comments)
+# can't be trusted to weight late text, so the caller enforces recency by sending
+# only the last few sentences (frontend sentenceTail); we just cap runaway input.
 _CLASSIFY_MAX_CHARS = 1500
 
 
@@ -292,7 +294,7 @@ def _classify_blocking(feature: str, text: str) -> str:
     llama = _llamas.get(feature)
     if llama is None:
         raise RuntimeError(_load_errors.get(feature) or "model unavailable")
-    text = (text or "").strip()[-_CLASSIFY_MAX_CHARS:]  # tail: latest mood wins
+    text = (text or "").strip()[-_CLASSIFY_MAX_CHARS:]  # n_ctx guard; caller owns recency
     if not text:
         return "neutral"
     v = llama.embed(text)

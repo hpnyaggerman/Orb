@@ -7,7 +7,7 @@ import { renderContextSize, renderMessages } from "./chat_core.js";
 import { USER_NOTE_ID } from "./direction_notes_panel.js";
 import { closeUtilityPanel, isUtilityPanelOpen, openUtilityPanel } from "./panels.js";
 import { S, effectiveWorkflowEnabled } from "./state.js";
-import { $, esc } from "./utils.js";
+import { $, esc, sentenceTail } from "./utils.js";
 
 // ── Inspector — Reasoning stepper rail
 
@@ -550,20 +550,26 @@ function _renderInspectorMain() {
 }
 
 // Expression polling: while the avatar popup is open and the character has an
-// uploaded expression pack, re-classify the latest assistant message every 1s
-// and swap the popup image to the matching expression.
+// uploaded expression pack, watch the latest assistant message on a 1s tick and
+// swap the popup image to the matching expression. The tick is only a scheduler:
+// the classified unit is the last few *sentences*, so the network call fires
+// when a sentence completes, not every second.
+const _EXPR_TAIL_SENTENCES = 3;
 let _exprTimer = null;
 
 async function _expressionTick(charId) {
   const img = document.getElementById("avatar-popup-image");
   if (!img) return;
-  const text = S.isStreaming
+  const full = S.isStreaming
     ? S.streamingContent
     : [...S.messages].reverse().find((m) => m.role === "assistant" && m.id)?.content;
-  if (!text) return;
-  // Same text as last tick → same result. Skip the network call while idle;
-  // streaming changes `text` every tick so expressions still update live.
-  if (img._exprText === text) return;
+  if (!full) return;
+  // Classify only the sentence tail: recency is enforced here by input selection
+  // (the model never sees older moods), not by trusting the classifier to weight
+  // late text. While streaming, the trailing fragment is dropped so `text` only
+  // changes — and the API only fires — when a sentence completes.
+  const text = sentenceTail(full, _EXPR_TAIL_SENTENCES, S.isStreaming);
+  if (!text || img._exprText === text) return;
   img._exprText = text;
   let label;
   try {

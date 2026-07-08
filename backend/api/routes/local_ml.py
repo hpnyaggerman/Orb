@@ -70,8 +70,10 @@ async def api_slop_score(data: dict = Body(...)):  # noqa: B008
 
 @router.post("/api/local-ml/classify-emotion")
 async def api_classify_emotion(data: dict = Body(...)):  # noqa: B008
-    """Classify one text (latest assistant message) → {"label": go-emotions label}.
+    """Classify one text → {"label": go-emotions label}.
 
+    The frontend sends only the last few sentences of the latest assistant message
+    (recency is enforced caller-side; the model isn't trusted to weight late text).
     503 when the extra/model is missing or the toggle is off — the expression popup
     treats that as "no expressions" and falls back to the plain avatar.
     """

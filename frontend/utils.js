@@ -201,6 +201,21 @@ function _mergeOps(ops) {
   return result;
 }
 
+// Last `n` sentences of `text`, joined verbatim (tokens round-trip, see
+// _tokenizeSentences). With `dropFragment` (streaming), a trailing token that
+// doesn't end at a sentence boundary is discarded so the result only changes
+// when a sentence completes — callers deduping on it stay quiet mid-sentence.
+export function sentenceTail(text, n = 3, dropFragment = false) {
+  let tokens = _tokenizeSentences(text);
+  // The tokenizer pushes the final remainder unconditionally; it's a fragment
+  // unless the text itself ends at a boundary (terminal punctuation, optionally
+  // wrapped in closing quotes/markers, or a newline).
+  if (dropFragment && !/[.!?…]["'”’*_)\]]*\s*$/.test(text) && !/\n\s*$/.test(text)) {
+    tokens = tokens.slice(0, -1);
+  }
+  return tokens.slice(-n).join("").trim();
+}
+
 // Returns merged diff ops: [{type: 'equal'|'insert'|'delete', text}]
 // Tokenises at sentence granularity so changed sentences appear as whole units
 // rather than fragmented word-level edits.
