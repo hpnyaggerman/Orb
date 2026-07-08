@@ -556,7 +556,7 @@ function _renderInspectorMain() {
 // completed for _EXPR_STALE_MS while text keeps streaming in, the partial
 // sentence is classified rather than leaving the expression frozen.
 const _EXPR_TAIL_SENTENCES = 3;
-const _EXPR_MIN_INTERVAL_MS = 2000;
+const _EXPR_MIN_INTERVAL_MS = 1000;
 const _EXPR_STALE_MS = 5000;
 const _EXPR_MIN_GROWTH_CHARS = 40; // don't classify a fragment like "She"
 let _exprTimer = null;
