@@ -103,7 +103,7 @@ export async function toggleAgentSameAsWriter(checked) {
   S.agentSameAsWriter = checked;
   try {
     await api.put("/settings", { agent_same_as_writer: checked });
-  } catch (e) {
+  } catch (_e) {
     toast("Failed to save agent toggle", true);
     return;
   }
@@ -210,7 +210,7 @@ export function updateEndpointsLabel() {
   }
   const MAX = 30;
   const EDGE = 12;
-  el.textContent = model.length <= MAX ? model : model.slice(0, EDGE) + "..." + model.slice(-EDGE);
+  el.textContent = model.length <= MAX ? model : `${model.slice(0, EDGE)}...${model.slice(-EDGE)}`;
   el.title = model;
 }
 
@@ -253,7 +253,9 @@ function highlightMatch(text, query) {
 }
 
 export function initComboboxes() {
-  _comboboxCleanups.forEach((fn) => fn());
+  _comboboxCleanups.forEach((fn) => {
+    fn();
+  });
   _comboboxCleanups = [];
   const epRoot = document.querySelector('[data-combobox="endpoint_url"]');
   if (epRoot) initCombobox(epRoot, () => S.endpoints.map((e) => ({ value: e.url, id: e.id, type: "endpoint" })), false);
@@ -273,7 +275,7 @@ export function initComboboxes() {
 }
 
 // Global delete function for combobox items
-window.deleteComboboxItem = (btn, type, id, isAgent = false) => {
+window.deleteComboboxItem = (_btn, type, id, isAgent = false) => {
   const typeName = type === "endpoint" ? "endpoint" : "model configuration";
   showConfirmModal(
     {
@@ -342,7 +344,7 @@ window.deleteComboboxItem = (btn, type, id, isAgent = false) => {
         populateModelDatalist();
         toast("Deleted");
       } catch (e) {
-        toast("Failed to delete: " + e.message, true);
+        toast(`Failed to delete: ${e.message}`, true);
       }
     },
   );
@@ -522,7 +524,7 @@ async function _loadConfigs(ctx, endpointId) {
     const all = await api.get(`/endpoints/${endpointId}/models`);
     S[ctx.configsKey] = all.filter((m) => m.role === ctx.role || (ctx.role === "writer" && !m.role));
     initComboboxes();
-  } catch (e) {
+  } catch (_e) {
     S[ctx.configsKey] = [];
     initComboboxes();
   }
@@ -663,7 +665,7 @@ async function _doSaveEndpointSetting(ctx, el) {
     S.settings = await api.put("/settings", payload);
     toast("Settings saved");
   } catch (e) {
-    toast("Failed: " + e.message, true);
+    toast(`Failed: ${e.message}`, true);
     return;
   }
   try {
@@ -682,7 +684,7 @@ async function _doSaveEndpointSetting(ctx, el) {
     }
   } catch (e) {
     console.error("Endpoint/model sync error:", e);
-    toast("Failed to sync " + (key === ctx.modelField ? "model" : "endpoint") + ": " + e.message, true);
+    toast(`Failed to sync ${key === ctx.modelField ? "model" : "endpoint"}: ${e.message}`, true);
   }
   updateAgentModelWarning();
   updateEndpointsLabel();

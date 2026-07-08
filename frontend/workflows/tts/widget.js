@@ -4,11 +4,11 @@
 // by row id, never written. The widget reflects live playback state by toggling
 // classes on the clip whose row the channel is playing.
 
-import { S, registerClickHandler } from "/static/state.js";
 import { api } from "/static/api.js";
-import { convUrl } from "/static/utils.js";
 import { channelState, onChannel, pauseChannel, playAudio, resumeChannel } from "/static/audio_player.js";
 import { clearWorkflowPhase, refreshConversationMessages, setWorkflowPhase } from "/static/chat.js";
+import { registerClickHandler, S } from "/static/state.js";
+import { convUrl } from "/static/utils.js";
 import { messageSegments } from "/static/workflow_segmentation.js";
 import { extractBlocks } from "./extract.js";
 import { startKaraoke } from "./karaoke.js";
@@ -123,7 +123,7 @@ function buildSegPlan(blocks) {
 // whose metadata carries no blocks (absent or unparseable) holds a single
 // complete file and plays whole by row id.
 function wholeSegments(att) {
-  const blocks = att.consumption_metadata && att.consumption_metadata.blocks;
+  const blocks = att.consumption_metadata?.blocks;
   if (!Array.isArray(blocks) || !blocks.length) return [{ row: att.id }];
   return buildSegPlan(blocks).map((step) =>
     step.gap ? { silence: blocks[step.block].pause_after_ms / 1000 } : sliceClip(att, step.block),
@@ -139,7 +139,7 @@ function playBlock(att, i) {
 }
 
 function blocksOf(att) {
-  const blocks = att.consumption_metadata && att.consumption_metadata.blocks;
+  const blocks = att.consumption_metadata?.blocks;
   return Array.isArray(blocks) ? blocks : [];
 }
 
@@ -208,7 +208,7 @@ let _blockMap = { msgId: null, content: null, map: null, wordIndices: null };
 
 function _alignmentFor(msgId) {
   const msg = (S.messages || []).find((m) => m.id === msgId);
-  const content = (msg && msg.content) || "";
+  const content = msg?.content || "";
   if (_blockMap.msgId === msgId && _blockMap.content === content) return _blockMap;
   const built = msg ? computeBlockMap(msg) : { map: {}, wordIndices: {}, ready: true };
   // A streamed reply appears in S.messages (so autoplay can target it) before its
@@ -241,7 +241,7 @@ function computeBlockMap(msg) {
   const map = {};
   const wordIndices = {};
   const att = ttsAttachmentForMessage(msg.id);
-  const cm = att && att.consumption_metadata;
+  const cm = att?.consumption_metadata;
   const clipCount = cm && Array.isArray(cm.blocks) ? cm.blocks.length : 0;
   if (!clipCount) return { map, wordIndices, ready: true };
   const segs = messageSegments(msg.id);
@@ -309,14 +309,14 @@ function speakOnClick(seg, msgId) {
 async function create(msgId, btn) {
   if (!S.activeConvId || S.hasMultipleTabs) return;
   if (btn) btn.disabled = true;
-  const ch = "workflow:tts:create:" + msgId;
+  const ch = `workflow:tts:create:${msgId}`;
   try {
     setWorkflowPhase(ch, "Synthesizing speech...");
     const res = await api.post(convUrl(S.activeConvId, "workflows", WORKFLOW_ID, "trigger"), {
       action: "create",
       message_id: msgId,
     });
-    if (res && res.error) {
+    if (res?.error) {
       console.warn("tts create:", res.error);
       if (btn) btn.disabled = false;
       return;

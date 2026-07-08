@@ -7,23 +7,23 @@ import { api } from "./api.js";
 import { onTurnStart } from "./audio_player.js";
 import { updateAttachmentPreview } from "./chat_composer.js";
 import {
-  ICON_DEL,
-  ICON_EDIT,
-  ICON_REGEN,
   _applyWorkflowTextSegments,
   buildMsgToolbar,
   canStartGeneration,
   getCharName,
+  ICON_DEL,
+  ICON_EDIT,
+  ICON_REGEN,
   renderMessages,
   setMessages,
   updateContextCounter,
 } from "./chat_core.js";
 import {
-  REASONING_PASSES,
   _advanceReasoningPass,
   _relightWorkflowPipelinePass,
   _syncGenerationStatusVisibility,
   clearWorkflowPhase,
+  REASONING_PASSES,
   renderInspector,
   setWorkflowPhase,
 } from "./chat_inspector.js";
@@ -34,12 +34,12 @@ import {
   optimisticDropDirectionNotesFrom,
   renderDirectionNotesPanel,
 } from "./direction_notes_panel.js";
-import { isUtilityPanelOpen } from "./panels.js";
 import { refreshCharacters } from "./library.js";
+import { isUtilityPanelOpen } from "./panels.js";
 // Imported directly rather than via settings.js to avoid an import cycle
 // (settings.js → chat.js → this module), as chat_conversations.js does.
 import { ensurePersonaPinned } from "./settings_personas.js";
-import { S, effectiveWorkflowEnabled } from "./state.js";
+import { effectiveWorkflowEnabled, S } from "./state.js";
 import {
   $,
   convUrl,
@@ -57,7 +57,7 @@ import {
 // the raw `Response` (api._req would consume the body with .json()), and stop
 // is fire-and-forget. Domain-specific, so they live with the stream machinery.
 export function streamPost(path, body, signal) {
-  return fetch("/api" + path, {
+  return fetch(`/api${path}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
@@ -90,7 +90,7 @@ export function setGenerationPhase(phase) {
   const el = $("generation-status");
   if (!S.generationPhase || !el) return;
   el.querySelector(".gen-text").textContent = PHASE_LABELS[S.generationPhase] || "Processing…";
-  el.querySelector(".gen-dot").className = "gen-dot" + (S.generationPhase === "refining" ? " spin" : "");
+  el.querySelector(".gen-dot").className = `gen-dot${S.generationPhase === "refining" ? " spin" : ""}`;
 }
 
 function smoothUpdateBody(el, newHtml, onComplete) {
@@ -99,11 +99,11 @@ function smoothUpdateBody(el, newHtml, onComplete) {
   el.innerHTML = newHtml;
   const next = el.scrollHeight;
   if (Math.abs(next - prev) > 4) {
-    el.style.height = prev + "px";
+    el.style.height = `${prev}px`;
     el.style.overflow = "hidden";
     el.offsetHeight; // force reflow
     el.style.transition = "height 0.3s ease";
-    el.style.height = next + "px";
+    el.style.height = `${next}px`;
     let settled = false;
     const done = () => {
       if (settled) return;
@@ -124,7 +124,7 @@ function finalizeStreamingDiv(lastMsg) {
   const body = S.streamingBodyEl;
   if (!body) return false;
   const div = body.closest(".message");
-  if (!div || !div.isConnected || !lastMsg || lastMsg.role !== "assistant" || !lastMsg.id) return false;
+  if (!div?.isConnected || !lastMsg || lastMsg.role !== "assistant" || !lastMsg.id) return false;
 
   div.setAttribute("data-msg-id", lastMsg.id);
   body.removeAttribute("id");
@@ -252,7 +252,7 @@ export async function afterStream() {
       if (conv) conv.updated_at = new Date().toISOString();
     }
   } catch (e) {
-    toast("Failed to sync messages: " + e.message, true);
+    toast(`Failed to sync messages: ${e.message}`, true);
   }
 
   if (pendingUserMsg) {
@@ -289,7 +289,7 @@ export async function afterStream() {
     if (target) target.content = content;
     api
       .post(convUrl(S.activeConvId, "messages", Number(id), "edit"), { content, regenerate: false })
-      .catch((e) => toast("Failed to save edit: " + e.message, true));
+      .catch((e) => toast(`Failed to save edit: ${e.message}`, true));
   }
   S.queuedEdits = {};
 
@@ -424,7 +424,7 @@ export async function processSSEStream(resp, container, msgDiv, signal) {
   if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
 }
 
-function handleSSEEvent(event, data, container, msgDiv, onToken, onRewrite) {
+function handleSSEEvent(event, data, _container, msgDiv, onToken, onRewrite) {
   switch (event) {
     case "director_start":
       setGenerationPhase("directing");
@@ -491,7 +491,7 @@ function handleSSEEvent(event, data, container, msgDiv, onToken, onRewrite) {
         const builtinIdx = REASONING_PASSES.findIndex((p) => p.key === passKey);
         if (builtinIdx >= 0) {
           // Built-in pass: append delta to the named state and update the Main reasoning box.
-          const stateKey = "reasoning" + passKey.charAt(0).toUpperCase() + passKey.slice(1);
+          const stateKey = `reasoning${passKey.charAt(0).toUpperCase()}${passKey.slice(1)}`;
           S[stateKey] = (S[stateKey] || "") + delta;
           const rebuilt = _advanceReasoningPass(builtinIdx);
           const viewingThisPass = S.reasoningPassSelected === builtinIdx;
@@ -517,7 +517,7 @@ function handleSSEEvent(event, data, container, msgDiv, onToken, onRewrite) {
           S.reasoningByPass[passKey] = (S.reasoningByPass[passKey] || "") + delta;
           if (S.inspectorTab === "secondary") {
             if (firstDelta) _relightWorkflowPipelinePass(pipeline, passKey);
-            const wbox = document.getElementById("reasoning-box-" + pipeline.id);
+            const wbox = document.getElementById(`reasoning-box-${pipeline.id}`);
             if (wbox && wbox.dataset.passId === passKey) {
               wbox.appendChild(document.createTextNode(delta));
               wbox.scrollTop = wbox.scrollHeight;
@@ -591,7 +591,7 @@ function handleSSEEvent(event, data, container, msgDiv, onToken, onRewrite) {
           S.editingPendingUserMsg = false;
           S.editingMsgId = realId;
           renderMessages();
-          const ta = $("edit-textarea-" + realId);
+          const ta = $(`edit-textarea-${realId}`);
           if (ta) {
             ta.focus();
             ta.selectionStart = ta.selectionEnd = ta.value.length;
@@ -612,7 +612,7 @@ function handleSSEEvent(event, data, container, msgDiv, onToken, onRewrite) {
       break;
     }
     case "error":
-      toast("Error: " + data, true);
+      toast(`Error: ${data}`, true);
       break;
     case "workflow_attachments_rejected": {
       // Stash for the post-stream renderMessages paint. Do NOT call
@@ -677,7 +677,7 @@ async function runStreamRequest(path, body, cutoffMsgId = null) {
     await processSSEStream(resp, ct, msgDiv, S.abortController.signal);
   } catch (e) {
     if (e.name === "AbortError") S.wasAborted = true;
-    else toast("Error: " + e.message, true);
+    else toast(`Error: ${e.message}`, true);
   }
   await afterStream();
 }
@@ -757,7 +757,7 @@ export async function sendMessage() {
     if (e.name === "AbortError") {
       S.wasAborted = true;
     } else {
-      toast("Connection error: " + e.message, true);
+      toast(`Connection error: ${e.message}`, true);
     }
   }
   await afterStream();

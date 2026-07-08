@@ -146,14 +146,14 @@ export function registerWorkflowPipeline(entry) {
   }
   const id = entry.id;
   const passes = Array.isArray(entry.passes) ? entry.passes : [];
-  const prefix = id + ":";
+  const prefix = `${id}:`;
   for (const p of passes) {
     if (!p || typeof p.id !== "string") {
       console.error("registerWorkflowPipeline: pass id missing for workflow", id, p);
       return;
     }
     if (RESERVED_PASS_IDS.has(p.id)) {
-      console.error("registerWorkflowPipeline: pass id", p.id, "is a reserved built-in (workflow", id + ")");
+      console.error("registerWorkflowPipeline: pass id", p.id, "is a reserved built-in (workflow", `${id})`);
       return;
     }
     if (!p.id.startsWith(prefix)) {
@@ -199,7 +199,7 @@ export function registerClickHandler(entry) {
     return;
   }
   if (typeof entry.onClick !== "function") {
-    console.error("registerClickHandler: onClick must be a function (handler", entry.id + ")");
+    console.error("registerClickHandler: onClick must be a function (handler", `${entry.id})`);
     return;
   }
   const record = {
@@ -220,11 +220,11 @@ export function registerClickHandler(entry) {
 // re-registering the same workflow replaces its entry rather than duplicating it.
 function _registerWorkflowArrayEntry(arr, workflowId, render, where) {
   if (typeof workflowId !== "string" || !workflowId) {
-    console.error(where + ": missing or empty workflowId", workflowId);
+    console.error(`${where}: missing or empty workflowId`, workflowId);
     return;
   }
   if (typeof render !== "function") {
-    console.error(where + ": render must be a function (workflow " + workflowId + ")");
+    console.error(`${where}: render must be a function (workflow ${workflowId})`);
     return;
   }
   const record = { workflowId, render };
@@ -253,11 +253,11 @@ export function registerWorkflowEventHandler(workflowId, event, handler) {
     return;
   }
   if (typeof event !== "string" || !event) {
-    console.error("registerWorkflowEventHandler: missing or empty event (workflow " + workflowId + ")");
+    console.error(`registerWorkflowEventHandler: missing or empty event (workflow ${workflowId})`);
     return;
   }
   if (typeof handler !== "function") {
-    console.error("registerWorkflowEventHandler: handler must be a function (workflow " + workflowId + ")");
+    console.error(`registerWorkflowEventHandler: handler must be a function (workflow ${workflowId})`);
     return;
   }
   S.workflowEventHandlers[event] = { workflowId, handler };

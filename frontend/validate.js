@@ -18,7 +18,7 @@ const MAX_FRAGMENT_LABEL = 100;
 const MAX_FRAGMENT_DESCRIPTION = 1000;
 const MAX_FRAGMENT_PROMPT = 10000;
 const MAX_FRAGMENT_NEGATIVE_PROMPT = 5000;
-const MAX_SETTINGS_TEXT = 2048;
+const _MAX_SETTINGS_TEXT = 2048;
 const MAX_SETTINGS_PROMPT = 50000;
 const MAX_USER_PROFILE_NAME = 50;
 const MAX_USER_PROFILE_DESC = 1000;
@@ -28,8 +28,8 @@ const MAX_PHRASE_VARIANT = 100;
 const MAX_BROWSE_SEARCH = 200;
 const MAX_CONVERSATION_TITLE = 100;
 const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10 MB
-const MAX_AVATAR_SIZE = 5 * 1024 * 1024; // 5 MB
-const MIN_AVATAR_DIMENSION = 200;
+const _MAX_AVATAR_SIZE = 5 * 1024 * 1024; // 5 MB
+const _MIN_AVATAR_DIMENSION = 200;
 const ALLOWED_IMAGE_MIMES = ["image/png", "image/jpeg", "image/webp", "image/gif"];
 const FRAGMENT_ID_REGEX = /^[a-z0-9][a-z0-9_-]*$/;
 const VALID_URL_REGEX = /^https?:\/\/.+$/;
@@ -89,7 +89,7 @@ export function minLength(value, min, fieldName = "Field") {
 export function isNumber(value, fieldName = "Field") {
   if (value === "" || value == null) return { valid: true }; // handled by required/empty checks
   const num = typeof value === "string" ? parseFloat(value) : value;
-  if (isNaN(num)) {
+  if (Number.isNaN(num)) {
     return { valid: false, error: `${fieldName} must be a valid number` };
   }
   return { valid: true, parsed: num };
@@ -104,7 +104,7 @@ export function isNumber(value, fieldName = "Field") {
  * @returns {{ valid: boolean, error?: string }}
  */
 export function numberRange(value, min, max, fieldName = "Field") {
-  if (typeof value !== "number" || isNaN(value)) return { valid: true };
+  if (typeof value !== "number" || Number.isNaN(value)) return { valid: true };
   if (value < min || value > max) {
     return { valid: false, error: `${fieldName} must be between ${min} and ${max}` };
   }
@@ -118,7 +118,7 @@ export function numberRange(value, min, max, fieldName = "Field") {
  * @returns {{ valid: boolean, error?: string }}
  */
 export function isInteger(value, fieldName = "Field") {
-  if (typeof value !== "number" || isNaN(value)) return { valid: true };
+  if (typeof value !== "number" || Number.isNaN(value)) return { valid: true };
   if (!Number.isInteger(value)) {
     return { valid: false, error: `${fieldName} must be a whole number` };
   }
@@ -132,7 +132,7 @@ export function isInteger(value, fieldName = "Field") {
  * @param {"url"|"email"} format - The format to validate against
  * @returns {{ valid: boolean, error?: string }}
  */
-export function formatMatch(value, fieldName, format = "url") {
+export function formatMatch(value, _fieldName, format = "url") {
   if (typeof value !== "string" || !value.trim()) return { valid: true };
   const regex = format === "url" ? VALID_URL_REGEX : /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   if (!regex.test(value.trim())) {

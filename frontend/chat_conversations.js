@@ -3,13 +3,13 @@
 // chat.js; the public surface is re-exported from chat.js.
 import { api } from "./api.js";
 import { onConvSwitch, stopAll as stopAllAudio } from "./audio_player.js";
-import { stopConversation } from "./chat_stream.js";
 import { renderMessages, resetRenderWindow, setMessages } from "./chat_core.js";
 import { renderInspector } from "./chat_inspector.js";
 import { clearInspectedMessage, inspectMessage } from "./chat_messages.js";
+import { stopConversation } from "./chat_stream.js";
 import { resetWorkflowViewportState } from "./chat_workflow.js";
 import { renderDirectionNotesPanel } from "./direction_notes_panel.js";
-import { loadCharacters, refreshCharacters, renderCharacters } from "./library.js";
+import { refreshCharacters, renderCharacters } from "./library.js";
 import { activateAndPrioritizeWorld, deactivateWorld } from "./lorebooks.js";
 import { closeModal, showConfirmModal, showModal } from "./modal.js";
 import { isUtilityPanelOpen } from "./panels.js";
@@ -217,7 +217,7 @@ function confirmDeleteConversation(id, msgCount, afterDelete) {
     },
     async () => {
       try {
-        await api.del("/conversations/" + id);
+        await api.del(`/conversations/${id}`);
         if (S.activeConvId === id) {
           S.activeConvId = null;
           S.messages = [];
@@ -233,7 +233,7 @@ function confirmDeleteConversation(id, msgCount, afterDelete) {
   );
 }
 
-async function deleteConversation(id) {
+async function _deleteConversation(id) {
   const conv = S.conversations.find((c) => c.id === id);
   confirmDeleteConversation(
     id,
@@ -312,7 +312,7 @@ export async function createCheckpoint() {
     toast(`Checkpoint created: ${conv.title}`);
     await showConvHistoryModal();
   } catch (e) {
-    toast("Failed to create checkpoint: " + e.message, true);
+    toast(`Failed to create checkpoint: ${e.message}`, true);
   }
 }
 
@@ -467,7 +467,7 @@ export async function generateCompressionSummary() {
   } catch (e) {
     if (e.name === "AbortError") return;
     if (statusEl) statusEl.textContent = `Error: ${e.message}`;
-    toast("Summary generation failed: " + e.message, true);
+    toast(`Summary generation failed: ${e.message}`, true);
     if (regenBtn) regenBtn.disabled = false;
   } finally {
     _compressAbort = null;
@@ -498,7 +498,7 @@ export async function applyCompression() {
     await selectConversation(result.new_conversation_id);
     toast("New conversation created from compression");
   } catch (e) {
-    toast("Failed to apply compression: " + e.message, true);
+    toast(`Failed to apply compression: ${e.message}`, true);
     if (applyBtn) applyBtn.disabled = false;
     if (regenBtn) regenBtn.disabled = false;
   }
@@ -558,7 +558,7 @@ export async function saveTitleEdit() {
     return;
   }
   try {
-    const updated = await api.put("/conversations/" + S.activeConvId, { title: newTitle });
+    const updated = await api.put(`/conversations/${S.activeConvId}`, { title: newTitle });
     const conv = S.conversations.find((c) => c.id === S.activeConvId);
     if (conv) conv.title = updated.title;
     const div = document.createElement("div");

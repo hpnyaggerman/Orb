@@ -36,12 +36,16 @@ export function setModalCloseCallback(cb) {
 }
 
 export function switchTab(tab, contentId) {
-  tab.parentElement.querySelectorAll(".tab").forEach((x) => x.classList.remove("active"));
+  tab.parentElement.querySelectorAll(".tab").forEach((x) => {
+    x.classList.remove("active");
+  });
   tab.classList.add("active");
   tab
     .closest(".modal")
     .querySelectorAll(".tab-content")
-    .forEach((x) => x.classList.remove("active"));
+    .forEach((x) => {
+      x.classList.remove("active");
+    });
   $(contentId).classList.add("active");
 }
 
@@ -320,7 +324,7 @@ function _attachCropEvents(canvas) {
   canvas.addEventListener("touchend", onEnd);
 }
 
-function _confirmCrop(canvas) {
+function _confirmCrop(_canvas) {
   if (!_cs) return;
   const { img, cx, cy, cw, ch, scale, onConfirm, aspect } = _cs;
   const OUT_W = 400;

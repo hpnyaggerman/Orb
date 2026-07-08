@@ -3,12 +3,12 @@
 // config route, and the active conversation's per-character voice profile read
 // and written through the on-demand trigger.
 
-import { S } from "/static/state.js";
 import { api } from "/static/api.js";
-import { convUrl, esc } from "/static/utils.js";
 import { playAudio } from "/static/audio_player.js";
-import { showModal } from "/static/modal.js";
 import { renderMessages } from "/static/chat.js";
+import { showModal } from "/static/modal.js";
+import { S } from "/static/state.js";
+import { convUrl, esc } from "/static/utils.js";
 
 const WORKFLOW_ID = "tts";
 
@@ -123,7 +123,7 @@ function saveGlobal() {
   // The config slot is replaced wholesale on write, so every key must be sent
   // or an omitted one reverts to its default.
   api
-    .put("/workflows/" + WORKFLOW_ID + "/config", {
+    .put(`/workflows/${WORKFLOW_ID}/config`, {
       config: {
         auto_play: cfg.auto_play,
         volume: cfg.volume,
@@ -149,8 +149,8 @@ async function populateProfile() {
       api.post(triggerUrl(), { action: "get_profile" }),
       api.post(triggerUrl(), { action: "list_backends" }),
     ]);
-    profile = pr && pr.profile;
-    backends = (bk && bk.backends) || [];
+    profile = pr?.profile;
+    backends = bk?.backends || [];
   } catch (e) {
     console.warn("tts: profile load failed", e);
     el = document.getElementById("tts-profile");
@@ -179,9 +179,7 @@ function field(name, inner) {
 
 function profileFormHtml(p, backends) {
   const backendOpts = backends.map((b) => opt(b.id, b.name || b.id, b.id === p.backend)).join("");
-  const langOpts = LANGUAGES.map(([code, label]) => opt(code, label, p.language && p.language.startsWith(code))).join(
-    "",
-  );
+  const langOpts = LANGUAGES.map(([code, label]) => opt(code, label, p.language?.startsWith(code))).join("");
   return `
     <div class="tts-config-heading">Voice (this character)</div>
     <label class="tts-config-row"><input type="checkbox" id="tts-pf-enabled"${p.enabled ? " checked" : ""}> Auto-generate speech for this character's replies</label>
@@ -249,7 +247,7 @@ async function loadVoices(selectId) {
       api_url: f.api_url,
       api_key: f.api_key,
     });
-    const voices = (res && res.voices) || [];
+    const voices = res?.voices || [];
     if (!voices.length) return;
     const live = document.getElementById("tts-pf-voice");
     if (live) live.innerHTML = voices.map((v) => opt(v.id, v.name || v.id, v.id === want)).join("");
@@ -270,7 +268,7 @@ async function loadModels(selectId) {
       api_url: f.api_url,
       api_key: f.api_key,
     });
-    const models = (res && res.models) || [];
+    const models = res?.models || [];
     if (!models.length) return;
     const live = document.getElementById("tts-pf-model");
     if (live) live.innerHTML = models.map((m) => opt(m.id || m, m.name || m.id || m, (m.id || m) === want)).join("");
@@ -284,7 +282,7 @@ async function saveProfile() {
   const status = document.getElementById("tts-pf-status");
   try {
     const res = await api.post(triggerUrl(), { action: "set_profile", profile: readForm() });
-    if (status) status.textContent = res && res.error ? res.error : "Saved";
+    if (status) status.textContent = res?.error ? res.error : "Saved";
   } catch (e) {
     console.error("tts: profile save failed", e);
     if (status) status.textContent = "Save failed";
@@ -296,10 +294,10 @@ async function preview() {
   const status = document.getElementById("tts-pf-status");
   try {
     const res = await api.post(triggerUrl(), { action: "preview", ...readForm() });
-    if (res && res.audio_b64) {
+    if (res?.audio_b64) {
       playAudio({ channel: WORKFLOW_ID, segments: [{ b64: res.audio_b64, mime: res.mime }], volume: cfg.volume });
     } else if (status) {
-      status.textContent = (res && res.error) || "Preview failed";
+      status.textContent = res?.error || "Preview failed";
     }
   } catch (e) {
     console.error("tts: preview failed", e);

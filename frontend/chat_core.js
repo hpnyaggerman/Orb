@@ -9,10 +9,8 @@ import {
   _renderWorkflowArtifacts,
   _renderWorkflowRejection,
 } from "./chat_workflow.js";
-import { S, effectiveWorkflowEnabled } from "./state.js";
+import { effectiveWorkflowEnabled, S } from "./state.js";
 import { requestSendPermission } from "./tabLock.js";
-import { segmentBody } from "./workflow_segmentation.js";
-import { markClickable } from "./workflow_text_interaction.js";
 import {
   $,
   avatarCell,
@@ -25,6 +23,8 @@ import {
   formatProseWithDiff,
   resolvePlaceholders,
 } from "./utils.js";
+import { segmentBody } from "./workflow_segmentation.js";
+import { markClickable } from "./workflow_text_interaction.js";
 
 export function canStartGeneration() {
   if (S.isStreaming) return false;
@@ -216,8 +216,8 @@ export function getCharName() {
 }
 
 function formatStatNum(n) {
-  if (n >= 1e6) return (n / 1e6).toFixed(1).replace(/\.0$/, "") + "M";
-  if (n >= 1e3) return (n / 1e3).toFixed(1).replace(/\.0$/, "") + "k";
+  if (n >= 1e6) return `${(n / 1e6).toFixed(1).replace(/\.0$/, "")}M`;
+  if (n >= 1e3) return `${(n / 1e3).toFixed(1).replace(/\.0$/, "")}k`;
   return String(n);
 }
 
@@ -247,7 +247,7 @@ async function renderHomeStats() {
     cards.push(["Storage used", formatBytes(s.storage_bytes)]);
   }
   if (s.avg_latency_ms != null) {
-    cards.push(["Avg response time", (s.avg_latency_ms / 1000).toFixed(1) + "s"]);
+    cards.push(["Avg response time", `${(s.avg_latency_ms / 1000).toFixed(1)}s`]);
   }
   const numericCards = cards
     .filter(([, v]) => typeof v !== "number" || v > 0)
@@ -272,7 +272,7 @@ const SPOTLIGHT_EYEBROWS = {
   missed: "💔 Misses you",
 };
 function renderSpotlightCard(sp) {
-  if (!sp || !sp.name) return "";
+  if (!sp?.name) return "";
   const av = sp.card_id
     ? avatarCell(escAttr(avatarUrl(sp.card_id)), { attrs: 'loading="lazy" decoding="async"' })
     : "👤";
@@ -466,7 +466,7 @@ async function fetchContextSize() {
       S.contextSize = data;
       renderContextSize();
     }
-  } catch (e) {
+  } catch (_e) {
     /* ignore */
   }
 }

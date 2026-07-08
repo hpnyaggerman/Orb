@@ -6,7 +6,7 @@ import { api } from "./api.js";
 import { renderContextSize, renderMessages } from "./chat_core.js";
 import { USER_NOTE_ID } from "./direction_notes_panel.js";
 import { closeUtilityPanel, isUtilityPanelOpen, openUtilityPanel } from "./panels.js";
-import { S, effectiveWorkflowEnabled } from "./state.js";
+import { effectiveWorkflowEnabled, S } from "./state.js";
 import { $, esc, sentenceTail } from "./utils.js";
 
 // ── Inspector — Reasoning stepper rail
@@ -45,7 +45,7 @@ function _buildReasoningHtml() {
   const streamIdx = S.reasoningPassActive;
   const selectedIdx = S.reasoningPassSelected;
   const dotsHtml = REASONING_PASSES.map((p, i) => {
-    const hasText = !!S["reasoning" + p.key.charAt(0).toUpperCase() + p.key.slice(1)];
+    const hasText = !!S[`reasoning${p.key.charAt(0).toUpperCase()}${p.key.slice(1)}`];
     const isStreaming = i === streamIdx;
     const isSelected = i === selectedIdx;
     const lit = hasText || isStreaming;
@@ -61,19 +61,17 @@ function _buildReasoningHtml() {
       .join(";");
     const lineColor = i < streamIdx ? REASONING_PASSES[i + 1].color : "var(--border)";
     const checkId = `reasoning-enabled-${p.key}`;
-    return (
-      `<div class="reasoning-dot-col">
+    return `<div class="reasoning-dot-col">
         <button class="reasoning-dot" onclick="selectReasoningPass(${i})" style="${dotStyle}">${i + 1}</button>
         <label class="reasoning-enabled-label" for="${checkId}">
           <input type="checkbox" id="${checkId}" ${enabled ? "checked" : ""} onchange="toggleReasoningPass('${p.key}')">
           <span>on</span>
         </label>
-      </div>` + (i < 2 ? `<div class="reasoning-rail-line" style="background:${lineColor}"></div>` : "")
-    );
+      </div>${i < 2 ? `<div class="reasoning-rail-line" style="background:${lineColor}"></div>` : ""}`;
   }).join("");
 
   const selectedPass = REASONING_PASSES[selectedIdx];
-  const currentText = S["reasoning" + selectedPass.key.charAt(0).toUpperCase() + selectedPass.key.slice(1)] || "";
+  const currentText = S[`reasoning${selectedPass.key.charAt(0).toUpperCase()}${selectedPass.key.slice(1)}`] || "";
   const openAttr = S.reasoningOpen ? " open" : "";
 
   return `<details class="inspector-block reasoning-section" id="reasoning-section"${openAttr} ontoggle="S.reasoningOpen=this.open;saveInspectorOpenStates()">
@@ -294,7 +292,7 @@ export function setWorkflowPhase(channel, label) {
     const wid = channel.split(":")[1];
     if (wid && !effectiveWorkflowEnabled(wid)) return;
   }
-  if (label && label.trim()) S.workflowPhases[channel] = label;
+  if (label?.trim()) S.workflowPhases[channel] = label;
   else delete S.workflowPhases[channel];
   _renderWorkflowPhasesPill();
   _syncGenerationStatusVisibility();
@@ -311,7 +309,7 @@ export function clearWorkflowPhase(channel) {
 // when the id is absent from the manifest.
 export function workflowPhaseLabel(wid, verb) {
   const entry = S.workflowManifest.find((w) => w.id === wid);
-  return `${(entry && entry.display_name) || "Workflow"}: ${verb}`;
+  return `${entry?.display_name || "Workflow"}: ${verb}`;
 }
 
 export async function loadWorkflowManifest() {
@@ -353,7 +351,7 @@ export function feedbackRows(values) {
     .filter(([, v]) => v && (Array.isArray(v) ? v.length : true))
     .map(([id, v]) => {
       const frag = frags.find((f) => f.id === id);
-      const label = (frag && frag.injection_label) || (frag && frag.label) || id;
+      const label = frag?.injection_label || frag?.label || id;
       return { label, value: v };
     });
 }
@@ -504,8 +502,8 @@ function _renderInspectorMain() {
     (S.lastDirectorData && Object.keys(S.lastDirectorData).length > 0);
 
   if (!hasDirectorData) {
-    const fbHtml = buildFeedbackHtml(S.lastFeedback && S.lastFeedback.values);
-    const pnHtml = buildDirectionNotesHtml(S.lastDirectionNotes && S.lastDirectionNotes.notes);
+    const fbHtml = buildFeedbackHtml(S.lastFeedback?.values);
+    const pnHtml = buildDirectionNotesHtml(S.lastDirectionNotes?.notes);
     // Canonical order: context-size, reasoning, feedback (matches the settled
     // director-data branch so nothing shifts once director output arrives).
     $("inspector-content").innerHTML = `
@@ -533,8 +531,8 @@ function _renderInspectorMain() {
       <div>${stylesHtml || '<span style="color:var(--text-muted);font-size:12px">None</span>'}</div>
     </div>
     ${_buildReasoningHtml()}
-    ${buildFeedbackHtml(S.lastFeedback && S.lastFeedback.values)}
-    ${buildDirectionNotesHtml(S.lastDirectionNotes && S.lastDirectionNotes.notes)}
+    ${buildFeedbackHtml(S.lastFeedback?.values)}
+    ${buildDirectionNotesHtml(S.lastDirectionNotes?.notes)}
     ${tc.length ? _buildToolCallsHtml(tc) : ""}
     ${inj ? _buildInjectionBlockHtml(inj) : ""}
     ${
@@ -595,7 +593,7 @@ async function _expressionTick(charId) {
   let label;
   try {
     ({ label } = await api.post("/local-ml/classify-emotion", { text }));
-  } catch (e) {
+  } catch (_e) {
     // 503 = feature off / model missing; anything else — stop silently.
     clearInterval(_exprTimer);
     _exprTimer = null;

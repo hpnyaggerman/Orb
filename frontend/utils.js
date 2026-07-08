@@ -35,7 +35,7 @@ export function toast(msg, isError = false) {
   const el = $("toast");
   if (!el) return;
   el.textContent = msg;
-  el.className = "toast" + (isError ? " toast-error" : "");
+  el.className = `toast${isError ? " toast-error" : ""}`;
   el.classList.remove("hidden");
   setTimeout(() => el.classList.add("hidden"), 3000);
 }
@@ -88,11 +88,11 @@ export const CHAT_AVATAR_ICON = "📜"; // active chat header
 // pre-escaped by the caller when it comes from untrusted data.
 export function avatarCell(src, { icon = NO_AVATAR_ICON, attrs = "" } = {}) {
   if (!src) return icon;
-  return `<img src="${src}"${attrs ? " " + attrs : ""} onerror="this.parentElement.textContent='${icon}'">`;
+  return `<img src="${src}"${attrs ? ` ${attrs}` : ""} onerror="this.parentElement.textContent='${icon}'">`;
 }
 
 export function convUrl(...parts) {
-  return "/conversations/" + parts.join("/");
+  return `/conversations/${parts.join("/")}`;
 }
 
 export function formatRelativeDate(iso) {
@@ -397,7 +397,7 @@ export function resolvePlaceholders(text) {
   const personaId = effectivePersonaId();
   if (personaId) {
     const persona = S.personas.find((p) => p.id === personaId);
-    if (persona && persona.name) {
+    if (persona?.name) {
       userName = persona.name;
     }
   }
@@ -423,5 +423,5 @@ export function formatBytes(bytes) {
   const k = 1024;
   const sizes = ["B", "KB", "MB", "GB"];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / k ** i).toFixed(1)) + " " + sizes[i];
+  return `${parseFloat((bytes / k ** i).toFixed(1))} ${sizes[i]}`;
 }

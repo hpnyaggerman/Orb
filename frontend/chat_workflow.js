@@ -9,7 +9,7 @@ import { ICON_CHEVRON, ICON_DEL, ICON_REGEN, ICON_REROLL, renderMessages, setMes
 import { clearWorkflowPhase, setWorkflowPhase, workflowPhaseLabel } from "./chat_inspector.js";
 import { renderDefaultWidget } from "./default_widget.js";
 import { closeModal, showModal } from "./modal.js";
-import { S, effectiveWorkflowEnabled } from "./state.js";
+import { effectiveWorkflowEnabled, S } from "./state.js";
 import { broadcastWorkflowMutation, requestSendPermission, setWorkflowMutationCallback } from "./tabLock.js";
 import { convUrl, esc, toast } from "./utils.js";
 
@@ -73,7 +73,7 @@ function _activeAttachmentForGroup(atts, root) {
   // newest sibling as active.
   if (!atts.length) return null;
   if (atts.length === 1) return atts[0];
-  const activeId = root && root.active_sibling_id;
+  const activeId = root?.active_sibling_id;
   if (activeId == null) return atts[atts.length - 1];
   const found = atts.find((a) => a.id === activeId);
   return found || atts[atts.length - 1];
@@ -102,7 +102,7 @@ function _workflowRejectionChipHtml(entries) {
 // "speech.mp3" is noise next to the workflow that produced it.
 function _workflowLabel(att) {
   const entry = S.workflowManifest.find((w) => w.id === att.workflow_id);
-  return (entry && entry.display_name) || att.workflow_id || "artifact";
+  return entry?.display_name || att.workflow_id || "artifact";
 }
 
 // Minimized workflow-artifact groups, keyed by root attachment id. Persisted to
@@ -253,7 +253,7 @@ export function _renderWorkflowRejection(msg) {
 // after any wholesale setMessages it issues.
 const _workflowSwipeInFlight = new Map();
 
-window.workflowArtifactStep = async function (instanceId, delta) {
+window.workflowArtifactStep = async (instanceId, delta) => {
   const el = document.getElementById(instanceId);
   if (!el) return;
   const msgId = Number(el.dataset.msgId);
@@ -303,7 +303,7 @@ window.workflowArtifactStep = async function (instanceId, delta) {
 // the cross-tab refetch guard.
 const _workflowRehydrateInFlight = new Map();
 
-window.workflowRehydrate = async function (msgId, attId, btn) {
+window.workflowRehydrate = async (msgId, attId, btn) => {
   if (!S.activeConvId) return;
   if (!requestSendPermission()) return;
   if (_workflowRehydrateInFlight.has(attId)) return;
@@ -311,7 +311,7 @@ window.workflowRehydrate = async function (msgId, attId, btn) {
   btn.disabled = true;
   const container = btn.closest(".workflow-artifact-swipe");
   const wid = _resolveWorkflowId(msgId, attId);
-  const ch = "workflow:" + (wid || "op") + ":rehydrate:" + attId;
+  const ch = `workflow:${wid || "op"}:rehydrate:${attId}`;
   try {
     setWorkflowPhase(ch, workflowPhaseLabel(wid, "restoring..."));
     await api.post(convUrl(S.activeConvId, "messages", msgId, "workflow-attachments", attId, "rehydrate"), {});
@@ -362,7 +362,7 @@ const _workflowActionInFlight = new Map();
 // time, so the fallback still yields a key serializable against itself.
 function _resolveWorkflowRootId(msgId, attId) {
   const msg = S.messages.find((m) => m.id === msgId);
-  const atts = msg && msg.workflow_attachments;
+  const atts = msg?.workflow_attachments;
   if (!atts) return attId;
   const att = atts.find((a) => a.id === attId);
   if (!att) return attId;
@@ -373,8 +373,8 @@ function _resolveWorkflowRootId(msgId, attId) {
 // null when the row has left local state (a closure outliving a refetch).
 function _resolveWorkflowId(msgId, attId) {
   const msg = S.messages.find((m) => m.id === msgId);
-  const att = msg && msg.workflow_attachments && msg.workflow_attachments.find((a) => a.id === attId);
-  return (att && att.workflow_id) || null;
+  const att = msg?.workflow_attachments?.find((a) => a.id === attId);
+  return att?.workflow_id || null;
 }
 
 // Drops existing entries whose (message_id, originating_attachment_id)
@@ -388,7 +388,7 @@ export function _mergeWorkflowRejections(msgId, originatingId, incoming) {
     .concat(incoming.map((e) => ({ ...e, message_id: msgId })));
 }
 
-window.workflowRegenerate = async function (msgId, attId, btn) {
+window.workflowRegenerate = async (msgId, attId, btn) => {
   if (!S.activeConvId) return;
   if (!requestSendPermission()) return;
   const rootId = _resolveWorkflowRootId(msgId, attId);
@@ -397,7 +397,7 @@ window.workflowRegenerate = async function (msgId, attId, btn) {
   const container = btn.closest(".workflow-artifact-swipe");
   btn.disabled = true;
   const wid = _resolveWorkflowId(msgId, attId);
-  const ch = "workflow:" + (wid || "op") + ":regen:" + rootId;
+  const ch = `workflow:${wid || "op"}:regen:${rootId}`;
   try {
     setWorkflowPhase(ch, workflowPhaseLabel(wid, "regenerating..."));
     const result = await api.post(
@@ -426,7 +426,7 @@ window.workflowRegenerate = async function (msgId, attId, btn) {
   }
 };
 
-window.workflowReroll = async function (msgId, attId, btn) {
+window.workflowReroll = async (msgId, attId, btn) => {
   if (!S.activeConvId) return;
   if (!requestSendPermission()) return;
   const rootId = _resolveWorkflowRootId(msgId, attId);
@@ -435,7 +435,7 @@ window.workflowReroll = async function (msgId, attId, btn) {
   const container = btn.closest(".workflow-artifact-swipe");
   btn.disabled = true;
   const wid = _resolveWorkflowId(msgId, attId);
-  const ch = "workflow:" + (wid || "op") + ":reroll:" + rootId;
+  const ch = `workflow:${wid || "op"}:reroll:${rootId}`;
   try {
     setWorkflowPhase(ch, workflowPhaseLabel(wid, "rerolling..."));
     const result = await api.post(
@@ -467,7 +467,7 @@ window.workflowReroll = async function (msgId, attId, btn) {
 // localStorage), touching no server state -- so unlike regenerate/reroll/swipe
 // it is not gated on the single-writer tab lock. Re-renders just this widget in
 // place, the same surgical outerHTML swap workflowArtifactStep uses.
-window.workflowToggleMinimize = function (instanceId) {
+window.workflowToggleMinimize = (instanceId) => {
   const el = document.getElementById(instanceId);
   if (!el) return;
   const msgId = Number(el.dataset.msgId);
@@ -488,7 +488,7 @@ window.workflowToggleMinimize = function (instanceId) {
 // target is parked in _wfDeleteTarget for workflowConfirmDelete to consume.
 let _wfDeleteTarget = null;
 
-window.workflowDeleteAttachment = function (instanceId) {
+window.workflowDeleteAttachment = (instanceId) => {
   const el = document.getElementById(instanceId);
   if (!el) return;
   const msgId = Number(el.dataset.msgId);
@@ -523,7 +523,7 @@ window.workflowDeleteAttachment = function (instanceId) {
     </div>`);
 };
 
-window.workflowConfirmDelete = function (scope) {
+window.workflowConfirmDelete = (scope) => {
   const t = _wfDeleteTarget;
   _wfDeleteTarget = null;
   closeModal();
@@ -545,7 +545,7 @@ async function _deleteWorkflowAttachment(msgId, rootId, activeId, scope) {
     const res = await api.post(convUrl(S.activeConvId, "messages", msgId, "workflow-attachments", aid, "delete"), {
       scope,
     });
-    if (res && res.group_empty) {
+    if (res?.group_empty) {
       _workflowMinimized.delete(rootId);
       _persistWorkflowMinimized();
     } else if (res && typeof res.root_id === "number" && res.root_id !== rootId && _workflowMinimized.has(rootId)) {
@@ -731,7 +731,7 @@ export function _refreshWorkflowViewportObserver() {
   for (const el of document.querySelectorAll("#chat-messages .message[data-msg-id]")) {
     const msgId = Number(el.dataset.msgId);
     const msg = S.messages.find((m) => m.id === msgId);
-    if (msg && msg.workflow_attachments && msg.workflow_attachments.length) {
+    if (msg?.workflow_attachments?.length) {
       _workflowViewportObserver.observe(el);
     }
   }

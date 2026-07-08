@@ -217,7 +217,7 @@ export async function renameWorld(worldId) {
     closeModal();
     renderWorldsSidebar();
     if (_focusWorldId === worldId) renderLorebookDrawer();
-  } catch (e) {
+  } catch (_e) {
     toast("Failed to rename lorebook", true);
   }
 }
@@ -248,7 +248,7 @@ export async function createWorld() {
     closeModal();
     renderWorldsSidebar();
     openLorebook(w.id);
-  } catch (e) {
+  } catch (_e) {
     toast("Failed to create world", true);
   }
 }
@@ -259,7 +259,7 @@ export async function toggleWorldEnabled(worldId, enabled) {
     const idx = _worlds.findIndex((w) => w.id === worldId);
     if (idx !== -1) _worlds[idx] = { ..._worlds[idx], ...updated };
     renderWorldsSidebar();
-  } catch (e) {
+  } catch (_e) {
     toast("Failed to update world", true);
   }
 }
@@ -292,7 +292,7 @@ export async function deleteWorld(worldId) {
         }
         if (_focusWorldId === worldId) closeLorebook();
         renderWorldsSidebar();
-      } catch (e) {
+      } catch (_e) {
         toast("Failed to delete lorebook", true);
       }
     },
@@ -318,7 +318,7 @@ export async function openLorebook(worldId) {
   renderWorldsSidebar();
   try {
     await _loadEntries(worldId);
-  } catch (e) {
+  } catch (_e) {
     toast("Failed to load entries", true);
   }
   renderLorebookDrawer();
@@ -661,7 +661,7 @@ export async function lbToggleEntry(entryId, enabled) {
     const activeCount = (_entries[worldId] || []).filter((e) => e.enabled === true || e.enabled === 1).length;
     const countEl = document.querySelector(".lb-active-count");
     if (countEl) countEl.textContent = `${activeCount} active`;
-  } catch (e) {
+  } catch (_e) {
     toast("Failed to update entry", true);
   }
 }
@@ -685,7 +685,7 @@ export async function lbSaveEntry() {
     _dirty = false;
     renderLorebookDrawer();
     toast("Entry saved");
-  } catch (e) {
+  } catch (_e) {
     toast("Failed to save entry", true);
   }
 }
@@ -727,7 +727,7 @@ export function lbDeleteEntry() {
         _dirty = false;
         renderLorebookDrawer();
         toast("Entry deleted");
-      } catch (e) {
+      } catch (_e) {
         toast("Failed to delete entry", true);
       }
     },
@@ -750,7 +750,7 @@ export async function lbAddEntry() {
     if (!_entries[worldId]) _entries[worldId] = [];
     _entries[worldId].push(entry);
     _doSelectEntry(entry.id);
-  } catch (e) {
+  } catch (_e) {
     toast("Failed to create entry", true);
   }
 }
@@ -789,7 +789,7 @@ export function lbImportJson() {
       renderWorldsSidebar();
       openLorebook(world.id);
       toast(`Imported ${result.imported} ${result.imported === 1 ? "entry" : "entries"}`);
-    } catch (e) {
+    } catch (_e) {
       toast("Import failed", true);
     }
   };

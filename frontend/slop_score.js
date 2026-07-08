@@ -49,11 +49,11 @@ function paint(body, sentIndices, bySent, scores) {
     const alpha = Math.round(22 + Math.min(1, (score - SLOP_THRESHOLD) / (1 - SLOP_THRESHOLD)) * 33);
     for (const sp of spans) {
       sp.classList.add("slop-flag");
-      sp.style.setProperty("--slop-a", alpha + "%");
+      sp.style.setProperty("--slop-a", `${alpha}%`);
     }
     const badge = document.createElement("sup");
     badge.className = "slop-badge";
-    badge.textContent = Math.round(score * 100) + "%";
+    badge.textContent = `${Math.round(score * 100)}%`;
     spans[spans.length - 1].after(badge);
   });
   body.dataset.slopScored = "1";

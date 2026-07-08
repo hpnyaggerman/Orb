@@ -53,6 +53,14 @@ import {
 } from "./chat.js";
 import { initComposer, triggerAttachImage } from "./chat_composer.js";
 import {
+  addUserDirectionNote,
+  deleteDirectionNote,
+  editDirectionNote,
+  saveDirectionNote,
+  saveUserDirectionNote,
+  toggleDirectionNotesPanel,
+} from "./direction_notes_panel.js";
+import {
   addAltGreeting,
   charTagInput,
   charTagKeydown,
@@ -73,7 +81,6 @@ import {
   onCharBrowserSearch,
   randomizeInternet,
   refreshCharacters,
-  renderCharacters,
   saveCharEdit,
   saveImportedChar,
   saveInteractiveFragment,
@@ -118,7 +125,6 @@ import {
   onWorldSearch,
   openLorebook,
   renameWorld,
-  renderWorldsSidebar,
   showCreateWorldModal,
   showRenameWorldModal,
   toggleWorldEnabled,
@@ -156,7 +162,6 @@ import {
   initThemeList,
   loadSettings,
   onHybridInput,
-  toggleLocalMlEnabled,
   saveLengthGuardConfig,
   savePersona,
   saveSetting,
@@ -177,6 +182,7 @@ import {
   toggleHideUntilBaked,
   toggleLengthGuard,
   toggleLengthGuardEnforce,
+  toggleLocalMlEnabled,
   togglePreventPromptOverrides,
   toggleShowEditorDiff,
   toggleToolEnabled,
@@ -184,14 +190,6 @@ import {
   toggleWorkflowEnabled,
   toggleWorkflowsGlobal,
 } from "./settings.js";
-import {
-  addUserDirectionNote,
-  deleteDirectionNote,
-  editDirectionNote,
-  saveDirectionNote,
-  saveUserDirectionNote,
-  toggleDirectionNotesPanel,
-} from "./direction_notes_panel.js";
 import { scoreSlop } from "./slop_score.js";
 import { S } from "./state.js";
 import { initTabLock, setLockStateChangeCallback } from "./tabLock.js";
@@ -420,7 +418,7 @@ initWorkflowTextInteraction();
 initAudioPlayer();
 initTabLock();
 // Re-render messages when tab lock state changes to update toolbar buttons
-setLockStateChangeCallback((hasMultipleTabs) => {
+setLockStateChangeCallback((_hasMultipleTabs) => {
   if (S.activeConvId && !S.isStreaming) {
     renderMessages();
   }

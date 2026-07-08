@@ -13,6 +13,18 @@ import { $, avatarCell, avatarUrl, CHAT_AVATAR_ICON, convActivity, esc, NO_AVATA
 import { validate } from "./validate.js";
 
 export {
+  importInternetChar,
+  loadMoreInternet,
+  onCharBrowserSearch,
+  randomizeInternet,
+  searchInternet,
+  setCharBrowserSort,
+  setCharBrowserView,
+  setInternetSource,
+  showCharacterBrowserModal,
+  toggleTagSelection,
+} from "./library_browser.js";
+export {
   deleteInteractiveFragment,
   deleteMoodFragment,
   loadInteractiveFragments,
@@ -27,18 +39,6 @@ export {
   toggleMoodFragmentEnabled,
   updateInteractiveFragmentExample,
 } from "./library_fragments.js";
-export {
-  importInternetChar,
-  loadMoreInternet,
-  onCharBrowserSearch,
-  randomizeInternet,
-  searchInternet,
-  setCharBrowserSort,
-  setCharBrowserView,
-  setInternetSource,
-  showCharacterBrowserModal,
-  toggleTagSelection,
-} from "./library_browser.js";
 
 // Pending avatar for the character create modal (cleared on submit or cancel)
 let _pendingAvatar = null;
@@ -150,7 +150,7 @@ export async function handleImportFile(inp) {
     const r = await api.upload("/characters/import", f);
     showCharEditModal(r);
   } catch (e) {
-    toast("Import failed: " + e.message, true);
+    toast(`Import failed: ${e.message}`, true);
   }
 }
 
@@ -175,7 +175,7 @@ export async function deleteCharacter(id) {
 
 async function performDeleteCharacter(id) {
   const deleteConversations = document.getElementById("delete-conversations-checkbox")?.checked || false;
-  const url = "/characters/" + id + (deleteConversations ? "?delete_conversations=true" : "");
+  const url = `/characters/${id}${deleteConversations ? "?delete_conversations=true" : ""}`;
   try {
     await api.del(url);
     if (S.activeCharId === id) resetChatUI();
@@ -207,7 +207,7 @@ function _readAltGreetings(prefix) {
 
 // ── Avatar crop helpers
 
-export function triggerAvatarCrop(prefix, cardId) {
+export function triggerAvatarCrop(prefix, _cardId) {
   // TODO: unused param cardId
   showCropModal(({ b64, mime }) => {
     _pendingAvatar = { b64, mime };
@@ -221,7 +221,7 @@ export function triggerAvatarCrop(prefix, cardId) {
 export function exportCharacter(id, name) {
   const a = document.createElement("a");
   a.href = `/api/characters/${id}/export`;
-  a.download = (name || "character") + ".png";
+  a.download = `${name || "character"}.png`;
   document.body.appendChild(a);
   a.click();
   document.body.removeChild(a);
@@ -239,7 +239,7 @@ export async function handleExpressionsZip(inp, id) {
     const r = await api.upload(`/characters/${id}/expressions`, f);
     if (status) status.textContent = `${r.labels.length} expressions loaded`;
   } catch (e) {
-    if (status) status.textContent = "Error: " + e.message;
+    if (status) status.textContent = `Error: ${e.message}`;
   }
 }
 
@@ -410,7 +410,7 @@ export async function createCharacter() {
       payload.avatar_mime = _pendingAvatar.mime;
     }
     _pendingAvatar = null;
-    const created = await api.post("/characters", payload);
+    const _created = await api.post("/characters", payload);
     closeModal();
     await loadCharacters();
     toast("Created");
@@ -475,7 +475,7 @@ export function charTagRemoveChip(i) {
 export async function showCharEditModal(idOrData) {
   _pendingAvatar = null;
   const isNew = typeof idOrData === "object";
-  const c = isNew ? idOrData : await api.get("/characters/" + idOrData);
+  const c = isNew ? idOrData : await api.get(`/characters/${idOrData}`);
 
   let av;
   if (isNew && c.avatar_b64) {
@@ -618,7 +618,7 @@ export async function saveCharEdit(id, exportAfter = false) {
   const avatarChanged = !!_pendingAvatar;
   _pendingAvatar = null;
   try {
-    await api.put("/characters/" + id, d);
+    await api.put(`/characters/${id}`, d);
     if (avatarChanged) {
       _avatarBust.set(id, Date.now());
       if (S.activeCharId === id) {

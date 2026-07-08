@@ -92,7 +92,7 @@ export async function saveMoodFragment(isEdit) {
     return;
   }
   try {
-    if (isEdit) await api.put("/fragments/" + d.id, d);
+    if (isEdit) await api.put(`/fragments/${d.id}`, d);
     else await api.post("/fragments", d);
     closeModal();
     await loadMoodFragments();
@@ -111,7 +111,7 @@ export async function deleteMoodFragment(id) {
     },
     async () => {
       try {
-        await api.del("/fragments/" + id);
+        await api.del(`/fragments/${id}`);
         await loadMoodFragments();
         toast("Mood fragment deleted");
       } catch (e) {
@@ -123,7 +123,7 @@ export async function deleteMoodFragment(id) {
 
 export async function toggleMoodFragmentEnabled(id, newEnabled) {
   try {
-    await api.put("/fragments/" + id, { enabled: newEnabled });
+    await api.put(`/fragments/${id}`, { enabled: newEnabled });
     // Update local state optimistically
     const frag = S.moodFragments.find((f) => f.id === id);
     if (frag) frag.enabled = newEnabled;
@@ -237,7 +237,7 @@ function setupDragAndDrop(container) {
     }
   });
 
-  container.addEventListener("dragend", (e) => {
+  container.addEventListener("dragend", (_e) => {
     if (dragged) {
       dragged.classList.remove("dragging");
       dragged = null;
@@ -411,7 +411,7 @@ export async function saveInteractiveFragment(isEdit) {
     return;
   }
   try {
-    if (isEdit) await api.put("/interactive-fragments/" + d.id, d);
+    if (isEdit) await api.put(`/interactive-fragments/${d.id}`, d);
     else await api.post("/interactive-fragments", d);
     closeModal();
     await loadInteractiveFragments();
@@ -430,7 +430,7 @@ export async function deleteInteractiveFragment(id) {
     },
     async () => {
       try {
-        await api.del("/interactive-fragments/" + id);
+        await api.del(`/interactive-fragments/${id}`);
         await loadInteractiveFragments();
         toast("Interactive fragment deleted");
       } catch (e) {
@@ -442,7 +442,7 @@ export async function deleteInteractiveFragment(id) {
 
 export async function toggleInteractiveFragmentEnabled(id, newEnabled) {
   try {
-    await api.put("/interactive-fragments/" + id, { enabled: newEnabled });
+    await api.put(`/interactive-fragments/${id}`, { enabled: newEnabled });
     const frag = S.interactiveFragments.find((f) => f.id === id);
     if (frag) frag.enabled = newEnabled;
     renderInteractiveFragments();

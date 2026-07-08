@@ -19,15 +19,15 @@ const DOMAINS = [
 let libraryByName = {};
 
 function fmtSize(bytes) {
-  if (bytes < 1024) return bytes + " B";
-  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(0) + " KB";
-  return (bytes / 1024 / 1024).toFixed(1) + " MB";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
 function fmtDate(iso) {
   if (!iso) return "";
   const d = new Date(iso);
-  return isNaN(d) ? iso : d.toLocaleString();
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
 }
 
 export function showPresetsModal() {
@@ -124,7 +124,7 @@ export async function doCreateSnapshot() {
     toast("Snapshot saved");
     refreshPresetLibrary();
   } catch (e) {
-    toast("Snapshot failed: " + e.message, true);
+    toast(`Snapshot failed: ${e.message}`, true);
   }
 }
 
@@ -144,7 +144,7 @@ export async function handlePresetImportFile(inp) {
     toast("Added to library");
     refreshPresetLibrary();
   } catch (e) {
-    toast("Import failed: " + e.message, true);
+    toast(`Import failed: ${e.message}`, true);
   }
 }
 
@@ -171,7 +171,7 @@ export function applyPreset(name) {
         const r = await api.post(`/presets/${encodeURIComponent(name)}/apply`, {});
         finishApply(r);
       } catch (e) {
-        toast("Apply failed: " + e.message, true);
+        toast(`Apply failed: ${e.message}`, true);
       }
     },
   );
@@ -198,7 +198,7 @@ export function restorePreset(name) {
         toast("Restored — reloading");
         setTimeout(() => location.reload(), 600);
       } catch (e) {
-        toast("Restore failed: " + e.message, true);
+        toast(`Restore failed: ${e.message}`, true);
       }
     },
   );
@@ -222,7 +222,7 @@ function finishApply(r) {
   const counts = Object.entries(r.summary || {})
     .map(([k, v]) => `${v} ${k}`)
     .join(", ");
-  toast(`Imported${counts ? ": " + counts : ""} — reloading`);
+  toast(`Imported${counts ? `: ${counts}` : ""} — reloading`);
   setTimeout(() => location.reload(), 800);
 }
 

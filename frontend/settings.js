@@ -6,7 +6,7 @@
 import { api } from "./api.js";
 import { renderInspectorSecondary, renderMessages } from "./chat.js";
 import { renderInteractiveFragments } from "./library_fragments.js";
-import { closeModal, showConfirmModal, showModal } from "./modal.js";
+import { showConfirmModal, showModal } from "./modal.js";
 import { closeUtilityPanel, isUtilityPanelOpen, openUtilityPanel } from "./panels.js";
 import { initComboboxes, loadAgentModelConfigs, loadEndpoints, renderEndpoints } from "./settings_models.js";
 import { loadPersonas, updateUserBtn } from "./settings_personas.js";
@@ -45,7 +45,7 @@ let _themes = null;
 
 export function applyTheme(name) {
   if (_themes && !_themes.includes(name)) name = "dark";
-  $("theme-link").href = "/static/themes/" + name + ".css";
+  $("theme-link").href = `/static/themes/${name}.css`;
   localStorage.setItem("ar-theme", name);
   const sel = $("theme-select");
   if (sel) sel.value = name;
@@ -204,7 +204,7 @@ async function loadLocalMLSection() {
   let st;
   try {
     st = await api.get("/local-ml/status");
-  } catch (e) {
+  } catch (_e) {
     el.innerHTML = '<div class="tool-card-desc">Could not load Local ML status.</div>';
     return;
   }
@@ -247,7 +247,7 @@ export async function downloadLocalMlModel(feature) {
   try {
     await api.post(`/local-ml/${feature}/download`, {});
     await loadLocalMLSection(); // flips the card to a toggle
-  } catch (e) {
+  } catch (_e) {
     toast("Download failed", true);
     if (btn) {
       btn.disabled = false;
@@ -260,7 +260,7 @@ export async function toggleLocalMlEnabled(feature, on) {
   try {
     const res = await api.post(`/local-ml/${feature}/enabled`, { enabled: on });
     if (res && typeof res.local_ml_enabled === "object") S.settings.local_ml_enabled = res.local_ml_enabled;
-  } catch (e) {
+  } catch (_e) {
     toast("Failed to toggle", true);
   }
   loadLocalMLSection();
@@ -315,7 +315,7 @@ const AUDIT_TYPE_DEFS = [
 async function persistSettings(payload) {
   try {
     S.settings = await api.put("/settings", payload);
-  } catch (e) {
+  } catch (_e) {
     toast("Failed to save setting", true);
   }
 }
@@ -448,7 +448,7 @@ export async function saveLengthGuardConfig() {
   try {
     S.settings = await api.put("/settings", { length_guard_max_words: words, length_guard_max_paragraphs: paras });
     toast("Length guard saved");
-  } catch (e) {
+  } catch (_e) {
     toast("Failed to save length guard config", true);
   }
 }
@@ -470,9 +470,9 @@ export async function toggleWorkflowsGlobal(on) {
 
 export async function toggleWorkflowEnabled(wid, on) {
   try {
-    const res = await api.post("/workflows/" + wid + "/enabled", { enabled: on });
+    const res = await api.post(`/workflows/${wid}/enabled`, { enabled: on });
     if (res && typeof res.workflow_enabled === "object") S.settings.workflow_enabled = res.workflow_enabled;
-  } catch (e) {
+  } catch (_e) {
     toast("Failed to toggle workflow", true);
   }
   // Re-render regardless: on success the reassigned map drives the new state; on
@@ -885,7 +885,7 @@ window.deletePhraseGroup = async (groupId) => {
         toast("Phrase group deleted");
         showPhraseBankModal();
       } catch (e) {
-        toast("Failed to delete: " + e.message, true);
+        toast(`Failed to delete: ${e.message}`, true);
       }
     },
   );
@@ -932,7 +932,7 @@ window.savePhraseGroup = async (editId) => {
     }
     showPhraseBankModal(); // Refresh the main modal
   } catch (e) {
-    toast("Failed to save: " + e.message, true);
+    toast(`Failed to save: ${e.message}`, true);
   }
 };
 
@@ -952,7 +952,7 @@ export async function showResetConfirmModal() {
         toast("Reset successful — reloading…");
         window.location.reload();
       } catch (e) {
-        toast("Failed to reset: " + e.message, true);
+        toast(`Failed to reset: ${e.message}`, true);
       }
     },
   );

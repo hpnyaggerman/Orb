@@ -5,16 +5,16 @@
 // loads the workflow's global config slot into a snapshot the widget and panel
 // share by reference.
 
+import { api } from "/static/api.js";
 import {
-  S,
   registerWorkflowEventHandler,
   registerWorkflowMessageButton,
   registerWorkflowToolsPanelCard,
+  S,
 } from "/static/state.js";
-import { api } from "/static/api.js";
-import { initWidget, createButtonRenderer, attachmentRenderer, autoplayHandler } from "./widget.js";
+import { configPanelRenderer, initConfigPanel } from "./config_panel.js";
 import { initKaraoke } from "./karaoke.js";
-import { initConfigPanel, configPanelRenderer } from "./config_panel.js";
+import { attachmentRenderer, autoplayHandler, createButtonRenderer, initWidget } from "./widget.js";
 
 const WORKFLOW_ID = "tts";
 
@@ -26,7 +26,7 @@ function injectStyles() {
   const link = document.createElement("link");
   link.id = "tts-workflow-styles";
   link.rel = "stylesheet";
-  link.href = "/static/workflows/" + WORKFLOW_ID + "/tts.css";
+  link.href = `/static/workflows/${WORKFLOW_ID}/tts.css`;
   document.head.appendChild(link);
 }
 
@@ -43,8 +43,8 @@ const config = {
 
 async function loadConfig() {
   try {
-    const res = await api.get("/workflows/" + WORKFLOW_ID + "/config");
-    const c = (res && res.config) || {};
+    const res = await api.get(`/workflows/${WORKFLOW_ID}/config`);
+    const c = res?.config || {};
     if (typeof c.auto_play === "boolean") config.auto_play = c.auto_play;
     if (typeof c.volume === "number") config.volume = c.volume;
     if (typeof c.click_granularity === "string") config.click_granularity = c.click_granularity;
@@ -65,6 +65,6 @@ registerWorkflowMessageButton(WORKFLOW_ID, createButtonRenderer);
 // bytes), so it stays keyed by workflow id and is never gated by the toggle.
 S.workflowAttachmentRenderers[WORKFLOW_ID] = attachmentRenderer;
 registerWorkflowToolsPanelCard(WORKFLOW_ID, configPanelRenderer);
-registerWorkflowEventHandler(WORKFLOW_ID, WORKFLOW_ID + "_autoplay", autoplayHandler);
+registerWorkflowEventHandler(WORKFLOW_ID, `${WORKFLOW_ID}_autoplay`, autoplayHandler);
 
 loadConfig();

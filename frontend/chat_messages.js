@@ -11,8 +11,6 @@ import {
   setMessages,
 } from "./chat_core.js";
 import { renderInspector } from "./chat_inspector.js";
-import { renderDirectionNotesPanel } from "./direction_notes_panel.js";
-import { isUtilityPanelOpen } from "./panels.js";
 import {
   afterStream,
   agentPayload,
@@ -22,7 +20,9 @@ import {
   setStreaming,
   streamPost,
 } from "./chat_stream.js";
+import { renderDirectionNotesPanel } from "./direction_notes_panel.js";
 import { showConfirmModal } from "./modal.js";
+import { isUtilityPanelOpen } from "./panels.js";
 import { S } from "./state.js";
 import { $, convUrl, resolvePlaceholders, scrollToBottom, scrollToMessage, toast } from "./utils.js";
 import { validate } from "./validate.js";
@@ -43,7 +43,7 @@ export function startEdit(msgId) {
   } else {
     scrollToMessage(msgId);
   }
-  focusEditTextarea($("edit-textarea-" + msgId), cancelEdit);
+  focusEditTextarea($(`edit-textarea-${msgId}`), cancelEdit);
   // Editing is isolated to the message itself; it must not re-fetch the
   // director-log or repaint the inspector bar.
 }
@@ -70,7 +70,7 @@ export function startForkEdit(msgId) {
   } else {
     scrollToMessage(msgId);
   }
-  focusEditTextarea($("edit-textarea-" + msgId), cancelForkEdit);
+  focusEditTextarea($(`edit-textarea-${msgId}`), cancelForkEdit);
   // Surface the director data for the reply that currently follows this message.
   const childAssistant = S.messages.find((c) => c.parent_id === msgId && c.role === "assistant");
   if (childAssistant) inspectMessage(childAssistant.id);
@@ -94,7 +94,7 @@ export async function inspectMessage(msgId) {
     S.reasoningPassSelected = highestPassIdx;
     S.reasoningUserOverride = false;
     renderInspector();
-  } catch (e) {
+  } catch (_e) {
     // If the log doesn't exist (e.g. very old messages before logs were added), silently ignore
     S.inspectedDirectorData = null;
     renderInspector();
@@ -119,7 +119,7 @@ function focusEditTextarea(ta, onEscape) {
   ta.selectionStart = ta.selectionEnd = ta.value.length;
   ta.style.height = "auto";
   const lineH = parseFloat(getComputedStyle(ta).lineHeight) || 20;
-  ta.style.height = Math.max(lineH * 3, ta.scrollHeight) + "px";
+  ta.style.height = `${Math.max(lineH * 3, ta.scrollHeight)}px`;
 }
 
 export async function deleteMessage(msgId) {
@@ -356,8 +356,8 @@ export function initChatSwipeNav() {
 }
 
 // ── Edit Message
-export async function saveEdit(msgId, role) {
-  const ta = $("edit-textarea-" + msgId);
+export async function saveEdit(msgId, _role) {
+  const ta = $(`edit-textarea-${msgId}`);
   if (!ta) return;
   const content = ta.value;
   const validation = validate.validateEditMessage(content);
@@ -401,7 +401,7 @@ export async function saveEdit(msgId, role) {
 // user row repaints with its sibling swipe-nav (afterStream's in-place finalize
 // fast path only adds nav to the assistant bubble).
 export async function saveForkEdit(msgId) {
-  const ta = $("edit-textarea-" + msgId);
+  const ta = $(`edit-textarea-${msgId}`);
   if (!ta) return;
   const content = ta.value;
   const validation = validate.validateEditMessage(content);
@@ -458,7 +458,7 @@ export async function saveForkEdit(msgId) {
     await processSSEStream(resp, ct, msgDiv, S.abortController.signal);
   } catch (e) {
     if (e.name === "AbortError") S.wasAborted = true;
-    else toast("Error: " + e.message, true);
+    else toast(`Error: ${e.message}`, true);
   }
   await afterStream();
   renderMessages();
