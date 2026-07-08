@@ -101,6 +101,7 @@ PRESERVED_COLUMNS: dict[str, tuple[str, ...]] = {
         "generated_chars",
         "workflows_globally_enabled",
         "workflow_enabled",
+        "local_ml_enabled",
     ),
 }
 
