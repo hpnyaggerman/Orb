@@ -45,9 +45,9 @@ MODELS: dict[str, ModelSpec] = {
         size_mb=161,
     ),
     "emotion_classifier": ModelSpec(
-        repo_id="chartreuse-verte/distilbert-base-uncased-go-emotions-student-GGUF",
-        filename="goemotions-Q8_0.gguf",
-        size_mb=73,
+        repo_id="chartreuse-verte/ettin-emotion-28-multilabel-68m",
+        filename="gguf/ettin-emotion-28ml-68m-q8_0.gguf",
+        size_mb=71,
     ),
 }
 
