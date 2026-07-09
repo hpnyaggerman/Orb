@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, List, Literal, Optional
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class SettingsUpdate(BaseModel):
@@ -18,12 +18,12 @@ class SettingsUpdate(BaseModel):
     endpoint_url: Optional[str] = None
     api_key: Optional[str] = None
     model_name: Optional[str] = None
-    temperature: Optional[float] = None
-    min_p: Optional[float] = None
-    top_k: Optional[int] = None
-    top_p: Optional[float] = None
-    repetition_penalty: Optional[float] = None
-    max_tokens: Optional[int] = None
+    # Hyperparameters (temperature, min_p, top_k, top_p, repetition_penalty,
+    # max_tokens) are intentionally NOT on this contract: they live on the active
+    # endpoint's model_config and are edited via /models/{id}. get_settings()
+    # overlays them for reads, so a write here would be silently discarded. The
+    # frontend still includes them in its /settings PUT payload; extra fields are
+    # ignored (default Pydantic behavior), mirroring completion_mode.
     shared_system_prompt: Optional[str] = None
     system_prompt: Optional[str] = None
     user_name: Optional[str] = None
@@ -226,6 +226,42 @@ class CompressRequest(BaseModel):
 
 class CheckpointRequest(BaseModel):
     title: Optional[str] = None
+
+
+class DocumentSpan(BaseModel):
+    # Offsets are JS/UTF-16-domain and opaque to the backend — only shape-validated.
+    # ge=0 only, deliberately NO coupling to len(content): Python counts code points
+    # and JS counts UTF-16 units, so a valid JS offset can legitimately exceed
+    # Python's string length on emoji-bearing docs (see plan design table).
+    start: int = Field(ge=0)
+    end: int = Field(ge=0)
+
+
+class DocumentCreate(BaseModel):
+    title: Optional[str] = None
+
+
+class DocumentUpdate(BaseModel):
+    title: Optional[str] = None
+    content: Optional[str] = None
+    generated_spans: Optional[List[DocumentSpan]] = None
+
+    @model_validator(mode="after")
+    def _spans_need_content(self) -> "DocumentUpdate":
+        # content and generated_spans must travel together: spans without content
+        # would apply offsets to stale server-side text. Title-only updates are
+        # unaffected (neither field set). Uses model_fields_set so an explicit
+        # content="" still counts as "provided".
+        if "generated_spans" in self.model_fields_set and "content" not in self.model_fields_set:
+            raise ValueError("generated_spans requires content in the same update")
+        return self
+
+
+class DocumentGenerateRequest(BaseModel):
+    prompt: str
+    # Assisted continuation: interpret ### SYSTEM/USER/ASSISTANT line macros and
+    # render through the model's chat template. Defaults false → Raw (verbatim).
+    assisted: bool = False
 
 
 class CharacterCardCreate(BaseModel):

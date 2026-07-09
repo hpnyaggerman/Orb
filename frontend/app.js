@@ -61,6 +61,24 @@ import {
   toggleDirectionNotesPanel,
 } from "./direction_notes_panel.js";
 import {
+  collapseDocs,
+  createDocument,
+  deleteDocument,
+  docGenerate,
+  docRedo,
+  docStop,
+  docUndo,
+  expandDocs,
+  initDocumentMode,
+  loadDocuments,
+  onDocSearch,
+  openDocument,
+  renameActiveDocument,
+  renameDocument,
+  setDocAssisted,
+  toggleDocumentMode,
+} from "./document.js";
+import {
   addAltGreeting,
   charTagInput,
   charTagKeydown,
@@ -377,6 +395,21 @@ Object.assign(window, {
   triggerAttachImage,
   showAvatarPopup,
   hideAvatarPopup,
+  // document mode
+  toggleDocumentMode,
+  setDocAssisted,
+  createDocument,
+  openDocument,
+  deleteDocument,
+  renameDocument,
+  renameActiveDocument,
+  onDocSearch,
+  expandDocs,
+  collapseDocs,
+  docGenerate,
+  docStop,
+  docUndo,
+  docRedo,
   // worlds / lorebook
   showCreateWorldModal,
   createWorld,
@@ -473,6 +506,13 @@ async function initAll() {
     await loadWorlds();
   } catch (e) {
     console.error("Failed to load worlds:", e);
+  }
+
+  initDocumentMode();
+  try {
+    await loadDocuments();
+  } catch (e) {
+    console.error("Failed to load documents:", e);
   }
 
   try {
