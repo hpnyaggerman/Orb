@@ -117,22 +117,60 @@ export function renderEditor(pageEl, content, spans, anchorOffset = null) {
   return anchorEl;
 }
 
-// The serialized string offset of the collapsed selection within *pageEl*. A
-// selection outside the editor (e.g. focus on a button) resolves to end-of-doc.
-// Measures by serializing a fragment cloned from doc-start to the caret, so it
-// stays consistent with serializeEditor (spans + newlines counted identically).
-export function computeCaretOffset(pageEl) {
-  const full = serializeEditor(pageEl).content;
-  const sel = window.getSelection();
-  if (!sel || sel.rangeCount === 0) return full.length;
-  const range = sel.getRangeAt(0);
-  if (!pageEl.contains(range.startContainer)) return full.length;
+// The serialized string offset of a DOM position (*container*, *offset*) within
+// *pageEl* — a position outside the editor resolves to end-of-doc. Measures by
+// serializing a fragment cloned from doc-start to the position, so it stays
+// consistent with serializeEditor (spans + newlines counted identically). Shared
+// by the caret reader and the popup's caretPositionFromPoint hit-test.
+export function offsetOfPosition(pageEl, container, offset) {
+  if (!container || !pageEl.contains(container)) return serializeEditor(pageEl).content.length;
   const pre = document.createRange();
   pre.selectNodeContents(pageEl);
-  pre.setEnd(range.startContainer, range.startOffset);
+  pre.setEnd(container, offset);
   const tmp = document.createElement("div");
   tmp.appendChild(pre.cloneContents());
   return serializeEditor(tmp).content.length;
+}
+
+// The serialized string offset of the collapsed selection within *pageEl*. A
+// selection outside the editor (e.g. focus on a button) resolves to end-of-doc.
+export function computeCaretOffset(pageEl) {
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return serializeEditor(pageEl).content.length;
+  const range = sel.getRangeAt(0);
+  return offsetOfPosition(pageEl, range.startContainer, range.startOffset);
+}
+
+// A DOM Range spanning serialized offsets [start, end) — the inverse of
+// serialize, used to position the alternatives popup over a token. Walks text
+// nodes in document order (same pattern as setCaretOffset), so it is exact on the
+// DOM renderEditor produces. Offsets past the end clamp to end-of-doc.
+export function rangeForOffsets(pageEl, start, end) {
+  const range = document.createRange();
+  const walker = document.createTreeWalker(pageEl, NodeFilter.SHOW_TEXT);
+  let pos = 0;
+  let startSet = false;
+  let lastNode = null;
+  let node = walker.nextNode();
+  while (node) {
+    const len = node.data.length;
+    if (!startSet && start <= pos + len) {
+      range.setStart(node, start - pos);
+      startSet = true;
+    }
+    if (startSet && end <= pos + len) {
+      range.setEnd(node, end - pos);
+      return range;
+    }
+    pos += len;
+    lastNode = node;
+    node = walker.nextNode();
+  }
+  // start and/or end fell past the last text node → clamp to end-of-doc.
+  if (!startSet) range.selectNodeContents(pageEl);
+  if (lastNode) range.setEndAfter(lastNode);
+  else range.selectNodeContents(pageEl);
+  return range;
 }
 
 // True when the collapsed caret sits inside a .gen-text span, i.e. native typing
@@ -210,6 +248,27 @@ export function installPlainTextGuards(pageEl) {
       e.preventDefault();
       insertPlainText(pageEl, e.data);
     }
+  });
+  // Mobile IMEs commit via composition (insertCompositionText), which beforeinput
+  // can't cancel — the chars land tinted inside the gen-text span. Once the
+  // composition commits, lift the just-typed run back out as plain text (this is
+  // what desktop gets up-front from the beforeinput guard above).
+  pageEl.addEventListener("compositionend", (e) => {
+    const data = e.data;
+    if (!data || !caretInGenText(pageEl)) return;
+    const sel = window.getSelection();
+    const range = sel.getRangeAt(0);
+    const node = range.startContainer;
+    const end = range.startOffset;
+    const start = end - data.length;
+    // ponytail: only the common case — the commit is a plain trailing run in one
+    // text node. Anything fancier (multi-node, autocorrect replacement) bails.
+    if (node.nodeType !== Node.TEXT_NODE || start < 0 || node.data.slice(start, end) !== data) return;
+    range.setStart(node, start);
+    range.deleteContents(); // drop the tinted copy; range collapses to `start`
+    sel.removeAllRanges();
+    sel.addRange(range);
+    insertPlainText(pageEl, data); // re-insert plain + split span + fire input
   });
 }
 
