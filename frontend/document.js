@@ -6,6 +6,7 @@ import { api } from "./api.js";
 import {
   caretAfter,
   computeCaretOffset,
+  ensureTrailingFiller,
   installPlainTextGuards,
   renderEditor,
   serializeEditor,
@@ -446,6 +447,7 @@ async function flushSave({ keepalive = false } = {}) {
 }
 
 function onEditorInput() {
+  ensureTrailingFiller($("doc-page")); // keep a trailing "\n" visible (see the fn)
   S.docDirty = true;
   setSaveState("Unsaved…");
   updateTokenCount();

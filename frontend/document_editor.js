@@ -28,7 +28,7 @@ export function serializeEditor(pageEl, stopNode = null) {
       } else if (child.nodeType === Node.ELEMENT_NODE) {
         const tag = child.tagName;
         if (tag === "BR") {
-          content += "\n";
+          if (!child.hasAttribute("data-filler")) content += "\n"; // filler <br> is display-only
         } else if (child.classList?.contains("gen-text")) {
           const start = content.length;
           content += child.textContent; // spans are non-nested → textContent is exact
@@ -114,7 +114,35 @@ export function renderEditor(pageEl, content, spans, anchorOffset = null) {
       pageEl.appendChild(document.createTextNode(text));
     }
   }
+  ensureTrailingFiller(pageEl);
   return anchorEl;
+}
+
+// pre-wrap won't render a line box for a trailing "\n" (the browser's own "filler
+// <br>" case), so a single Enter at end-of-doc leaves the caret stuck on the
+// previous line and the next keystroke lands there. Keep one throwaway
+// <br data-filler> as the last child exactly when the content ends in "\n" — the
+// serializer ignores it. Absent otherwise so #doc-page:empty (the placeholder)
+// still triggers. Call after every mutation (input handler) and every render.
+export function ensureTrailingFiller(pageEl) {
+  let filler = null;
+  let last = null;
+  for (const c of pageEl.childNodes) {
+    if (c.nodeType === Node.ELEMENT_NODE && c.tagName === "BR" && c.hasAttribute("data-filler")) filler = c;
+    else if (c.nodeType !== Node.TEXT_NODE || c.data !== "") last = c; // ignore empty text nodes
+  }
+  const endsNL =
+    (last?.nodeType === Node.TEXT_NODE && last.data.endsWith("\n")) ||
+    (last?.nodeType === Node.ELEMENT_NODE && last.tagName === "BR");
+  if (endsNL) {
+    if (!filler) {
+      filler = document.createElement("br");
+      filler.setAttribute("data-filler", "");
+    }
+    if (pageEl.lastChild !== filler) pageEl.appendChild(filler);
+  } else if (filler) {
+    filler.remove();
+  }
 }
 
 // The serialized string offset of a DOM position (*container*, *offset*) within
@@ -216,10 +244,20 @@ export function insertPlainText(pageEl, text) {
     if (!node.data) span.remove(); // don't leave an empty highlighted span
   } else {
     range.insertNode(plain);
+    // Inserting at the end of a text node splits it, leaving an empty text node
+    // after `plain` — it hides the trailing "\n" from the filler logic and puts
+    // the caret at an ambiguous boundary. Drop it.
+    if (plain.nextSibling?.nodeType === Node.TEXT_NODE && plain.nextSibling.data === "") plain.nextSibling.remove();
   }
 
+  // Sync the filler *before* placing the caret: a "\n" inserted at end-of-doc has
+  // no line box until the filler <br> exists, so a caret set first renders stuck
+  // between rows and the next keystroke lands on the previous line. If the filler
+  // directly follows `plain`, park the caret after it (the new empty last line).
+  ensureTrailingFiller(pageEl);
+  const next = plain.nextSibling;
   const r = document.createRange();
-  r.setStartAfter(plain);
+  r.setStartAfter(next?.nodeType === Node.ELEMENT_NODE && next.hasAttribute?.("data-filler") ? next : plain);
   r.collapse(true);
   sel.removeAllRanges();
   sel.addRange(r);
