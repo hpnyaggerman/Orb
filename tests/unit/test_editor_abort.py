@@ -143,7 +143,8 @@ async def test_editor_iteration_exception_propagates():
     # once for iteration 1, once for iteration 2 (which exploded).
     assert llm_call_count == 2
 
-    # editor_pass only yields reasoning deltas and the final "done" dict.
-    # fake_complete produced no reasoning events, and the final "done"
-    # must NOT be yielded because the generator aborted mid-loop.
-    assert len(events) == 0
+    # Iteration 1's successful patch surfaces as a draft_update before the
+    # failure; the final "done" must NOT be yielded because the generator
+    # aborted mid-loop (fake_complete produced no reasoning events).
+    assert [e["type"] for e in events] == ["draft_update"]
+    assert events[0]["draft"] == "Fixed 0. Sentence 1."

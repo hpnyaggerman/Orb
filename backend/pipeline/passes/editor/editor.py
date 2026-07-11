@@ -428,6 +428,7 @@ async def editor_pass(
 
     Yields:
         ``{"type": "reasoning", "delta": str, "pass": "editor"}``
+        ``{"type": "draft_update", "draft": str}``
         ``{"type": "done", "draft": str|None, "debug": str, "elapsed": int,
          "tool_calls": list, "feedback": dict}``
     """
@@ -449,6 +450,8 @@ async def editor_pass(
     ):
         if ev["type"] == "reasoning":
             yield {"type": "reasoning", "delta": ev["delta"], "pass": "editor"}
+        elif ev["type"] == "draft_update":
+            yield ev
         elif ev["type"] == "done":
             edit_done = ev
 
@@ -556,6 +559,10 @@ async def editor_stage(
                     "event": "reasoning",
                     "data": {"pass": "editor", "delta": event["delta"]},
                 }
+            elif event["type"] == "draft_update":
+                # Cosmetic intermediate paint; the done→writer_rewrite block below
+                # stays the sole authority over state.resp_text.
+                yield {"event": "draft_update", "data": {"draft": event["draft"]}}
             elif event["type"] == "done":
                 state.latency += int(event.get("elapsed", 0) or 0)
                 refined_draft = event["draft"]
@@ -605,6 +612,9 @@ async def _run_edit_loop(
 
     Yields:
         ``{"type": "reasoning", "delta": str}``
+        ``{"type": "draft_update", "draft": str}`` — after every mutation of the
+        working draft (per prefilled forced call in text mode, per applied
+        patch/rewrite otherwise); cosmetic, the ``done`` draft stays authoritative
         ``{"type": "done", "draft": str|None, "debug": str, "elapsed": int}``
     """
     t0 = time.monotonic()
@@ -739,9 +749,17 @@ async def _run_edit_loop(
             resp: dict = {}
             if prefill_targets:
                 logger.info("Editor iteration %d: prefill mode, %d target(s)", iteration + 1, len(prefill_targets))
-                found, prefill_debug = await _collect_prefill_patches(
+                found: list[dict] = []
+                prefill_debug: list[str] = []
+                async for ev in _collect_prefill_patches(
                     client, base, trailing[0], current_draft, prefill_targets, hyperparams, kv_tracker
-                )
+                ):
+                    found.extend(ev["patches"])
+                    prefill_debug.append(ev["debug"])
+                    if ev["patches"]:
+                        # ponytail: re-applies all found patches per call; n ≤ MAX_PREFILL_TARGETS
+                        preview, _ = apply_patches(current_draft, found)
+                        yield {"type": "draft_update", "draft": preview}
                 debug_parts.append(f"Iteration {iteration + 1} prefill calls:\n" + "\n".join(prefill_debug))
                 # One combined entry — byte-shaped like the classic call's parse,
                 # so apply/replay/events downstream stay untouched.
@@ -812,6 +830,7 @@ async def _run_edit_loop(
                     break
                 pre_len = len(current_draft)
                 current_draft = rewritten
+                yield {"type": "draft_update", "draft": current_draft}
                 length_guard_triggered = False
                 logger.info(
                     "Editor iteration %d: rewrite applied, draft %d→%d chars",
@@ -884,6 +903,7 @@ async def _run_edit_loop(
 
             pre_len = len(current_draft)
             current_draft, errors = apply_patches(current_draft, patches)
+            yield {"type": "draft_update", "draft": current_draft}
             logger.info(
                 "Editor iteration %d: applied %d patches, draft %d→%d chars",
                 iteration + 1,
@@ -1061,21 +1081,21 @@ async def _collect_prefill_patches(
     targets: list[tuple[str, str]],
     hyperparams: dict,
     kv_tracker: _KVCacheTracker | None,
-) -> tuple[list[dict], list[str]]:
+) -> AsyncIterator[dict]:
     """One prefilled forced editor_apply_patch call per flagged sentence.
 
     Every call extends the same [prefix, user, draft] stack, so only the short
     per-finding tail is uncached. Reasoning is off: the prefilled open turn
     pre-closes the thought channel anyway (and the chat-transport fallback,
     where prefill/grammar are dropped, should answer without thinking too).
-    Returns ``(patches, debug_lines)``.
+    Yields exactly one ``{"type": "patches", "patches": list, "debug": str}``
+    per forced call (abort included), so the caller can surface per-finding
+    progress; draft state stays the caller's concern.
     """
-    patches: list[dict] = []
-    debug: list[str] = []
     for span, why in targets:
         if client.is_aborted:
-            debug.append("aborted mid-batch")
-            break
+            yield {"type": "patches", "patches": [], "debug": "aborted mid-batch"}
+            return
         trailing: list[WireMessage] = [
             context_user,
             {"role": "assistant", "content": draft},
@@ -1101,9 +1121,11 @@ async def _collect_prefill_patches(
             for p in (call.get("arguments") or {}).get("patches", [])
             if isinstance(p, dict) and p.get("search")
         ]
-        patches.extend(got)
-        debug.append(f"{span[:60]!r} → " + (" / ".join(repr((p.get("replace") or "")[:60]) for p in got) or "<no patch>"))
-    return patches, debug
+        yield {
+            "type": "patches",
+            "patches": got,
+            "debug": f"{span[:60]!r} → " + (" / ".join(repr((p.get("replace") or "")[:60]) for p in got) or "<no patch>"),
+        }
 
 
 def _append_iteration_context(

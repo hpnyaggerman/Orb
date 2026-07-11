@@ -114,16 +114,33 @@ class _FakeClient:
         }
 
 
+async def _drain(gen) -> tuple[list[dict], list[str], list[dict]]:
+    """Consume the collector: (all patches, debug lines, raw events)."""
+    patches: list[dict] = []
+    debug: list[str] = []
+    events: list[dict] = []
+    async for ev in gen:
+        assert ev["type"] == "patches"
+        events.append(ev)
+        patches.extend(ev["patches"])
+        debug.append(ev["debug"])
+    return patches, debug, events
+
+
 async def test_collect_prefill_patches_one_forced_call_per_target():
     client = _FakeClient()
     base = CachedBase(prefix=({"role": "system", "content": "sys"},), tools=(TOOLS["editor_apply_patch"]["schema"],), model="m")
     draft = "First flagged. Second flagged."
     targets = [("First flagged.", "why one"), ("Second flagged.", "why two")]
 
-    patches, debug = await _collect_prefill_patches(
-        client, base, {"role": "user", "content": "user msg"}, draft, targets, {"temperature": 0.25}, None
+    patches, debug, events = await _drain(
+        _collect_prefill_patches(
+            client, base, {"role": "user", "content": "user msg"}, draft, targets, {"temperature": 0.25}, None
+        )
     )
 
+    # One event per forced call, each carrying that call's patch.
+    assert [len(ev["patches"]) for ev in events] == [1, 1]
     assert patches == [
         {"search": "First flagged.", "replace": "NEW"},
         {"search": "Second flagged.", "replace": "NEW"},
@@ -143,8 +160,9 @@ async def test_collect_prefill_patches_stops_on_abort():
     client = _FakeClient()
     client.is_aborted = True
     base = CachedBase(prefix=(), tools=(), model="m")
-    patches, debug = await _collect_prefill_patches(
-        client, base, {"role": "user", "content": "u"}, "draft", [("span", "why")], {}, None
+    patches, debug, events = await _drain(
+        _collect_prefill_patches(client, base, {"role": "user", "content": "u"}, "draft", [("span", "why")], {}, None)
     )
     assert patches == []
     assert debug == ["aborted mid-batch"]
+    assert events == [{"type": "patches", "patches": [], "debug": "aborted mid-batch"}]

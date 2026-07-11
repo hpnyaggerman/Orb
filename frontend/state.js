@@ -59,6 +59,7 @@ export const S = {
   contextSizeOpen: true,
   reasoningEnabled: { director: false, writer: false, editor: false, scripter: false },
   pendingRefineDiff: null, // {original, ops} set on writer_rewrite, cleared on next stream
+  editorDraftBaseline: null, // writer's pre-editor text; diff anchor across draft_update/writer_rewrite, reset on next stream
   showEditorDiff: true, // when false, editor-pass diff highlights + "clear diff" button are suppressed
   editorAuditToggles: {
     // per-scanner on/off for the Output Auditor; keys match backend AUDIT_TYPES

@@ -228,7 +228,12 @@ class LLMClient:
         # model rejecting tool_choice). The error lands before any SSE event,
         # so the retry is clean.
         for attempt in range(2):
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            # No read timeout on streaming calls: the server sends zero bytes
+            # while prefilling a large prompt (or queueing behind another
+            # request), and a long silence is normal there — a flat read
+            # timeout intermittently killed long turns. Abort/stop and the
+            # disconnect watcher remain the recovery paths.
+            async with httpx.AsyncClient(timeout=httpx.Timeout(self.timeout, read=None)) as client:
                 async with client.stream("POST", self._url(), json=body, headers=self._headers()) as resp:
                     if resp.status_code >= 400:
                         # Concern 1: surface the error body. Streaming responses
@@ -446,7 +451,10 @@ class LLMClient:
         Races reads against abort via the shared :meth:`_iter_sse_payloads`.
         The single HTTP seam of the text transport (patched wholesale in tests).
         """
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        # read=None for the same reason as the chat transport: llama.cpp is
+        # silent for the whole prefill, which legitimately exceeds any flat
+        # read timeout on long contexts.
+        async with httpx.AsyncClient(timeout=httpx.Timeout(self.timeout, read=None)) as client:
             async with client.stream("POST", url, json=body, headers=self._headers()) as resp:
                 if resp.status_code >= 400:
                     try:

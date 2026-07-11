@@ -355,10 +355,12 @@ export async function processSSEStream(resp, container, msgDiv, signal) {
     fullResponse = "",
     rewrittenResponse = null,
     firstToken = true,
-    currentEvent = null;
+    currentEvent = null,
+    dispatchErrorToasted = false;
 
   // Clear any diff from the previous turn
   S.pendingRefineDiff = null;
+  S.editorDraftBaseline = null;
 
   // Reset reasoning state for this generation turn
   S.reasoningDirector = "";
@@ -385,36 +387,47 @@ export async function processSSEStream(resp, container, msgDiv, signal) {
         currentEvent = line.slice(7).trim();
       } else if (line.startsWith("data: ") && currentEvent) {
         const data = line.slice(6);
-        handleSSEEvent(
-          currentEvent,
-          data,
-          container,
-          msgDiv,
-          () => {
-            if (firstToken) {
-              firstToken = false;
-              if (!msgDiv.isConnected && !S.hideUntilBaked) container.appendChild(msgDiv);
-              if (S.streamingBodyEl) S.streamingBodyEl.innerHTML = "";
-            }
-            fullResponse += data.replace(/\\n/g, "\n");
-            S.streamingContent = rewrittenResponse || fullResponse;
-            if (S.streamingBodyEl) S.streamingBodyEl.innerHTML = formatProse(rewrittenResponse || fullResponse);
-            scrollToBottom();
-          },
-          (text) => {
-            rewrittenResponse = text;
-            S.streamingContent = text;
-            if (S.streamingBodyEl) {
-              const html =
-                S.pendingRefineDiff && S.showEditorDiff
-                  ? formatProseWithDiff(S.pendingRefineDiff.ops)
-                  : formatProse(text);
-              smoothUpdateBody(S.streamingBodyEl, html, scrollToBottom);
-            } else {
+        // A throwing handler must not kill the read loop: the fetch would stay
+        // open but unread, leaving the backend generating headless. Contain it,
+        // log the culprit event + stack, and keep reading.
+        try {
+          handleSSEEvent(
+            currentEvent,
+            data,
+            container,
+            msgDiv,
+            () => {
+              if (firstToken) {
+                firstToken = false;
+                if (!msgDiv.isConnected && !S.hideUntilBaked) container.appendChild(msgDiv);
+                if (S.streamingBodyEl) S.streamingBodyEl.innerHTML = "";
+              }
+              fullResponse += data.replace(/\\n/g, "\n");
+              S.streamingContent = rewrittenResponse || fullResponse;
+              if (S.streamingBodyEl) S.streamingBodyEl.innerHTML = formatProse(rewrittenResponse || fullResponse);
               scrollToBottom();
-            }
-          },
-        );
+            },
+            (text) => {
+              rewrittenResponse = text;
+              S.streamingContent = text;
+              if (S.streamingBodyEl) {
+                const html =
+                  S.pendingRefineDiff && S.showEditorDiff
+                    ? formatProseWithDiff(S.pendingRefineDiff.ops)
+                    : formatProse(text);
+                smoothUpdateBody(S.streamingBodyEl, html, scrollToBottom);
+              } else {
+                scrollToBottom();
+              }
+            },
+          );
+        } catch (e) {
+          console.error(`SSE handler for "${currentEvent}" threw:`, e);
+          if (!dispatchErrorToasted) {
+            dispatchErrorToasted = true;
+            toast(`Stream handler error on "${currentEvent}": ${e.message}`, true);
+          }
+        }
         currentEvent = null;
       }
     }
@@ -422,6 +435,16 @@ export async function processSSEStream(resp, container, msgDiv, signal) {
   // reader.cancel() resolves read() with done:true rather than throwing, so
   // re-throw here so callers can set S.wasAborted and wait for the backend.
   if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+}
+
+// Shared draft-bubble swap for draft_update/writer_rewrite: diffs against the
+// writer's original text (stashed on first use — S.streamingContent still holds
+// it then), so successive editor updates don't chain diffs off each other.
+function swapStreamingDraft(text, onRewrite) {
+  if (S.editorDraftBaseline === null) S.editorDraftBaseline = S.streamingContent || "";
+  const original = resolvePlaceholders(S.editorDraftBaseline);
+  S.pendingRefineDiff = { original, ops: sentenceDiff(original, resolvePlaceholders(text)) };
+  onRewrite(text);
 }
 
 function handleSSEEvent(event, data, _container, msgDiv, onToken, onRewrite) {
@@ -471,16 +494,19 @@ function handleSSEEvent(event, data, _container, msgDiv, onToken, onRewrite) {
         if (JSON.parse(data).editor_will_run) setGenerationPhase("refining");
       } catch (_) {}
       break;
+    case "draft_update":
+      // Intermediate editor paint (per iteration, or per forced patch call in
+      // text mode). Cosmetic: writer_rewrite/afterStream stay authoritative.
+      try {
+        const draft = JSON.parse(data).draft;
+        if (draft !== S.streamingContent) swapStreamingDraft(draft, onRewrite);
+      } catch (_) {}
+      break;
     case "writer_rewrite":
       setGenerationPhase("refining");
       _advanceReasoningPass(2); // writer done, editor starting → move to Editor dot
       try {
-        const refined = JSON.parse(data).refined_text;
-        // S.streamingContent still holds the writer's unrefined text at this point
-        const original = resolvePlaceholders(S.streamingContent || "");
-        const refinedResolved = resolvePlaceholders(refined);
-        S.pendingRefineDiff = { original, ops: sentenceDiff(original, refinedResolved) };
-        onRewrite(refined);
+        swapStreamingDraft(JSON.parse(data).refined_text, onRewrite);
       } catch (_) {}
       break;
     case "reasoning": {
@@ -676,8 +702,16 @@ async function runStreamRequest(path, body, cutoffMsgId = null) {
     const resp = await streamPost(path, body, S.abortController.signal);
     await processSSEStream(resp, ct, msgDiv, S.abortController.signal);
   } catch (e) {
-    if (e.name === "AbortError") S.wasAborted = true;
-    else toast(`Error: ${e.message}`, true);
+    if (e.name === "AbortError") {
+      S.wasAborted = true;
+    } else {
+      // Client-side stream failure: the backend may still be generating into
+      // an unread connection. Abort it (fetch + POST /stop) so it doesn't run
+      // headless; its fallback persistence keeps whatever streamed so far.
+      console.error("Stream failed client-side:", e);
+      toast(`Error: ${e.message}`, true);
+      stopGeneration();
+    }
   }
   await afterStream();
 }
@@ -757,7 +791,10 @@ export async function sendMessage() {
     if (e.name === "AbortError") {
       S.wasAborted = true;
     } else {
+      // Same headless-backend guard as runStreamRequest.
+      console.error("Stream failed client-side:", e);
       toast(`Connection error: ${e.message}`, true);
+      stopGeneration();
     }
   }
   await afterStream();
