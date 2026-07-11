@@ -551,12 +551,12 @@ function _renderInspectorMain() {
 // uploaded expression pack, watch the latest assistant message on a 1s tick and
 // swap the popup image to the matching expression. The tick is only a scheduler:
 // the classified unit is the last few *sentences*, but because generation speed
-// is unknowable (3 sentences in 1s or 60s), cadence is normalized in time:
+// is unknowable, cadence is normalized in time:
 // never more than one call per _EXPR_MIN_INTERVAL_MS, and if no sentence has
 // completed for _EXPR_STALE_MS while text keeps streaming in, the partial
 // sentence is classified rather than leaving the expression frozen.
-const _EXPR_TAIL_SENTENCES = 3;
-const _EXPR_MIN_INTERVAL_MS = 1000;
+const _EXPR_TAIL_SENTENCES = 7;
+const _EXPR_MIN_INTERVAL_MS = 1500;
 const _EXPR_STALE_MS = 5000;
 const _EXPR_MIN_GROWTH_CHARS = 40; // don't classify a fragment like "She"
 let _exprTimer = null;
