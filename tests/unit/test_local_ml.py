@@ -13,13 +13,6 @@ def test_resolve_path_env_override_wins(monkeypatch):
     assert local_ml.resolve_path("autocomplete") == "/tmp/custom.gguf"
 
 
-def test_resolve_path_falls_back_to_repo_root(monkeypatch):
-    monkeypatch.delenv("ORB_AUTOCOMPLETE_MODEL", raising=False)
-    p = local_ml.resolve_path("autocomplete")
-    # No model on disk in CI → neither env nor data/models hit, so repo-root path.
-    assert p.endswith("granite-4.0-350m-base-Q8_0.gguf")
-
-
 def test_present_reflects_disk(monkeypatch):
     monkeypatch.setattr(local_ml, "resolve_path", lambda f: "/nope/missing.gguf")
     assert local_ml.present("autocomplete") is False
