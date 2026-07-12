@@ -35,8 +35,8 @@ class ModelSpec:
 
 MODELS: dict[str, ModelSpec] = {
     "autocomplete": ModelSpec(
-        repo_id="ibm-granite/granite-4.0-350m-base-GGUF",
-        filename="granite-4.0-350m-base-Q8_0.gguf",
+        repo_id="chartreuse-verte/orb-human-typeahead-350m-v1",
+        filename="GGUF/orb-human-typeahead-350m-v1-Q8_0.gguf",
         size_mb=370,
     ),
     "slop_classifier": ModelSpec(
@@ -85,9 +85,9 @@ GO_EMOTIONS: tuple[str, ...] = (
     "neutral",
 )
 
-_REPEAT_PENALTY = 1.1
-_FREQUENCY_PENALTY = 0.0
-_TOP_P = 0.9
+_REPEAT_PENALTY = 1.2
+_FREQUENCY_PENALTY = 0.15
+_TOP_P = 0.8
 _TOP_K = 20
 
 # Llama is a single, non-reentrant context; serialize every call through a
@@ -147,12 +147,30 @@ def present(feature: str) -> bool:
     return os.path.exists(resolve_path(feature))
 
 
+def prune_stale(root: str | None = None) -> None:
+    """Delete any .gguf under data/models/ that no current MODELS spec claims.
+
+    Runs after every download so bumping a model (e.g. v2 typeahead) doesn't leave
+    the old weights eating disk. Only touches .gguf files — hf's .cache bookkeeping
+    and manual drops of other extensions are left alone.
+    """
+    root = root or model_dir()
+    keep = {os.path.normpath(os.path.join(root, s.filename)) for s in MODELS.values()}
+    for dirpath, _dirs, files in os.walk(root):
+        for name in files:
+            if name.endswith(".gguf"):
+                p = os.path.normpath(os.path.join(dirpath, name))
+                if p not in keep:
+                    os.remove(p)
+
+
 def download(feature: str) -> None:
-    """Fetch feature's GGUF into data/models/. Blocking; run in a thread."""
+    """Fetch feature's GGUF into data/models/, then prune stale weights. Blocking; run in a thread."""
     from huggingface_hub import hf_hub_download  # noqa: PLC0415 — deferred
 
     spec = MODELS[feature]
     hf_hub_download(repo_id=spec.repo_id, filename=spec.filename, local_dir=model_dir())
+    prune_stale()  # after fetch: new file lands before old ones go, so a failed download keeps the old model
 
 
 def available(feature: str = "autocomplete") -> tuple[bool, str]:
@@ -203,7 +221,7 @@ async def acomplete(
     prompt: str,
     n_predict: int = 12,
     stop: Sequence[str] = ("\n",),
-    temperature: float = 0.3,
+    temperature: float = 0.25,
 ) -> str:
     """Raw continuation of *prompt* using *feature*'s model (no chat template).
 
@@ -219,7 +237,7 @@ async def complete(
     prompt: str,
     n_predict: int = 12,
     stop: Sequence[str] = ("\n",),
-    temperature: float = 0.3,
+    temperature: float = 0.25,
 ) -> str:
     """Autocomplete continuation — thin alias over ``acomplete('autocomplete', ...)``."""
     return await acomplete("autocomplete", prompt, n_predict, stop, temperature)
@@ -355,4 +373,21 @@ if __name__ == "__main__":
     assert "Aria: You look lost." in p
     assert "Aria is a wry tavern keeper." in p
     assert "Director" not in p and "Scene Direction" not in p
-    print("build_prompt OK\n---\n" + p)
+    print("build_prompt OK")
+
+    # Self-check for the destructive prune (temp dir; never touches real models).
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as d:
+        keep = os.path.join(d, MODELS["autocomplete"].filename)
+        os.makedirs(os.path.dirname(keep), exist_ok=True)
+        open(keep, "w").close()
+        stale = os.path.join(d, "old-granite-Q8_0.gguf")
+        open(stale, "w").close()
+        notes = os.path.join(d, "readme.txt")  # non-gguf must survive
+        open(notes, "w").close()
+        prune_stale(d)
+        assert os.path.exists(keep), "current spec's gguf must be kept"
+        assert not os.path.exists(stale), "unclaimed gguf must be removed"
+        assert os.path.exists(notes), "non-gguf must be left alone"
+    print("prune_stale OK")
