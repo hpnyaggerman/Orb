@@ -622,8 +622,12 @@ export async function showAvatarPopup() {
   }
   const charId = S.activeCharId;
   const img = document.getElementById("avatar-popup-image");
+  const hasExpr = (S.characters || []).find((c) => c.id === charId)?.has_expressions;
   if (img) {
-    img.src = `/api/characters/${charId}/avatar?t=${Date.now()}`;
+    // With a pack, hold off on the plain avatar (its dimensions usually differ
+    // from the pack's, resizing the frame ~1s later) and show neutral instead
+    // once labels arrive below.
+    if (!hasExpr) img.src = `/api/characters/${charId}/avatar?t=${Date.now()}`;
     img._exprSrc = null;
     img._exprText = null;
     img._exprFullLen = 0;
@@ -632,10 +636,20 @@ export async function showAvatarPopup() {
   popup.classList.remove("hidden");
 
   let labels = [];
-  try {
-    ({ labels } = await api.get(`/characters/${charId}/expressions`));
-  } catch {
-    labels = [];
+  if (hasExpr) {
+    try {
+      ({ labels } = await api.get(`/characters/${charId}/expressions`));
+    } catch {
+      labels = [];
+    }
+  }
+  if (img && hasExpr && !popup.classList.contains("hidden")) {
+    if (labels.includes("neutral")) {
+      img._exprSrc = `/api/characters/${charId}/expressions/neutral`;
+      img.src = img._exprSrc;
+    } else {
+      img.src = `/api/characters/${charId}/avatar?t=${Date.now()}`;
+    }
   }
   // Popup may have been closed while the fetch was in flight.
   if (popup.classList.contains("hidden") || !labels.length || !img) return;
