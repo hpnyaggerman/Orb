@@ -194,6 +194,7 @@ async def update_settings(data: dict) -> SettingsRow:
         allowed = [
             "endpoint_url",
             "api_key",
+            "llm_proxy",
             "model_name",
             "temperature",
             "min_p",

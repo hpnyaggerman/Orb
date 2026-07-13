@@ -184,6 +184,7 @@ async def api_summarize_conversation(cid: str, data: SummarizeRequest, request: 
         settings["endpoint_url"],
         api_key=settings.get("api_key", ""),
         abort_token=abort_token,
+        proxy=settings.get("llm_proxy"),
     )
     summarizer = ConversationSummarizer(client, settings)
     llm_messages = summarizer.build_messages(

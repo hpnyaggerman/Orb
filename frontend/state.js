@@ -74,6 +74,7 @@ export const S = {
   },
   hideUntilBaked: false, // when true, in-flight streaming message is kept detached from DOM until stream finalizes
   preventPromptOverrides: false, // when true, character card system_prompt and post_history_instructions are ignored
+  llmProxy: "", // http/https/socks5 proxy URL routing all LLM requests; empty = direct connection
   autoscrollEnabled: true, // whether to auto-scroll chat to bottom during streaming
   _programmaticScroll: false, // true while scrollToBottom() is executing — suppresses scroll listener
   renderWindowStart: 0, // index into S.messages of the first message rendered; older messages are backfilled lazily on scroll-up. 0 means full history is in view.

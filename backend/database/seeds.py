@@ -183,6 +183,7 @@ DEFAULT_ENABLED_TOOLS = {
 DEFAULT_SETTINGS = {
     "endpoint_url": "http://localhost:5000/v1",
     "api_key": "",
+    "llm_proxy": "",
     "model_name": "default",
     "temperature": 0.8,
     "min_p": 0,

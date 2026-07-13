@@ -8,6 +8,7 @@ it needs and the shapes stay discoverable in one place.
 from __future__ import annotations
 
 from typing import Any, List, Literal, Optional
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, field_validator
 
@@ -17,6 +18,7 @@ class SettingsUpdate(BaseModel):
 
     endpoint_url: Optional[str] = None
     api_key: Optional[str] = None
+    llm_proxy: Optional[str] = None
     model_name: Optional[str] = None
     temperature: Optional[float] = None
     min_p: Optional[float] = None
@@ -53,6 +55,21 @@ class SettingsUpdate(BaseModel):
     direction_notes_inject: Optional[Literal["off", "director", "writer", "both"]] = None
     inspector_open_states: Optional[dict] = None
     workflows_globally_enabled: Optional[bool] = None
+
+    @field_validator("llm_proxy")
+    @classmethod
+    def _validate_llm_proxy(cls, v: Optional[str]) -> Optional[str]:
+        # Empty/blank means "no proxy". A set value must use a scheme httpx
+        # accepts (http/https, or socks5 via the socksio extra); reject anything
+        # else here so a typo fails at save time, not on every LLM turn.
+        if v is None:
+            return v
+        v = v.strip()
+        if not v:
+            return ""
+        if urlsplit(v).scheme.lower() not in ("http", "https", "socks5"):
+            raise ValueError("proxy URL must start with http://, https://, or socks5://")
+        return v
 
 
 class DirectionNoteUpdate(BaseModel):

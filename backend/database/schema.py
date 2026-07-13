@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS settings (
     id INTEGER PRIMARY KEY CHECK (id = 1),
     endpoint_url TEXT NOT NULL,
     api_key TEXT NOT NULL DEFAULT '',
+    llm_proxy TEXT NOT NULL DEFAULT '',
     model_name TEXT NOT NULL,
     temperature REAL NOT NULL DEFAULT 0.8,
     min_p REAL NOT NULL DEFAULT 0.05,
