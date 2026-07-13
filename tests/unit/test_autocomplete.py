@@ -47,6 +47,31 @@ def test_build_prompt_skips_empty_summary_and_messages():
     assert p == "U: go"
 
 
+def test_complete_reconciles_trailing_space(monkeypatch):
+    """The model garbles a whitespace-ending prompt, so complete() rstrips before
+    generating; when it trimmed, it lstrips the completion so it rejoins the
+    frontend's untrimmed draft without doubling the separator space."""
+    seen: dict[str, str] = {}
+
+    async def fake_acomplete(feature, prompt, *args, **kwargs):
+        seen["prompt"] = prompt
+        return " hands"  # model re-emits a leading word separator
+
+    monkeypatch.setattr(lc, "acomplete", fake_acomplete)
+
+    # Trailing space: prompt trimmed before generation, leading space dropped
+    # (the user already typed the separator).
+    out = asyncio.run(lc.complete("Sam: I hold up both "))
+    assert seen["prompt"] == "Sam: I hold up both"  # no trailing space reaches the model
+    assert out == "hands"
+
+    # No trailing space: completion passes through untouched — its leading space
+    # is the separator the user hasn't typed yet.
+    out = asyncio.run(lc.complete("Sam: I hold up both"))
+    assert seen["prompt"] == "Sam: I hold up both"
+    assert out == " hands"
+
+
 # ── Tier 2: real weights (opt-in) ───────────────────────────────────────────
 
 

@@ -239,8 +239,19 @@ async def complete(
     stop: Sequence[str] = ("\n",),
     temperature: float = 0.25,
 ) -> str:
-    """Autocomplete continuation — thin alias over ``acomplete('autocomplete', ...)``."""
-    return await acomplete("autocomplete", prompt, n_predict, stop, temperature)
+    """Autocomplete continuation over ``acomplete('autocomplete', ...)``.
+
+    Works around a tokenization quirk of the 350m typeahead: a prompt ending in
+    whitespace generates garbage ("I hold up both " fails where "I hold up both"
+    works). rstrip the prompt before generating; build_prompt guarantees the only
+    trailing whitespace is the user's draft tail, so this trims exactly the draft.
+    When we did trim, the user already typed the word separator, so lstrip the
+    model's re-emitted leading space back off — the frontend appends the completion
+    to the untrimmed draft, and "...both " + " hands" would double the space.
+    """
+    trimmed = prompt.rstrip()
+    completion = await acomplete("autocomplete", trimmed, n_predict, stop, temperature)
+    return completion.lstrip() if trimmed != prompt else completion
 
 
 # --- Sequence classification (slop scorer) -------------------------------------
