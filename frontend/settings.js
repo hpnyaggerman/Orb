@@ -6,7 +6,7 @@
 import { api } from "./api.js";
 import { renderInspectorSecondary, renderMessages } from "./chat.js";
 import { renderInteractiveFragments } from "./library_fragments.js";
-import { showConfirmModal, showModal } from "./modal.js";
+import { confirmDelete, showConfirmModal, showModal } from "./modal.js";
 import { closeUtilityPanel, isUtilityPanelOpen, openUtilityPanel } from "./panels.js";
 import { initComboboxes, loadAgentModelConfigs, loadEndpoints, renderEndpoints } from "./settings_models.js";
 import { loadPersonas, updateUserBtn } from "./settings_personas.js";
@@ -208,16 +208,21 @@ async function loadLocalMLSection() {
     el.innerHTML = '<div class="tool-card-desc">Could not load Local ML status.</div>';
     return;
   }
+  // Deps missing → one grouped opt-in card instead of repeating the install
+  // command on every feature.
+  if (!st.deps_ok) {
+    const names = Object.keys(st.features)
+      .map((f) => `<li>${esc(LOCAL_ML_LABELS[f] || f)}</li>`)
+      .join("");
+    el.innerHTML = `<div class="tool-card" style="opacity:0.5">
+      <div class="tool-card-desc">Opt in to unlock:<ul style="margin:4px 0 0;padding-left:18px">${names}</ul></div>
+      <div class="tool-card-desc" style="user-select:all;word-break:break-all">${esc(st.install_cmd || "pip install -r requirements-ml.txt")}</div>
+    </div>`;
+    return;
+  }
   el.innerHTML = Object.entries(st.features)
     .map(([f, info]) => {
       const name = esc(LOCAL_ML_LABELS[f] || f);
-      if (!st.deps_ok) {
-        return `<div class="tool-card" style="opacity:0.5">
-          <div class="tool-card-header"><span class="tool-card-name">${name}</span>
-            <button class="btn btn-sm" disabled>Download</button></div>
-          <div class="tool-card-desc" style="user-select:all;word-break:break-all">${esc(st.install_cmd || "pip install -r requirements-ml.txt")}</div>
-        </div>`;
-      }
       if (!info.present) {
         return `<div class="tool-card">
           <div class="tool-card-header"><span class="tool-card-name">${name}</span>
@@ -873,22 +878,15 @@ window.editPhraseGroup = async (groupId) => {
 };
 
 window.deletePhraseGroup = async (groupId) => {
-  showConfirmModal(
-    {
-      title: "Delete Phrase Group",
-      message: "Are you sure you want to delete this phrase group?",
-      confirmText: "Delete",
-    },
-    async () => {
-      try {
-        await api.del(`/phrase-bank/${groupId}`);
-        toast("Phrase group deleted");
-        showPhraseBankModal();
-      } catch (e) {
-        toast(`Failed to delete: ${e.message}`, true);
-      }
-    },
-  );
+  confirmDelete("Phrase Group", "Are you sure you want to delete this phrase group?", async () => {
+    try {
+      await api.del(`/phrase-bank/${groupId}`);
+      toast("Phrase group deleted");
+      showPhraseBankModal();
+    } catch (e) {
+      toast(`Failed to delete: ${e.message}`, true);
+    }
+  });
 };
 
 window.savePhraseGroup = async (editId) => {
