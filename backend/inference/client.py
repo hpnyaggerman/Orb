@@ -214,11 +214,7 @@ class LLMClient:
                 if produced or self.is_aborted or attempt >= self.retry.count or not self.retry.should_retry(exc):
                     raise
                 attempt += 1
-                detail = (
-                    f"HTTP {exc.response.status_code}"
-                    if isinstance(exc, httpx.HTTPStatusError)
-                    else type(exc).__name__
-                )
+                detail = f"HTTP {exc.response.status_code}" if isinstance(exc, httpx.HTTPStatusError) else type(exc).__name__
                 logger.warning(
                     "LLM retry %d/%d after %s; waiting %.1fs",
                     attempt,
