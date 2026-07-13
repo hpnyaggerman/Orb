@@ -21,7 +21,7 @@ from ...database import (
     update_document,
 )
 from ...features.documents import DocumentContinuer
-from ...inference import AbortToken, LLMClient
+from ...inference import AbortToken, LLMClient, RetryPolicy
 from ..deps import _active_aborts, _CleanupStreamingResponse, _sse_stream
 from ..schemas import DocumentCreate, DocumentGenerateRequest, DocumentUpdate
 
@@ -80,6 +80,7 @@ async def api_generate_document(did: str, data: DocumentGenerateRequest, request
         api_key=settings.get("api_key", ""),
         abort_token=abort_token,
         completion_mode=settings.get("completion_mode", "chat"),
+        retry=RetryPolicy.from_settings(settings),
     )
     continuer = DocumentContinuer(client, settings)
 

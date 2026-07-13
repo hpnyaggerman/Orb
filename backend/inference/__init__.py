@@ -11,6 +11,7 @@ from .cached_call import CachedBase
 from .client import AbortToken, LLMClient, parse_tool_calls, reasoning_cfg
 from .endpoint_profiles import ModelProfile, is_forced_tool_choice, profile_for
 from .kv_tracker import _KVCacheTracker
+from .retry import RetryPolicy
 from .prompt_builder import (
     build_direction_note_prompt,
     build_director_scene_step_prompt,
@@ -46,6 +47,7 @@ __all__ = [
     # client — LLM transport
     "AbortToken",
     "LLMClient",
+    "RetryPolicy",
     "parse_tool_calls",
     "reasoning_cfg",
     # endpoint_profiles — provider adapter

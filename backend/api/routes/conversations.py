@@ -46,7 +46,7 @@ from ...database import (
 from ...database.models import ConversationRow
 from ...features import lorebook
 from ...features.summarization import ConversationSummarizer
-from ...inference import AbortToken, LLMClient, prompt_builder
+from ...inference import AbortToken, LLMClient, RetryPolicy, prompt_builder
 from ...pipeline import agent_enabled, resolve_persona_id
 from ..deps import _active_aborts, _CleanupStreamingResponse, _sse_stream
 from ..schemas import (
@@ -185,6 +185,7 @@ async def api_summarize_conversation(cid: str, data: SummarizeRequest, request: 
         api_key=settings.get("api_key", ""),
         abort_token=abort_token,
         completion_mode=settings.get("completion_mode", "chat"),
+        retry=RetryPolicy.from_settings(settings),
     )
     summarizer = ConversationSummarizer(client, settings)
     llm_messages = summarizer.build_messages(
