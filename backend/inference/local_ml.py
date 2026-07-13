@@ -352,7 +352,7 @@ def build_prompt(
         lines.append("***Roleplay chat below***")
     for m in recent:
         name = user_name if m.get("role") == "user" else char_name
-        content = (m.get("content") or "").strip()[:max_msg_chars]
+        content = (m.get("content") or "").strip()[-max_msg_chars:]  # keep the tail: typeahead reacts to the latest action, which is at the END of the message
         if content:
             lines.append(f"{name}: {content}")
     # No trailing newline: the model continues this exact line.
