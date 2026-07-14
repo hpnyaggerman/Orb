@@ -8,7 +8,14 @@ submodule path directly.
 from __future__ import annotations
 
 from .cached_call import CachedBase
-from .client import AbortToken, LLMClient, parse_tool_calls, reasoning_cfg
+from .client import (
+    AbortToken,
+    LLMClient,
+    agent_client_from_settings,
+    client_from_settings,
+    parse_tool_calls,
+    reasoning_cfg,
+)
 from .endpoint_profiles import ModelProfile, is_forced_tool_choice, profile_for
 from .kv_tracker import _KVCacheTracker
 from .prompt_builder import (
@@ -47,9 +54,12 @@ __all__ = [
     # client — LLM transport
     "AbortToken",
     "LLMClient",
-    "RetryPolicy",
+    "agent_client_from_settings",
+    "client_from_settings",
     "parse_tool_calls",
     "reasoning_cfg",
+    # retry
+    "RetryPolicy",
     # endpoint_profiles — provider adapter
     "ModelProfile",
     "is_forced_tool_choice",
