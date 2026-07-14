@@ -27,7 +27,7 @@ from ...database import (
     get_workflow_attachment_by_id,
     set_workflow_enabled,
 )
-from ...inference import LLMClient
+from ...inference import LLMClient, RetryPolicy
 from ...workflows import (
     HookType,
     OnDemandCtx,
@@ -147,6 +147,7 @@ async def api_trigger_workflow(cid: str, workflow_id: str, body: dict = Body(def
             settings_snapshot["endpoint_url"],
             api_key=settings_snapshot.get("api_key", ""),
             completion_mode=settings_snapshot.get("completion_mode", "chat"),
+            retry=RetryPolicy.from_settings(settings_snapshot),
         )
         async with workflow_character_state_lock(conv.get("character_card_id") or "", workflow_id):
             try:
@@ -200,6 +201,7 @@ async def api_regenerate_attachment(cid: str, mid: int, aid: int, body: dict = B
             settings_snapshot["endpoint_url"],
             api_key=settings_snapshot.get("api_key", ""),
             completion_mode=settings_snapshot.get("completion_mode", "chat"),
+            retry=RetryPolicy.from_settings(settings_snapshot),
         )
 
         card_id = conv.get("character_card_id")
@@ -390,6 +392,7 @@ async def api_reroll_gen_attachment(cid: str, mid: int, aid: int, body: dict = B
             settings_snapshot["endpoint_url"],
             api_key=settings_snapshot.get("api_key", ""),
             completion_mode=settings_snapshot.get("completion_mode", "chat"),
+            retry=RetryPolicy.from_settings(settings_snapshot),
         )
 
         try:
@@ -519,6 +522,7 @@ async def api_rehydrate_attachment(cid: str, mid: int, aid: int, body: dict = Bo
             settings_snapshot["endpoint_url"],
             api_key=settings_snapshot.get("api_key", ""),
             completion_mode=settings_snapshot.get("completion_mode", "chat"),
+            retry=RetryPolicy.from_settings(settings_snapshot),
         )
 
         try:
