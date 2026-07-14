@@ -185,7 +185,7 @@ export function renderSettings() {
           <span class="tog-slider"></span>
         </label>
       </div>
-      <div class="tool-card-desc">Retry completions that fail with a temporary server error (503, 429, 529, dropped connection, ...) so a late-stage failure doesn't waste the whole turn's compute.</div>
+      <div class="tool-card-desc">Retry completions that fail with a temporary server error (503, 429, 529, dropped connection, etc).</div>
       ${
         S.retryEnabled
           ? `<div class="lg-config">
