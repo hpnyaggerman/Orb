@@ -140,6 +140,11 @@ class SettingsRow(_SettingsBase, total=False):
     # falls back to completion_mode when the agent shares the writer endpoint.
     completion_mode: Literal["chat", "text"]
     agent_completion_mode: Literal["chat", "text"]
+    # Per-endpoint proxy URL, surfaced by the same overlay (default ''); empty
+    # means a direct connection. agent_proxy falls back to proxy when the agent
+    # shares the writer endpoint.
+    proxy: str
+    agent_proxy: str
     # Agent-endpoint cascade overlays (present only when it resolves).
     agent_endpoint_url: str
     agent_api_key: str
@@ -285,6 +290,7 @@ class EndpointRow(TypedDict):
     active_model_config_id: int | None
     agent_active_model_config_id: int | None
     completion_mode: Literal["chat", "text"]
+    proxy: str
 
 
 class ModelConfigRow(TypedDict):

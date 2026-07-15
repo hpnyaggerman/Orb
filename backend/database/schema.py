@@ -224,7 +224,8 @@ CREATE TABLE IF NOT EXISTS endpoints (
     api_key TEXT NOT NULL DEFAULT '',
     active_model_config_id INTEGER REFERENCES model_configs(id) ON DELETE SET NULL,
     agent_active_model_config_id INTEGER REFERENCES model_configs(id) ON DELETE SET NULL,
-    completion_mode TEXT NOT NULL DEFAULT 'chat' CHECK (completion_mode IN ('chat', 'text'))
+    completion_mode TEXT NOT NULL DEFAULT 'chat' CHECK (completion_mode IN ('chat', 'text')),
+    proxy TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS model_configs (

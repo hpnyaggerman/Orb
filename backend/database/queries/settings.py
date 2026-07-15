@@ -38,13 +38,14 @@ async def get_settings() -> SettingsRow:
         if active_ep_id:
             ep_rows = list(
                 await db.execute_fetchall(
-                    "SELECT id, url, api_key, active_model_config_id, completion_mode FROM endpoints WHERE id = ?",
+                    "SELECT id, url, api_key, active_model_config_id, completion_mode, proxy FROM endpoints WHERE id = ?",
                     (active_ep_id,),
                 )
             )
             if ep_rows:
                 ep = dict(ep_rows[0])
                 s["completion_mode"] = ep.get("completion_mode", "chat")
+                s["proxy"] = ep.get("proxy", "")
                 mc_id = ep.get("active_model_config_id")
                 if mc_id:
                     mc_rows = list(
@@ -82,13 +83,14 @@ async def get_settings() -> SettingsRow:
         if not s["agent_same_as_writer"] and agent_ep_id:
             agent_ep_rows = list(
                 await db.execute_fetchall(
-                    "SELECT id, url, api_key, active_model_config_id, agent_active_model_config_id, completion_mode FROM endpoints WHERE id = ?",
+                    "SELECT id, url, api_key, active_model_config_id, agent_active_model_config_id, completion_mode, proxy FROM endpoints WHERE id = ?",
                     (agent_ep_id,),
                 )
             )
             if agent_ep_rows:
                 agent_ep = dict(agent_ep_rows[0])
                 s["agent_completion_mode"] = agent_ep.get("completion_mode", "chat")
+                s["agent_proxy"] = agent_ep.get("proxy", "")
                 agent_mc_id = agent_ep.get("agent_active_model_config_id")
                 if agent_mc_id:
                     agent_mc_rows = list(
@@ -121,6 +123,8 @@ async def get_settings() -> SettingsRow:
         # writer endpoint inherits the writer's mode (its own overlay never ran).
         s.setdefault("completion_mode", "chat")
         s.setdefault("agent_completion_mode", s["completion_mode"])
+        s.setdefault("proxy", "")
+        s.setdefault("agent_proxy", s["proxy"])
         return cast(SettingsRow, s)
 
 
