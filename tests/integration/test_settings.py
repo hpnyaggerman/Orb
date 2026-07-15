@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 
+from backend.database.queries.settings import get_settings
+from backend.inference import client_from_settings
+
 
 async def test_get_settings_returns_defaults(client, db):
     resp = await client.get("/api/settings")
@@ -70,6 +73,33 @@ async def test_hyperparam_edit_via_model_config_reflected_in_get_settings(client
     updated = (await client.get("/api/settings")).json()
     assert updated["max_tokens"] == 1234
     assert updated["temperature"] == 0.33
+
+
+async def test_endpoint_proxy_overlay_and_client_threading(client):
+    # Proxy lives on the endpoints row; get_settings() overlays it as
+    # settings["proxy"] (mirroring completion_mode) and client_from_settings
+    # threads it into the LLMClient that talks to the endpoint.
+    settings = (await client.get("/api/settings")).json()
+    endpoint_id = settings["active_endpoint_id"]
+    assert endpoint_id is not None
+    assert settings.get("proxy", "") == ""
+    assert client_from_settings(await get_settings()).proxy is None
+
+    resp = await client.put(f"/api/endpoints/{endpoint_id}", json={"proxy": "socks5://127.0.0.1:1080"})
+    assert resp.status_code == 200
+    assert resp.json()["proxy"] == "socks5://127.0.0.1:1080"
+
+    updated = (await client.get("/api/settings")).json()
+    assert updated["proxy"] == "socks5://127.0.0.1:1080"
+    assert client_from_settings(await get_settings()).proxy == "socks5://127.0.0.1:1080"
+
+
+async def test_endpoint_update_rejects_bad_proxy_scheme(client):
+    # The EndpointUpdate scheme gate returns 422 on save, so a typo never reaches
+    # the DB and never fails silently on an LLM turn.
+    endpoint_id = (await client.get("/api/settings")).json()["active_endpoint_id"]
+    resp = await client.put(f"/api/endpoints/{endpoint_id}", json={"proxy": "ftp://nope:1"})
+    assert resp.status_code == 422
 
 
 async def test_update_enabled_tools_json_field(client, db):

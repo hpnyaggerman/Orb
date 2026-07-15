@@ -35,9 +35,9 @@ class ModelSpec:
 
 MODELS: dict[str, ModelSpec] = {
     "autocomplete": ModelSpec(
-        repo_id="chartreuse-verte/orb-human-typeahead-350m-v1",
-        filename="GGUF/orb-human-typeahead-350m-v1-Q8_0.gguf",
-        size_mb=370,
+        repo_id="chartreuse-verte/orb-human-typeahead-1b-v2",
+        filename="GGUF/orb-human-typeahead-1b-v2-Q4_0.gguf",
+        size_mb=930,
     ),
     "slop_classifier": ModelSpec(
         repo_id="chartreuse-verte/ettin150m-purple-GGUF",
@@ -245,7 +245,7 @@ async def complete(
 ) -> str:
     """Autocomplete continuation over ``acomplete('autocomplete', ...)``.
 
-    Works around a tokenization quirk of the 350m typeahead: a prompt ending in
+    Works around a tokenization quirk of the typeahead model: a prompt ending in
     whitespace generates garbage ("I hold up both " fails where "I hold up both"
     works). rstrip the prompt before generating; build_prompt guarantees the only
     trailing whitespace is the user's draft tail, so this trims exactly the draft.

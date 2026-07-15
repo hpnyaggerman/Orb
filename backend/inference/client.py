@@ -101,6 +101,7 @@ class LLMClient:
         abort_token: AbortToken | None = None,
         completion_mode: str = "chat",
         retry: RetryPolicy | None = None,
+        proxy: str | None = None,
     ):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
@@ -109,6 +110,9 @@ class LLMClient:
         # native /apply-template + /completion transport (byte-level prompt
         # control). See text_completion.py and _complete_text.
         self.completion_mode = completion_mode
+        # Empty string (the settings default = "no proxy") normalizes to None so
+        # httpx connects directly; httpx rejects "" as a proxy URL.
+        self.proxy = proxy or None
         # Shared across the turn's clients when passed in; otherwise a private
         # token so a standalone client (e.g. a workflow hook) is still abortable.
         self.abort_token = abort_token or AbortToken()
@@ -284,7 +288,7 @@ class LLMClient:
             # request), and a long silence is normal there — a flat read
             # timeout intermittently killed long turns. Abort/stop and the
             # disconnect watcher remain the recovery paths.
-            async with httpx.AsyncClient(timeout=httpx.Timeout(self.timeout, read=None)) as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(self.timeout, read=None), proxy=self.proxy) as client:
                 async with client.stream("POST", self._url(), json=body, headers=self._headers()) as resp:
                     if resp.status_code >= 400:
                         # Concern 1: surface the error body.
@@ -460,7 +464,7 @@ class LLMClient:
         body: dict[str, Any] = {"messages": list(messages)}
         if chat_template_kwargs is not None:
             body["chat_template_kwargs"] = dict(chat_template_kwargs)
-        async with httpx.AsyncClient(timeout=self.timeout) as client:
+        async with httpx.AsyncClient(timeout=self.timeout, proxy=self.proxy) as client:
             resp = await client.post(
                 f"{server_root}/apply-template",
                 json=body,
@@ -476,7 +480,7 @@ class LLMClient:
         toggle without caching the miss (see text_completion.get_think_tags).
         """
         try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
+            async with httpx.AsyncClient(timeout=self.timeout, proxy=self.proxy) as client:
                 resp = await client.get(f"{server_root}/props", headers=self._headers())
                 resp.raise_for_status()
                 return resp.json().get("chat_template", "") or ""
@@ -493,7 +497,7 @@ class LLMClient:
         # read=None for the same reason as the chat transport: llama.cpp is
         # silent for the whole prefill, which legitimately exceeds any flat
         # read timeout on long contexts.
-        async with httpx.AsyncClient(timeout=httpx.Timeout(self.timeout, read=None)) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(self.timeout, read=None), proxy=self.proxy) as client:
             async with client.stream("POST", url, json=body, headers=self._headers()) as resp:
                 if resp.status_code >= 400:
                     await _read_error_body(resp, url)
@@ -696,6 +700,7 @@ def client_from_settings(settings: Mapping[str, Any], *, abort_token: AbortToken
         abort_token=abort_token,
         completion_mode=settings.get("completion_mode", "chat"),
         retry=RetryPolicy.from_settings(settings),
+        proxy=settings.get("proxy"),
     )
 
 
@@ -711,6 +716,7 @@ def agent_client_from_settings(settings: Mapping[str, Any], *, abort_token: Abor
         abort_token=abort_token,
         completion_mode=settings.get("agent_completion_mode", "chat"),
         retry=RetryPolicy.from_settings(settings),
+        proxy=settings.get("agent_proxy", settings.get("proxy")),
     )
 
 

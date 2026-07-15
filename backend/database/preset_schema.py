@@ -82,6 +82,7 @@ SECRET_COLUMNS: dict[tuple[str, str], str] = {
     ("settings", "shared_system_prompt"): "",
     ("settings", "agent_shared_system_prompt"): "",
     ("endpoints", "api_key"): "",
+    ("endpoints", "proxy"): "",
 }
 
 # Touch when: exporting one domain only makes sense alongside another (a product

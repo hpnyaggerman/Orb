@@ -32,6 +32,7 @@ const SETTING_FIELDS = [
       ["text", "Text Completion (llama.cpp)"],
     ],
   },
+  { k: "proxy", l: "Proxy", t: "text", ph: "socks5://127.0.0.1:1080" },
   { k: "shared_system_prompt", l: "System Prompt (global)", t: "textarea" },
   { k: "system_prompt", l: "System Prompt (model)", t: "textarea" },
   { k: "temperature", l: "Temperature", t: "number", s: "0.05", mn: "0", mx: "2" },
@@ -62,6 +63,7 @@ const AGENT_SETTING_FIELDS = [
       ["text", "Text Completion (llama.cpp)"],
     ],
   },
+  { k: "agent_proxy", l: "Agent Proxy", t: "text", ph: "socks5://127.0.0.1:1080" },
   { k: "agent_shared_system_prompt", l: "Agent System Prompt (global)", t: "textarea" },
   { k: "agent_temperature", l: "Agent Temperature", t: "number", s: "0.05", mn: "0", mx: "2" },
   { k: "agent_top_p", l: "Agent Top P", t: "number", s: "0.05", mn: "0", mx: "1" },
@@ -78,6 +80,7 @@ const WRITER_CTX = {
   apiKeyField: "api_key",
   modelField: "model_name",
   completionModeField: "completion_mode",
+  proxyField: "proxy",
   activeConfigDbField: "active_model_config_id",
   settingsEndpointField: "active_endpoint_id",
   hyperparamKeys: MODEL_HYPERPARAM_KEYS,
@@ -93,6 +96,7 @@ const AGENT_CTX = {
   apiKeyField: "agent_api_key",
   modelField: "agent_model_name",
   completionModeField: "agent_completion_mode",
+  proxyField: "agent_proxy",
   activeConfigDbField: "agent_active_model_config_id",
   settingsEndpointField: "agent_endpoint_id",
   hyperparamKeys: AGENT_MODEL_HYPERPARAM_KEYS,
@@ -167,8 +171,9 @@ export function renderEndpoints() {
               </div>`;
     }
     const attrs = f.s ? `step="${f.s}" min="${f.mn}" max="${f.mx}"` : "";
+    const ph = f.ph ? ` placeholder="${esc(f.ph)}"` : "";
     return `<div class="field"><label>${f.l}</label>
-              <input type="${f.t}" value="${v}" data-key="${f.k}" ${attrs} onchange="${saveFn}(this)">
+              <input type="${f.t}" value="${v}" data-key="${f.k}" ${attrs}${ph} onchange="${saveFn}(this)">
             </div>`;
   }
 
@@ -553,6 +558,8 @@ function _fillEndpointFields(ctx) {
     if (keyEl) keyEl.value = ep.api_key || "";
     const cmEl = document.querySelector(`[data-key="${ctx.completionModeField}"]`);
     if (cmEl) cmEl.value = ep.completion_mode || "chat";
+    const pxEl = document.querySelector(`[data-key="${ctx.proxyField}"]`);
+    if (pxEl) pxEl.value = ep.proxy || "";
   }
   const activeModel = S[ctx.configsKey].find((m) => m.id === S[ctx.configIdKey]) || S[ctx.configsKey][0];
   if (activeModel) {
@@ -682,6 +689,10 @@ async function _doSaveEndpointSetting(ctx, el) {
       // Endpoint-scoped like api_key; the /settings PUT above is a harmless
       // no-op (not in the settings allowlist — it lives on the endpoint row).
       await api.put(`/endpoints/${S[ctx.endpointIdKey]}`, { completion_mode: v });
+    } else if (baseKey === "proxy" && S[ctx.endpointIdKey]) {
+      // Endpoint-scoped like completion_mode; the /settings PUT above is a
+      // harmless no-op (proxy lives on the endpoint row, not settings).
+      await api.put(`/endpoints/${S[ctx.endpointIdKey]}`, { proxy: v });
     } else if (key === ctx.modelField) {
       await _syncModelConfigRecord(ctx, v, payload);
     } else if (ctx.hyperparamKeys.includes(key) && S[ctx.configIdKey]) {
@@ -711,6 +722,8 @@ async function _onHybridInputCtx(ctx, el) {
     if (apiKeyEl) apiKeyEl.value = match.api_key || "";
     const cmEl = document.querySelector(`[data-key="${ctx.completionModeField}"]`);
     if (cmEl) cmEl.value = match.completion_mode || "chat";
+    const pxEl = document.querySelector(`[data-key="${ctx.proxyField}"]`);
+    if (pxEl) pxEl.value = match.proxy || "";
     await _loadConfigs(ctx, match.id);
     const modelEl = document.querySelector(`[data-key="${ctx.modelField}"]`);
     if (!modelEl || !S[ctx.configsKey].length) return;

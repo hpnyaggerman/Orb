@@ -8,6 +8,7 @@ it needs and the shapes stay discoverable in one place.
 from __future__ import annotations
 
 from typing import Any, List, Literal, Optional
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -93,6 +94,22 @@ class EndpointUpdate(BaseModel):
     active_model_config_id: Optional[int] = None
     agent_active_model_config_id: Optional[int] = None
     completion_mode: Optional[Literal["chat", "text"]] = None
+    proxy: Optional[str] = None
+
+    @field_validator("proxy")
+    @classmethod
+    def _validate_proxy(cls, v: Optional[str]) -> Optional[str]:
+        # Empty/blank means "no proxy". A set value must use a scheme httpx
+        # accepts (http/https, or socks5 via the httpx[socks] extra); reject
+        # anything else here so a typo fails at save time, not on every LLM turn.
+        if v is None:
+            return v
+        v = v.strip()
+        if not v:
+            return ""
+        if urlsplit(v).scheme.lower() not in ("http", "https", "socks5"):
+            raise ValueError("proxy URL must start with http://, https://, or socks5://")
+        return v
 
 
 class ModelConfigCreate(BaseModel):
