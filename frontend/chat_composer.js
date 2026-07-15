@@ -117,6 +117,11 @@ function _renderGhost() {
   const g = $("chat-ghost");
   const inp = $("chat-input");
   if (!g) return;
+  const chip = $("chat-ghost-chip");
+  if (chip) {
+    chip.textContent = _ghostText;
+    chip.hidden = !_ghostText;
+  }
   g.textContent = "";
   if (!_ghostText) return;
   g.appendChild(document.createTextNode(inp.value)); // transparent prefix pushes the suggestion to the caret
@@ -233,5 +238,13 @@ export function initComposer() {
   input.addEventListener("scroll", () => {
     const g = $("chat-ghost");
     if (g) g.scrollTop = input.scrollTop;
+  });
+
+  // Mobile tap-to-accept: pointerdown (not click) + preventDefault keeps the
+  // textarea focused, so the tap neither fires blur→clearGhost nor collapses
+  // the on-screen keyboard. Visible only on coarse-pointer devices (see CSS).
+  $("chat-ghost-chip").addEventListener("pointerdown", (e) => {
+    e.preventDefault();
+    acceptGhost();
   });
 }

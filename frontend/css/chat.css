@@ -803,6 +803,34 @@
 
 #chat-ghost .ghost-suggestion { color: var(--text-secondary); opacity: .55; }
 
+/* Tap-to-accept chip for the ghost suggestion: mobile keyboards have no Tab,
+   so on coarse-pointer devices the suggestion also floats above the input bar
+   as a tappable pill (predictive-keyboard pattern). Desktop stays Tab-only. */
+#chat-ghost-chip { display: none; }
+
+@media (pointer: coarse) {
+  #chat-ghost-chip:not([hidden]) {
+    display: block;
+    position: absolute;
+    bottom: calc(100% - 4px);
+    left: 64px;
+    max-width: calc(100% - 140px);
+    padding: 10px 14px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-align: left;
+    font-family: var(--font-prose);
+    font-size: calc(var(--font-prose-size) - 1px);
+    color: var(--text-secondary);
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, .4);
+    z-index: 40;
+  }
+}
+
 #send-btn,
 #stop-btn {
   width: 42px;
