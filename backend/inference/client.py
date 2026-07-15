@@ -264,13 +264,6 @@ class LLMClient:
         for action in endpoint_profiles.prepare_request_body(self.base_url, model, body):
             logger.info("LLM profile: %s", action)
 
-        # TEMP-DIAG: exact wire body minus messages (tool schemas + params ground truth).
-        logger.info(
-            "LLM request meta: url=%s body=%s",
-            self._url(),
-            json.dumps({k: v for k, v in body.items() if k != "messages"}, ensure_ascii=False),
-        )
-
         logger.info(
             "LLM complete: model=%s, tools=%s, tool_choice=%s",
             model,

@@ -204,16 +204,10 @@ async def director_pass(
                 step_tail = lorebook_prefix + notes_prefix + step_tail
                 content = build_multimodal_content(step_tail, attachments)
                 trailing = [{"role": "user", "content": content}]
-                # TEMP-DIAG: full prompt dump disabled; structure + params only.
-                _pm = [*base.prefix, *trailing]
                 logger.info(
-                    "Agent tool=direct_scene target=%s prompt-meta: msgs=%d roles=%s msg_chars=%s hyperparams=%s reasoning=%s",
+                    "Agent tool=direct_scene target=%s prompt:\n%s",
                     target,
-                    len(_pm),
-                    [m["role"] for m in _pm],
-                    [len(str(m.get("content", ""))) for m in _pm],
-                    hyperparams,
-                    reasoning_params,
+                    json.dumps([*base.prefix, *trailing], indent=2, ensure_ascii=False),
                 )
                 resp = {}
                 try:
@@ -279,6 +273,11 @@ async def director_pass(
         tail = lorebook_prefix + (notes_prefix if name == "direct_scene" else "") + tool_tail
         content = build_multimodal_content(tail, attachments)
         trailing: list[ChatMessage] = [{"role": "user", "content": content}]
+        logger.info(
+            "Agent tool=%s prompt:\n%s",
+            name,
+            json.dumps([*base.prefix, *trailing], indent=2, ensure_ascii=False),
+        )
         resp: dict = {}
         # A failed call skips this tool but must not propagate: the remaining
         # tools and the writer still run, like the lorebook-select and
@@ -286,17 +285,6 @@ async def director_pass(
         # persisting the finished reply.
         reasoning_params = reasoning_cfg(reasoning_on)
         hyperparams = extract_hyperparams(settings, defaults={"temperature": 0.25, "max_tokens": 8192})
-        # TEMP-DIAG: full prompt dump disabled; structure + params only.
-        _pm = [*base.prefix, *trailing]
-        logger.info(
-            "Agent tool=%s prompt-meta: msgs=%d roles=%s msg_chars=%s hyperparams=%s reasoning=%s",
-            name,
-            len(_pm),
-            [m["role"] for m in _pm],
-            [len(str(m.get("content", ""))) for m in _pm],
-            hyperparams,
-            reasoning_params,
-        )
         try:
             async for event in base.complete(
                 client,
