@@ -14,9 +14,25 @@
 //   chat_messages.js      per-message edit/fork/inspect/delete/branch + nav
 //   chat_conversations.js conversation lifecycle, compression, title editing
 
+export {
+  applyCompression,
+  cancelCompression,
+  cancelTitleEdit,
+  createCheckpoint,
+  deleteConversationFromModal,
+  generateCompressionSummary,
+  handleTitleEditKey,
+  loadConversations,
+  newConvForChar,
+  resetChatUI,
+  saveTitleEdit,
+  selectChar,
+  selectConversation,
+  showCompressModal,
+  showConvHistoryModal,
+  startEditTitle,
+} from "./chat_conversations.js";
 export { renderMessages } from "./chat_core.js";
-
-export { initWorkflowMutationListener, refreshConversationMessages } from "./chat_workflow.js";
 
 export {
   clearRefineDiff,
@@ -35,18 +51,6 @@ export {
   toggleInspector,
   toggleReasoningPass,
 } from "./chat_inspector.js";
-
-export {
-  continueFromUser,
-  handleMagicKey,
-  regenerate,
-  sendMessage,
-  stopGeneration,
-  submitMagicRewrite,
-  superRegenerate,
-  toggleMagicInput,
-} from "./chat_stream.js";
-
 export {
   cancelEdit,
   cancelEditPending,
@@ -66,22 +70,14 @@ export {
   startForkEdit,
   switchBranch,
 } from "./chat_messages.js";
-
 export {
-  applyCompression,
-  cancelCompression,
-  cancelTitleEdit,
-  createCheckpoint,
-  deleteConversationFromModal,
-  generateCompressionSummary,
-  handleTitleEditKey,
-  loadConversations,
-  newConvForChar,
-  resetChatUI,
-  saveTitleEdit,
-  selectChar,
-  selectConversation,
-  showCompressModal,
-  showConvHistoryModal,
-  startEditTitle,
-} from "./chat_conversations.js";
+  continueFromUser,
+  handleMagicKey,
+  regenerate,
+  sendMessage,
+  stopGeneration,
+  submitMagicRewrite,
+  superRegenerate,
+  toggleMagicInput,
+} from "./chat_stream.js";
+export { initWorkflowMutationListener, refreshConversationMessages } from "./chat_workflow.js";

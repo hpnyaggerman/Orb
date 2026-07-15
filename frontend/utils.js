@@ -1,4 +1,4 @@
-import { S } from "./state.js";
+import { charactersView, S } from "./state.js";
 
 export function $(id) {
   return document.getElementById(id);
@@ -35,7 +35,7 @@ export function toast(msg, isError = false) {
   const el = $("toast");
   if (!el) return;
   el.textContent = msg;
-  el.className = "toast" + (isError ? " toast-error" : "");
+  el.className = `toast${isError ? " toast-error" : ""}`;
   el.classList.remove("hidden");
   setTimeout(() => el.classList.add("hidden"), 3000);
 }
@@ -88,11 +88,11 @@ export const CHAT_AVATAR_ICON = "📜"; // active chat header
 // pre-escaped by the caller when it comes from untrusted data.
 export function avatarCell(src, { icon = NO_AVATAR_ICON, attrs = "" } = {}) {
   if (!src) return icon;
-  return `<img src="${src}"${attrs ? " " + attrs : ""} onerror="this.parentElement.textContent='${icon}'">`;
+  return `<img src="${src}"${attrs ? ` ${attrs}` : ""} onerror="this.parentElement.textContent='${icon}'">`;
 }
 
 export function convUrl(...parts) {
-  return "/conversations/" + parts.join("/");
+  return `/conversations/${parts.join("/")}`;
 }
 
 export function formatRelativeDate(iso) {
@@ -199,6 +199,21 @@ function _mergeOps(ops) {
     else result.push({ ...op });
   }
   return result;
+}
+
+// Last `n` sentences of `text`, joined verbatim (tokens round-trip, see
+// _tokenizeSentences). With `dropFragment` (streaming), a trailing token that
+// doesn't end at a sentence boundary is discarded so the result only changes
+// when a sentence completes — callers deduping on it stay quiet mid-sentence.
+export function sentenceTail(text, n = 3, dropFragment = false) {
+  let tokens = _tokenizeSentences(text);
+  // The tokenizer pushes the final remainder unconditionally; it's a fragment
+  // unless the text itself ends at a boundary (terminal punctuation, optionally
+  // wrapped in closing quotes/markers, or a newline).
+  if (dropFragment && !/[.!?…]["'”’*_)\]]*\s*$/.test(text) && !/\n\s*$/.test(text)) {
+    tokens = tokens.slice(0, -1);
+  }
+  return tokens.slice(-n).join("").trim();
 }
 
 // Returns merged diff ops: [{type: 'equal'|'insert'|'delete', text}]
@@ -382,7 +397,7 @@ export function resolvePlaceholders(text) {
   const personaId = effectivePersonaId();
   if (personaId) {
     const persona = S.personas.find((p) => p.id === personaId);
-    if (persona && persona.name) {
+    if (persona?.name) {
       userName = persona.name;
     }
   }
@@ -399,7 +414,7 @@ export function resolvePlaceholders(text) {
 export function effectivePersonaId() {
   const conv = S.conversations?.find((c) => c.id === S.activeConvId);
   if (conv?.persona_lock_id) return conv.persona_lock_id;
-  const card = conv?.character_card_id ? (S.allCharacters || []).find((c) => c.id === conv.character_card_id) : null;
+  const card = conv?.character_card_id ? charactersView().find((c) => c.id === conv.character_card_id) : null;
   return card?.persona_lock_id || S.activePersonaId || null;
 }
 
@@ -408,5 +423,21 @@ export function formatBytes(bytes) {
   const k = 1024;
   const sizes = ["B", "KB", "MB", "GB"];
   const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / k ** i).toFixed(1)) + " " + sizes[i];
+  return `${parseFloat((bytes / k ** i).toFixed(1))} ${sizes[i]}`;
+}
+
+// Trigger a browser download of `source` (a URL string, or a Blob) as `filename`
+// via a transient anchor. Replaces the hand-rolled createElement("a") + append +
+// click + remove dance duplicated across export/download sites. A Blob source is
+// wrapped in an object URL and revoked after the click.
+export function downloadBlob(filename, source) {
+  const isBlob = source instanceof Blob;
+  const href = isBlob ? URL.createObjectURL(source) : source;
+  const a = document.createElement("a");
+  a.href = href;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  if (isBlob) setTimeout(() => URL.revokeObjectURL(href), 0);
 }

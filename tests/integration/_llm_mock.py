@@ -127,6 +127,13 @@ class FakeLLMClient:
             "direction_note": [],
             "workflow": [],
         }
+        # Raw text-completion queue (complete_raw, document text mode) — separate
+        # from the tool_choice-dispatched chat queues above; keyed by the call,
+        # not by a pass. capture prompt+params for assertions. Each entry is
+        # {"content": str, "probs": list} so a test can attach per-token probs.
+        self._raw_queue: list[dict] = []
+        self.raw_calls: list[dict] = []
+        self.completion_mode = "chat"
         self._gates: dict[str, list[PassGate]] = {
             "director": [],
             "writer": [],
@@ -163,8 +170,11 @@ class FakeLLMClient:
         _validate_tool_calls(tool_calls)
         self._queues["director"].append({"tool_calls": tool_calls})
 
-    def enqueue_writer(self, text: str) -> None:
-        self._queues["writer"].append({"content": text})
+    def enqueue_writer(self, text: str, probs: list[dict] | None = None) -> None:
+        # Optional *probs* is a list of normalized token-prob records
+        # ({"token","prob","top":[{"t","p"}]}); the mock interleaves them as
+        # token_probs chunks after the content delta (chat doc path with logprobs).
+        self._queues["writer"].append({"content": text, "probs": probs or []})
 
     def enqueue_editor(self, decision: dict | None = None) -> None:
         """Queue an editor response. ``decision`` is the ``message`` dict
@@ -188,6 +198,15 @@ class FakeLLMClient:
 
     def enqueue_workflow(self, message: dict) -> None:
         self._queues["workflow"].append({"message": message})
+
+    def enqueue_raw(self, text: str, probs: list[dict] | None = None) -> None:
+        """Queue a raw text-completion response (``complete_raw``, doc text mode).
+
+        Optional *probs* is a list of normalized token-prob records
+        (``{"token","prob","top":[{"t","p"}]}``); when given the mock interleaves
+        them as token_probs chunks after the content delta (mirrors the real
+        client when n_probs is requested)."""
+        self._raw_queue.append({"content": text, "probs": probs or []})
 
     def gate(self, pass_name: str) -> PassGate:
         """Return a ``PassGate`` controlling the next *pass_name* call.
@@ -227,6 +246,9 @@ class FakeLLMClient:
                 "tool_choice": copy.deepcopy(tool_choice),
                 "messages": copy.deepcopy(messages),
                 "tools": copy.deepcopy(tools),
+                # Full param spread (prefill, reasoning kwargs, hyperparams) so
+                # doc-mode tests can assert the assisted prefill / reasoning shape.
+                "params": copy.deepcopy(params),
             }
         )
 
@@ -244,6 +266,11 @@ class FakeLLMClient:
             text = payload.get("content", "")
             if text:
                 yield {"type": "content", "delta": text}
+            # Faithful to a real provider: probs come back only when logprobs
+            # were requested (the token_probs flag threads through to params).
+            if params.get("logprobs"):
+                for rec in payload.get("probs") or []:
+                    yield {"type": "token_probs", **rec}
             yield {"type": "done", "message": {"role": "assistant", "content": text}}
             return
 
@@ -291,13 +318,35 @@ class FakeLLMClient:
             },
         }
 
+    async def complete_raw(self, prompt: str, model: str, **params) -> AsyncIterator[dict]:
+        """Raw text-completion stand-in (document text mode). Captures the
+        verbatim prompt + params, then yields the next enqueued raw response."""
+        self.raw_calls.append({"prompt": prompt, "model": model, "params": params})
+        if self.abort_token.is_aborted:
+            return
+        payload = self._raw_queue.pop(0) if self._raw_queue else {"content": "", "probs": []}
+        text = payload["content"]
+        if text:
+            yield {"type": "content", "delta": text}
+        # llama.cpp returns completion_probabilities only when n_probs is set.
+        if params.get("n_probs"):
+            for rec in payload.get("probs") or []:
+                yield {"type": "token_probs", **rec}
+        yield {"type": "done", "message": {"content": text}, "usage": None}
+
 
 def llm_factory(fake: FakeLLMClient):
     """Wrap *fake* so calling ``LLMClient(url, api_key=..., profile=...)``
     inside production code yields the same shared instance the test holds.
+
+    Propagates the ``completion_mode`` ctor kwarg onto the shared fake so a
+    route that constructs its client with the endpoint's mode (e.g. the document
+    generate route) makes ``DocumentContinuer`` branch on the real value.
     """
 
-    def make(*_args, **_kwargs):
+    def make(*_args, **kwargs):
+        if "completion_mode" in kwargs:
+            fake.completion_mode = kwargs["completion_mode"]
         return fake
 
     return make

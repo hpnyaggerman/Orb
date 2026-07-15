@@ -9,10 +9,8 @@ import {
   _renderWorkflowArtifacts,
   _renderWorkflowRejection,
 } from "./chat_workflow.js";
-import { S, effectiveWorkflowEnabled } from "./state.js";
+import { effectiveWorkflowEnabled, S } from "./state.js";
 import { requestSendPermission } from "./tabLock.js";
-import { segmentBody } from "./workflow_segmentation.js";
-import { markClickable } from "./workflow_text_interaction.js";
 import {
   $,
   avatarCell,
@@ -25,6 +23,8 @@ import {
   formatProseWithDiff,
   resolvePlaceholders,
 } from "./utils.js";
+import { segmentBody } from "./workflow_segmentation.js";
+import { markClickable } from "./workflow_text_interaction.js";
 
 export function canStartGeneration() {
   if (S.isStreaming) return false;
@@ -98,9 +98,7 @@ export function buildMsgToolbar(m, childByParent = null) {
   const regenTargetId = isAssistant ? m.id : childAssistant?.id;
   const canRegen = !isGreeting && (isAssistant || !!childAssistant || !!m.id);
 
-  const editBtn = S.hasMultipleTabs
-    ? `<button disabled title="Close other tabs to edit">${ICON_EDIT}</button>`
-    : `<button onclick="${m.id ? `startEdit(${m.id})` : `startEditPending()`}" title="Edit">${ICON_EDIT}</button>`;
+  const editBtn = `<button onclick="${m.id ? `startEdit(${m.id})` : `startEditPending()`}" title="Edit">${ICON_EDIT}</button>`;
 
   // Edit & Fork: only for persisted user messages. Forks the conversation by
   // saving the edit as a new sibling and generating a fresh reply, leaving the
@@ -108,29 +106,23 @@ export function buildMsgToolbar(m, childByParent = null) {
   // to fork, so it's omitted there.
   const forkBtn =
     m.role === "user" && m.id
-      ? S.hasMultipleTabs
-        ? `<button disabled title="Close other tabs to fork">${ICON_FORK}</button>`
-        : `<button onclick="startForkEdit(${m.id})" title="Edit &amp; Fork">${ICON_FORK}</button>`
+      ? `<button onclick="startForkEdit(${m.id})" title="Edit &amp; Fork">${ICON_FORK}</button>`
       : "";
 
   const regenBtn = isGreeting
     ? ""
-    : S.hasMultipleTabs || !canRegen
-      ? `<button disabled title="${S.hasMultipleTabs ? "Close other tabs to regenerate" : ""}">${ICON_REGEN}</button>`
+    : !canRegen
+      ? `<button disabled>${ICON_REGEN}</button>`
       : `<button onclick="${regenTargetId ? `regenerate(${regenTargetId})` : `continueFromUser()`}" title="Regenerate">${ICON_REGEN}</button>`;
 
   const superRegenBtn =
     isAssistant && m.id && !isGreeting
-      ? S.hasMultipleTabs
-        ? `<button disabled title="Close other tabs to regenerate">${ICON_SUPER_REGEN}</button>`
-        : `<button onclick="superRegenerate(${m.id})" title="Super Regenerate">${ICON_SUPER_REGEN}</button>`
+      ? `<button onclick="superRegenerate(${m.id})" title="Super Regenerate">${ICON_SUPER_REGEN}</button>`
       : "";
 
   const magicBtn =
     isAssistant && m.id && !isGreeting
-      ? S.hasMultipleTabs
-        ? `<button disabled title="Close other tabs to use Magic">${ICON_MAGIC}</button>`
-        : `<button onclick="toggleMagicInput(${m.id})" title="Magic Rewrite">${ICON_MAGIC}</button>`
+      ? `<button onclick="toggleMagicInput(${m.id})" title="Magic Rewrite">${ICON_MAGIC}</button>`
       : "";
 
   const magicInput =
@@ -144,9 +136,15 @@ export function buildMsgToolbar(m, childByParent = null) {
   // so the panel the button opens is always reachable when the button shows.
   const noteBtn =
     m.id && !isGreeting && S.directionNotesRecord
-      ? S.hasMultipleTabs
-        ? `<button disabled title="Close other tabs to add a note">${ICON_NOTE}</button>`
-        : `<button onclick="addUserDirectionNote(${m.id})" title="Add direction note">${ICON_NOTE}</button>`
+      ? `<button onclick="addUserDirectionNote(${m.id})" title="Add direction note">${ICON_NOTE}</button>`
+      : "";
+
+  // Read-only local classifier; no persistence, so multi-tab is fine. Shown on
+  // every assistant message (greeting included). Gated on the AI-slop toggle
+  // (default on) -- 503s to a helpful toast if the model isn't downloaded.
+  const slopBtn =
+    isAssistant && m.id && S.settings?.local_ml_enabled?.slop_classifier !== false
+      ? `<button class="msg-btn-slop" onclick="scoreSlop(${m.id},this)" title="Score AI-slop">AI</button>`
       : "";
 
   const delBtn = !m.id
@@ -160,7 +158,7 @@ export function buildMsgToolbar(m, childByParent = null) {
       ? `<button onclick="clearRefineDiff()" title="Clear diff highlights" class="btn-clear-diff">${ICON_CLEAR}</button>`
       : "";
 
-  return `${editBtn}${forkBtn}${regenBtn}${superRegenBtn}${magicBtn}${magicInput}${noteBtn}${_renderExtraButtons(m)}${delBtn}${diffBtn}`;
+  return `${editBtn}${forkBtn}${regenBtn}${superRegenBtn}${magicBtn}${magicInput}${noteBtn}${slopBtn}${_renderExtraButtons(m)}${delBtn}${diffBtn}`;
 }
 
 function _renderExtraButtons(msg) {
@@ -208,8 +206,8 @@ export function getCharName() {
 }
 
 function formatStatNum(n) {
-  if (n >= 1e6) return (n / 1e6).toFixed(1).replace(/\.0$/, "") + "M";
-  if (n >= 1e3) return (n / 1e3).toFixed(1).replace(/\.0$/, "") + "k";
+  if (n >= 1e6) return `${(n / 1e6).toFixed(1).replace(/\.0$/, "")}M`;
+  if (n >= 1e3) return `${(n / 1e3).toFixed(1).replace(/\.0$/, "")}k`;
   return String(n);
 }
 
@@ -239,7 +237,7 @@ async function renderHomeStats() {
     cards.push(["Storage used", formatBytes(s.storage_bytes)]);
   }
   if (s.avg_latency_ms != null) {
-    cards.push(["Avg response time", (s.avg_latency_ms / 1000).toFixed(1) + "s"]);
+    cards.push(["Avg response time", `${(s.avg_latency_ms / 1000).toFixed(1)}s`]);
   }
   const numericCards = cards
     .filter(([, v]) => typeof v !== "number" || v > 0)
@@ -264,7 +262,7 @@ const SPOTLIGHT_EYEBROWS = {
   missed: "💔 Misses you",
 };
 function renderSpotlightCard(sp) {
-  if (!sp || !sp.name) return "";
+  if (!sp?.name) return "";
   const av = sp.card_id
     ? avatarCell(escAttr(avatarUrl(sp.card_id)), { attrs: 'loading="lazy" decoding="async"' })
     : "👤";
@@ -458,7 +456,7 @@ async function fetchContextSize() {
       S.contextSize = data;
       renderContextSize();
     }
-  } catch (e) {
+  } catch (_e) {
     /* ignore */
   }
 }

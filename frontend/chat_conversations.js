@@ -3,20 +3,21 @@
 // chat.js; the public surface is re-exported from chat.js.
 import { api } from "./api.js";
 import { onConvSwitch, stopAll as stopAllAudio } from "./audio_player.js";
-import { stopConversation } from "./chat_stream.js";
 import { renderMessages, resetRenderWindow, setMessages } from "./chat_core.js";
 import { renderInspector } from "./chat_inspector.js";
 import { clearInspectedMessage, inspectMessage } from "./chat_messages.js";
+import { stopConversation } from "./chat_stream.js";
 import { resetWorkflowViewportState } from "./chat_workflow.js";
 import { renderDirectionNotesPanel } from "./direction_notes_panel.js";
-import { loadCharacters, refreshCharacters, renderCharacters } from "./library.js";
+import { refreshCharacters, renderCharacters } from "./library.js";
 import { activateAndPrioritizeWorld, deactivateWorld } from "./lorebooks.js";
 import { closeModal, showConfirmModal, showModal } from "./modal.js";
 import { isUtilityPanelOpen } from "./panels.js";
 // Imported from settings_personas.js directly: going through settings.js would
 // close an import cycle (settings.js → chat.js → this module).
 import { updateUserBtn } from "./settings_personas.js";
-import { S } from "./state.js";
+import { sseEvents, streamPost, unescapeSSE } from "./sse.js";
+import { charactersView, S } from "./state.js";
 import {
   $,
   avatarCell,
@@ -62,8 +63,8 @@ export async function selectChar(id, source = "recent") {
   if (S.activeCharId === id || S._selectCharLock) return;
   S._selectCharLock = true;
   try {
-    const oldWorldId = (S.allCharacters || []).find((c) => c.id === S.activeCharId)?.world_id || null;
-    const newWorldId = (S.allCharacters || []).find((c) => c.id === id)?.world_id || null;
+    const oldWorldId = charactersView().find((c) => c.id === S.activeCharId)?.world_id || null;
+    const newWorldId = charactersView().find((c) => c.id === id)?.world_id || null;
     S.activeCharId = id;
     renderCharacters();
     if (oldWorldId && oldWorldId !== newWorldId) {
@@ -105,8 +106,8 @@ export async function newConvForChar(id) {
     return;
   }
   try {
-    const oldWorldId = (S.allCharacters || []).find((c) => c.id === S.activeCharId)?.world_id || null;
-    const newWorldId = (S.allCharacters || []).find((c) => c.id === id)?.world_id || null;
+    const oldWorldId = charactersView().find((c) => c.id === S.activeCharId)?.world_id || null;
+    const newWorldId = charactersView().find((c) => c.id === id)?.world_id || null;
     const conv = await api.post("/conversations", { character_card_id: id });
     await loadConversations();
     S.activeCharId = id;
@@ -125,7 +126,7 @@ export async function selectConversation(id) {
     toast("Stop generation before switching conversations", true);
     return;
   }
-  const oldWorldId = (S.allCharacters || []).find((c) => c.id === S.activeCharId)?.world_id || null;
+  const oldWorldId = charactersView().find((c) => c.id === S.activeCharId)?.world_id || null;
   S.activeConvId = id;
   S.lastDirectorData = null;
   S.reasoningDirector = "";
@@ -152,18 +153,20 @@ export async function selectConversation(id) {
   } else {
     av.textContent = CHAT_AVATAR_ICON;
   }
+  const hasExpr = (S.characters || []).find((c) => c.id === conv?.character_card_id)?.has_expressions;
+  av.classList.toggle("has-expr-halo", !!hasExpr);
   $("chat-input").disabled = false;
   $("send-btn").disabled = false;
 
   // If the character has a linked lorebook, activate it and move it to the top
   if (conv?.character_card_id) {
-    const char = (S.allCharacters || []).find((c) => c.id === conv.character_card_id);
+    const char = charactersView().find((c) => c.id === conv.character_card_id);
     if (char?.world_id) {
       await activateAndPrioritizeWorld(char.world_id);
     }
   }
 
-  const newWorldId = (S.allCharacters || []).find((c) => c.id === S.activeCharId)?.world_id || null;
+  const newWorldId = charactersView().find((c) => c.id === S.activeCharId)?.world_id || null;
   if (oldWorldId && oldWorldId !== newWorldId) {
     await deactivateWorld(oldWorldId);
   }
@@ -215,7 +218,7 @@ function confirmDeleteConversation(id, msgCount, afterDelete) {
     },
     async () => {
       try {
-        await api.del("/conversations/" + id);
+        await api.del(`/conversations/${id}`);
         if (S.activeConvId === id) {
           S.activeConvId = null;
           S.messages = [];
@@ -231,7 +234,7 @@ function confirmDeleteConversation(id, msgCount, afterDelete) {
   );
 }
 
-async function deleteConversation(id) {
+async function _deleteConversation(id) {
   const conv = S.conversations.find((c) => c.id === id);
   confirmDeleteConversation(
     id,
@@ -310,7 +313,7 @@ export async function createCheckpoint() {
     toast(`Checkpoint created: ${conv.title}`);
     await showConvHistoryModal();
   } catch (e) {
-    toast("Failed to create checkpoint: " + e.message, true);
+    toast(`Failed to create checkpoint: ${e.message}`, true);
   }
 }
 
@@ -368,17 +371,6 @@ export function cancelCompression() {
   closeModal();
 }
 
-// Streams an SSE summary, so it returns the raw Response for resp.body.getReader()
-// and takes an abort signal — neither of which the `api` helper supports.
-function summarizeConversation(convId, { keepCount, customInstructions }, signal) {
-  return fetch(`/api/conversations/${convId}/summarize`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ keep_count: keepCount, custom_instructions: customInstructions }),
-    signal,
-  });
-}
-
 export async function generateCompressionSummary() {
   if (_compressAbort) {
     _compressAbort.abort();
@@ -420,42 +412,24 @@ export async function generateCompressionSummary() {
   let summaryText = "";
 
   try {
-    const resp = await summarizeConversation(
-      S.activeConvId,
-      { keepCount: _compressKeepCount, customInstructions },
+    // Streams an SSE token summary over the app-wide sse.js path. The summarize
+    // route emits only `token` (text, newline-escaped) and `error` events.
+    const resp = await streamPost(
+      `/conversations/${S.activeConvId}/summarize`,
+      { keep_count: _compressKeepCount, custom_instructions: customInstructions },
       _compressAbort.signal,
     );
-
     if (!resp.ok) {
       const detail = await resp.text();
       throw new Error(detail);
     }
 
-    const reader = resp.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = "";
-    let currentEvent = null;
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop();
-
-      for (const line of lines) {
-        if (line.startsWith("event: ")) {
-          currentEvent = line.slice(7).trim();
-        } else if (line.startsWith("data: ") && currentEvent) {
-          const data = line.slice(6);
-          if (currentEvent === "token") {
-            summaryText += data.replace(/\\n/g, "\n");
-            if (textarea) textarea.value = summaryText;
-          } else if (currentEvent === "error") {
-            throw new Error(data);
-          }
-          currentEvent = null;
-        }
+    for await (const { event, data } of sseEvents(resp.body, { signal: _compressAbort.signal })) {
+      if (event === "token") {
+        summaryText += unescapeSSE(data);
+        if (textarea) textarea.value = summaryText;
+      } else if (event === "error") {
+        throw new Error(data);
       }
     }
 
@@ -465,7 +439,7 @@ export async function generateCompressionSummary() {
   } catch (e) {
     if (e.name === "AbortError") return;
     if (statusEl) statusEl.textContent = `Error: ${e.message}`;
-    toast("Summary generation failed: " + e.message, true);
+    toast(`Summary generation failed: ${e.message}`, true);
     if (regenBtn) regenBtn.disabled = false;
   } finally {
     _compressAbort = null;
@@ -496,7 +470,7 @@ export async function applyCompression() {
     await selectConversation(result.new_conversation_id);
     toast("New conversation created from compression");
   } catch (e) {
-    toast("Failed to apply compression: " + e.message, true);
+    toast(`Failed to apply compression: ${e.message}`, true);
     if (applyBtn) applyBtn.disabled = false;
     if (regenBtn) regenBtn.disabled = false;
   }
@@ -556,7 +530,7 @@ export async function saveTitleEdit() {
     return;
   }
   try {
-    const updated = await api.put("/conversations/" + S.activeConvId, { title: newTitle });
+    const updated = await api.put(`/conversations/${S.activeConvId}`, { title: newTitle });
     const conv = S.conversations.find((c) => c.id === S.activeConvId);
     if (conv) conv.title = updated.title;
     const div = document.createElement("div");

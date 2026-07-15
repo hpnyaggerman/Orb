@@ -5,6 +5,7 @@ the writer's output.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import time
@@ -36,6 +37,8 @@ from ....inference import (
     _KVCacheTracker,
     build_editor_prompt,
     build_feedback_tool,
+    build_patch_target_prompt,
+    has_image_parts,
     parse_tool_calls,
     reasoning_cfg,
 )
@@ -48,6 +51,18 @@ MAX_EDITOR_ITERATIONS = 3
 # How many recent assistant messages the cross-message repetition scanners
 # (phrase + structural) compare the draft against.
 AUDIT_BASELINE_WINDOW = 20
+
+# Per-iteration cap on prefilled per-finding calls (text mode); the re-audit
+# picks up anything beyond the cap on the next iteration.
+MAX_PREFILL_TARGETS = 8
+
+# GBNF for the generated remainder of a prefilled editor_apply_patch call: the
+# prompt already ends with `{"patches": [{"search": <span>, "replace": "` so
+# the model may only emit JSON-string characters plus the exact closing bytes.
+# `char` mirrors llama.cpp's own json.gbnf string rule.
+_PATCH_REMAINDER_GRAMMAR = r"""root ::= char* "\"}]}"
+char ::= [^"\\\x7F\x00-\x1F] | [\\] (["\\bfnrt] | "u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F])
+"""
 
 
 # ── Feedback gating + tool override ───────────────────────────────────────────
@@ -217,7 +232,7 @@ def _baseline_window(base: CachedBase, audit_context_msgs: list[str] | None) -> 
     return window
 
 
-def _run_contextual_audit(
+async def _run_contextual_audit(
     draft: str,
     phrase_bank: list[PhraseGroup],
     previous_assistant_msgs: list[str],
@@ -232,8 +247,10 @@ def _run_contextual_audit(
     Returns ``(report, report_text)``.
     """
     full_text = _build_audit_text(draft, previous_assistant_msgs)
-    # run_audit will append the current text to assistant_messages internally
-    raw_report = run_audit(
+    # run_audit is CPU-bound; offload it so the single event loop stays free for
+    # concurrent requests (e.g. the expression classifier polling during audit).
+    raw_report = await asyncio.to_thread(
+        run_audit,
         full_text,
         phrase_bank,
         assistant_messages=previous_assistant_msgs,
@@ -277,10 +294,17 @@ def _normalize_quotes(text: str) -> str:
     return text.translate(_QUOTE_MAP)
 
 
-def _strip_outer_asterisks(text: str) -> str:
-    """Strip leading/trailing markdown emphasis asterisks (and the whitespace
-    just inside them).  Internal asterisks are left untouched."""
-    return text.strip().strip("*").strip()
+# Boundary markers the audit report's sentence splitter eats off a sentence end
+# (closing quotes, emphasis * / _). A search copied from the report is therefore
+# often missing a trailing marker the draft still has, or carrying a now-dangling
+# leading quote. Straight ' is excluded so contractions/possessives survive.
+_OUTER_MARKERS = '*_"“”‘’'
+
+
+def _strip_outer_markers(text: str) -> str:
+    """Strip leading/trailing emphasis (*, _) and quote markers, plus the
+    whitespace just inside them.  Internal markers are left untouched."""
+    return text.strip().strip(_OUTER_MARKERS).strip()
 
 
 def apply_patches(draft: str, patches: list[dict]) -> tuple[str, list[str]]:
@@ -303,6 +327,23 @@ def apply_patches(draft: str, patches: list[dict]) -> tuple[str, list[str]]:
             err = f"Error: Patch {i} is a no-op (search === replace). You must provide different replacement text."
             errors.append(err)
             continue
+
+        # The audit report's sentence splitter strips trailing boundary markers
+        # (closing quote, emphasis *) and can leave a dangling opening quote, so
+        # a search copied from the report often has one marker too few or too
+        # many versus the draft. Match on the marker-stripped core and replace
+        # the core, leaving the draft's own surrounding markers in place — this
+        # keeps quotes/emphasis balanced whether the draft has an extra trailing
+        # marker (…octave.*) or the search a spurious leading quote ("Do not…).
+        # Falls through when the core is ambiguous (markers were load-bearing for
+        # uniqueness) so the exact strategies below can target the marked span.
+        core_search = _strip_outer_markers(search)
+        core_replace = _strip_outer_markers(replace)
+        if core_search and core_search != core_replace and (core_search != search or core_replace != replace):
+            if draft.count(core_search) == 1:
+                draft = draft.replace(core_search, core_replace, 1)
+                logger.debug("Patch %d OK (marker-core): %r → %r", i, core_search[:60], core_replace[:60])
+                continue
 
         count = draft.count(search)
 
@@ -328,28 +369,6 @@ def apply_patches(draft: str, patches: list[dict]) -> tuple[str, list[str]]:
                     f"Error: Multiple matches ({norm_count}) for {search[:80]!r} (after quote normalization). Use more context."
                 )
                 continue
-
-            # Fallback: the model often wraps a single sentence in its own
-            # `*...*` when the draft only has block-level asterisks around the
-            # whole narration span, so the outer `*` don't line up. Retry with
-            # leading/trailing asterisks stripped from both sides.
-            trimmed_search = _strip_outer_asterisks(search)
-            if trimmed_search and trimmed_search != search:
-                trimmed_count = draft.count(trimmed_search)
-                if trimmed_count == 1:
-                    draft = draft.replace(trimmed_search, _strip_outer_asterisks(replace), 1)
-                    logger.debug(
-                        "Patch %d OK (asterisk-trimmed): %r → %r",
-                        i,
-                        trimmed_search[:60],
-                        replace[:60],
-                    )
-                    continue
-                elif trimmed_count > 1:
-                    errors.append(
-                        f"Error: Multiple matches ({trimmed_count}) for {search[:80]!r} (after asterisk trimming). Use more context."
-                    )
-                    continue
 
             errors.append(f"Error: {search[:80]!r} not found in draft.")
 
@@ -409,6 +428,7 @@ async def editor_pass(
 
     Yields:
         ``{"type": "reasoning", "delta": str, "pass": "editor"}``
+        ``{"type": "draft_update", "draft": str}``
         ``{"type": "done", "draft": str|None, "debug": str, "elapsed": int,
          "tool_calls": list, "feedback": dict}``
     """
@@ -430,6 +450,8 @@ async def editor_pass(
     ):
         if ev["type"] == "reasoning":
             yield {"type": "reasoning", "delta": ev["delta"], "pass": "editor"}
+        elif ev["type"] == "draft_update":
+            yield ev
         elif ev["type"] == "done":
             edit_done = ev
 
@@ -537,6 +559,10 @@ async def editor_stage(
                     "event": "reasoning",
                     "data": {"pass": "editor", "delta": event["delta"]},
                 }
+            elif event["type"] == "draft_update":
+                # Cosmetic intermediate paint; the done→writer_rewrite block below
+                # stays the sole authority over state.resp_text.
+                yield {"event": "draft_update", "data": {"draft": event["draft"]}}
             elif event["type"] == "done":
                 state.latency += int(event.get("elapsed", 0) or 0)
                 refined_draft = event["draft"]
@@ -586,6 +612,9 @@ async def _run_edit_loop(
 
     Yields:
         ``{"type": "reasoning", "delta": str}``
+        ``{"type": "draft_update", "draft": str}`` — after every mutation of the
+        working draft (per prefilled forced call in text mode, per applied
+        patch/rewrite otherwise); cosmetic, the ``done`` draft stays authoritative
         ``{"type": "done", "draft": str|None, "debug": str, "elapsed": int}``
     """
     t0 = time.monotonic()
@@ -607,7 +636,7 @@ async def _run_edit_loop(
             len(assistant_messages),
             len(phrase_bank),
         )
-        report, report_text = _run_contextual_audit(draft, phrase_bank, assistant_messages, audit_toggles, effective_msg)
+        report, report_text = await _run_contextual_audit(draft, phrase_bank, assistant_messages, audit_toggles, effective_msg)
         structural_issues = (
             1 if report.structural_repetition_result and report.structural_repetition_result.is_repetitive else 0
         )
@@ -682,6 +711,15 @@ async def _run_edit_loop(
         {"role": "user", "content": final_prompt},
     ]
 
+    # Text-mode endpoints support response prefill → per-finding patch calls
+    # (see _collect_prefill_patches). Image-bearing conversations ride the chat
+    # transport (which drops prefill), so they keep the classic path. Prefill
+    # iterations never extend *trailing*, so the loop pins the flat in-place
+    # replay for the whole run — mixing structured appends with flat rewrites
+    # would clobber the tail.
+    use_prefill = getattr(client, "completion_mode", "chat") == "text" and not has_image_parts([*base.prefix, *trailing])
+    replay_structured = reasoning_on and not use_prefill
+
     current_draft = draft
     prev_issues = report.total_issues
     all_calls: list[dict] = []
@@ -698,62 +736,89 @@ async def _run_edit_loop(
             report.total_issues,
         )
         try:
-            reasoning_params = reasoning_cfg(reasoning_on)
-            if not reasoning_params["reasoning"].get("enabled", True):
-                logger.info("Editor iteration %d: reasoning disabled", iteration + 1)
-
-            logger.debug(
-                "Editor iteration %d: sending %d messages to LLM:\n%s",
-                iteration + 1,
-                len(base.prefix) + len(trailing),
-                json.dumps([*base.prefix, *trailing], default=str, indent=2),
+            hyperparams = extract_hyperparams(settings, defaults={"temperature": 0.25, "max_tokens": 8192})
+            # Per-finding prefilled calls replace the single big patch call when
+            # possible; the rewrite paths (length guard / structural) and the
+            # no-unique-span case fall through to the classic call below.
+            prefill_targets = (
+                _prefill_targets(report, current_draft)
+                if use_prefill and audit_enabled and not length_guard_triggered and not _structural_rewrite_needed(report)
+                else []
             )
 
             resp: dict = {}
-            try:
-                hyperparams = extract_hyperparams(settings, defaults={"temperature": 0.25, "max_tokens": 8192})
-                async for event in base.complete(
-                    client,
-                    label="editor",
-                    trailing=trailing,
-                    tool_choice=_pick_tool_choice(length_guard_triggered, report, audit_enabled),
-                    kv_tracker=kv_tracker,
-                    **hyperparams,
-                    **reasoning_params,
+            if prefill_targets:
+                logger.info("Editor iteration %d: prefill mode, %d target(s)", iteration + 1, len(prefill_targets))
+                found: list[dict] = []
+                prefill_debug: list[str] = []
+                async for ev in _collect_prefill_patches(
+                    client, base, trailing[0], current_draft, prefill_targets, hyperparams, kv_tracker
                 ):
-                    if event["type"] == "reasoning":
-                        yield {"type": "reasoning", "delta": event["delta"]}
-                    elif event["type"] == "done":
-                        resp = event["message"]
-            except Exception as llm_err:
-                logger.error(
-                    "Editor iteration %d: client.complete() raised %s: %s",
-                    iteration + 1,
-                    type(llm_err).__name__,
-                    llm_err,
-                    exc_info=True,
-                )
-                raise
+                    found.extend(ev["patches"])
+                    prefill_debug.append(ev["debug"])
+                    if ev["patches"]:
+                        # ponytail: re-applies all found patches per call; n ≤ MAX_PREFILL_TARGETS
+                        preview, _ = apply_patches(current_draft, found)
+                        yield {"type": "draft_update", "draft": preview}
+                debug_parts.append(f"Iteration {iteration + 1} prefill calls:\n" + "\n".join(prefill_debug))
+                # One combined entry — byte-shaped like the classic call's parse,
+                # so apply/replay/events downstream stay untouched.
+                parsed = [{"name": "editor_apply_patch", "arguments": {"patches": found}}]
+            else:
+                reasoning_params = reasoning_cfg(reasoning_on)
+                if not reasoning_params["reasoning"].get("enabled", True):
+                    logger.info("Editor iteration %d: reasoning disabled", iteration + 1)
 
-            raw = json.dumps(resp, default=str)
-            debug_parts.append(f"Iteration {iteration + 1} response:\n{raw}")
-
-            finish_reason = resp.get("finish_reason") or resp.get("stop_reason")
-            if finish_reason:
-                logger.info(
-                    "Editor iteration %d: finish_reason=%s",
+                logger.debug(
+                    "Editor iteration %d: sending %d messages to LLM:\n%s",
                     iteration + 1,
-                    finish_reason,
+                    len(base.prefix) + len(trailing),
+                    json.dumps([*base.prefix, *trailing], default=str, indent=2),
                 )
 
-            parsed = parse_tool_calls(resp)
-            if not parsed:
-                logger.info(
-                    "Editor iteration %d: no tool call (resp=%s), stopping",
-                    iteration + 1,
-                    "empty" if not resp else f"finish_reason={finish_reason}",
-                )
-                break
+                try:
+                    async for event in base.complete(
+                        client,
+                        label="editor",
+                        trailing=trailing,
+                        tool_choice=_pick_tool_choice(length_guard_triggered, report, audit_enabled),
+                        kv_tracker=kv_tracker,
+                        **hyperparams,
+                        **reasoning_params,
+                    ):
+                        if event["type"] == "reasoning":
+                            yield {"type": "reasoning", "delta": event["delta"]}
+                        elif event["type"] == "done":
+                            resp = event["message"]
+                except Exception as llm_err:
+                    logger.error(
+                        "Editor iteration %d: client.complete() raised %s: %s",
+                        iteration + 1,
+                        type(llm_err).__name__,
+                        llm_err,
+                        exc_info=True,
+                    )
+                    raise
+
+                raw = json.dumps(resp, default=str)
+                debug_parts.append(f"Iteration {iteration + 1} response:\n{raw}")
+
+                finish_reason = resp.get("finish_reason") or resp.get("stop_reason")
+                if finish_reason:
+                    logger.info(
+                        "Editor iteration %d: finish_reason=%s",
+                        iteration + 1,
+                        finish_reason,
+                    )
+
+                parsed = parse_tool_calls(resp)
+                if not parsed:
+                    logger.info(
+                        "Editor iteration %d: no tool call (resp=%s), stopping",
+                        iteration + 1,
+                        "empty" if not resp else f"finish_reason={finish_reason}",
+                    )
+                    break
             all_calls.extend(parsed)
 
             # ── Handle editor_rewrite
@@ -765,6 +830,7 @@ async def _run_edit_loop(
                     break
                 pre_len = len(current_draft)
                 current_draft = rewritten
+                yield {"type": "draft_update", "draft": current_draft}
                 length_guard_triggered = False
                 logger.info(
                     "Editor iteration %d: rewrite applied, draft %d→%d chars",
@@ -775,7 +841,7 @@ async def _run_edit_loop(
                 debug_parts.append(f"Iteration {iteration + 1}: rewrite applied ({pre_len}→{len(current_draft)} chars)")
 
                 if audit_enabled:
-                    report, report_text = _run_contextual_audit(
+                    report, report_text = await _run_contextual_audit(
                         current_draft, phrase_bank, assistant_messages, audit_toggles, effective_msg
                     )
                     debug_parts.append(f"Post-rewrite audit ({report.total_issues} issues):\n{report_text}")
@@ -788,7 +854,7 @@ async def _run_edit_loop(
                 # Next iteration's tool_choice (via _pick_tool_choice) forces the
                 # right tool; base.tools stays the full, byte-identical blob.
                 prev_issues = report.total_issues
-                if reasoning_on:
+                if replay_structured:
                     rewrite_tool_calls = resp.get("tool_calls", [])
                     asst_msg: AssistantToolMessage = {
                         "role": "assistant",
@@ -837,6 +903,7 @@ async def _run_edit_loop(
 
             pre_len = len(current_draft)
             current_draft, errors = apply_patches(current_draft, patches)
+            yield {"type": "draft_update", "draft": current_draft}
             logger.info(
                 "Editor iteration %d: applied %d patches, draft %d→%d chars",
                 iteration + 1,
@@ -847,7 +914,7 @@ async def _run_edit_loop(
             for e in errors:
                 logger.warning("Editor iteration %d patch error: %s", iteration + 1, e)
 
-            report, report_text = _run_contextual_audit(
+            report, report_text = await _run_contextual_audit(
                 current_draft, phrase_bank, assistant_messages, audit_toggles, effective_msg
             )
             logger.info(
@@ -876,11 +943,12 @@ async def _run_edit_loop(
             prev_issues = report.total_issues
 
             # Feed results back for next iteration.
-            # reasoning_on=True: append structured tool-use/tool-result turns.
-            # reasoning_on=False: replace the draft + prompt in-place (same as
-            # the rewrite path) so the message list stays flat.
-            if reasoning_on:
-                _append_iteration_context(trailing, resp, patches, errors, report_text, reasoning_on=True)
+            # replay_structured: append structured tool-use/tool-result turns.
+            # Otherwise (non-thinking models, and always in prefill mode, which
+            # never grows the tail): replace the draft + prompt in-place so the
+            # message list stays flat.
+            if replay_structured:
+                _append_iteration_context(trailing, resp, errors, report_text)
             else:
                 trailing[-2] = {"role": "assistant", "content": current_draft}
                 trailing[-1] = {
@@ -938,57 +1006,155 @@ def _pick_tool_choice(length_guard_triggered: bool, report: AuditReport, audit_e
     return "auto"
 
 
+# ── Text-mode prefill patching ────────────────────────────────────────────────
+#
+# On a text-completion endpoint the audit already knows every flagged sentence
+# byte-exactly, so instead of one big call where the model re-prints each
+# `search` string, the loop issues one forced editor_apply_patch call per
+# finding with the arguments prefilled up to `"replace": "` — the model
+# generates only the replacement, grammar-pinned to a JSON string + the exact
+# closing bytes. Kills the wrong/stale-search error class and the tokens spent
+# re-printing draft text.
+
+
+def _patch_prefill(span: str) -> str:
+    """The partial editor_apply_patch arguments the transport prefills."""
+    return f'{{"patches": [{{"search": {json.dumps(span, ensure_ascii=False)}, "replace": "'
+
+
+def _prefill_targets(report: AuditReport, draft: str) -> list[tuple[str, str]]:
+    """(sentence, why) pairs for the per-finding prefilled patch calls.
+
+    Only spans occurring exactly once in *draft* qualify (apply_patches
+    requires a unique match). Repeated openers/templates keep their first
+    sentence as the anchor and target the rest. Structural repetition has no
+    span — the rewrite path owns it.
+    """
+    raw: list[tuple[str, str]] = []
+    for fs in report.cliche_result.flagged_sentences:
+        phrases = ", ".join(f'"{h.phrase}"' for h in fs.cliches)
+        raw.append((fs.sentence, f"contains banned phrase(s): {phrases}"))
+    for fo in report.monotony_result.flagged_openers:
+        for s in fo.sentences[1:]:
+            raw.append((s, f'opens with "{fo.opener}" like too many nearby sentences — vary the opening'))
+    for ft in report.template_result.flagged_templates:
+        for s in ft.sentences[1:]:
+            raw.append((s, f'follows the repeated sentence template "{ft.template}" — vary the structure'))
+    for nb in report.not_but_result:
+        if nb.get("sentence"):
+            raw.append((nb["sentence"], "uses the contrastive-negation cliché ('not X, but Y') — rephrase without it"))
+    if report.phrase_result:
+        for fp in report.phrase_result.flagged_phrases:
+            for s in fp.example_sentences:
+                if s in draft:
+                    raw.append((s, f'reuses the phrase "{fp.phrase}" already seen in {fp.count} previous messages'))
+                    break
+    if report.echo_result:
+        for fe in report.echo_result.flagged_echoes:
+            raw.append((fe.echo, "parrots the user's own words back as a question — replace with something new"))
+
+    targets: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for span, why in raw:
+        # Flagged sentences keep the narration's outer markers (`*`, quotes) that
+        # format_report strips only for display. Anchoring the prefilled search on
+        # them makes the model's marker-free replace eat the paragraph's opening/
+        # closing marker, so match on the plain text and leave the wrapping intact.
+        span = _strip_outer_markers(span)
+        if not span or span in seen or draft.count(span) != 1:
+            continue
+        seen.add(span)
+        targets.append((span, why))
+    # Emit in forward (top-to-bottom) document order rather than audit-category
+    # order, so the prefilled per-finding calls walk the draft the way the model
+    # reads it. Each span is unique (draft.count == 1 above), so index() is exact.
+    targets = targets[:MAX_PREFILL_TARGETS]
+    targets.sort(key=lambda t: draft.index(t[0]))
+    return targets
+
+
+async def _collect_prefill_patches(
+    client: LLMClient,
+    base: CachedBase,
+    context_user: WireMessage,
+    draft: str,
+    targets: list[tuple[str, str]],
+    hyperparams: dict,
+    kv_tracker: _KVCacheTracker | None,
+) -> AsyncIterator[dict]:
+    """One prefilled forced editor_apply_patch call per flagged sentence.
+
+    Every call extends the same [prefix, user, draft] stack, so only the short
+    per-finding tail is uncached. Reasoning is off: the prefilled open turn
+    pre-closes the thought channel anyway (and the chat-transport fallback,
+    where prefill/grammar are dropped, should answer without thinking too).
+    Yields exactly one ``{"type": "patches", "patches": list, "debug": str}``
+    per forced call (abort included), so the caller can surface per-finding
+    progress; draft state stays the caller's concern.
+    """
+    for span, why in targets:
+        if client.is_aborted:
+            yield {"type": "patches", "patches": [], "debug": "aborted mid-batch"}
+            return
+        trailing: list[WireMessage] = [
+            context_user,
+            {"role": "assistant", "content": draft},
+            {"role": "user", "content": build_patch_target_prompt(span, why)},
+        ]
+        resp: dict = {}
+        async for event in base.complete(
+            client,
+            label="editor",
+            trailing=trailing,
+            tool_choice=TOOLS["editor_apply_patch"]["choice"],
+            kv_tracker=kv_tracker,
+            prefill=_patch_prefill(span),
+            grammar=_PATCH_REMAINDER_GRAMMAR,
+            **hyperparams,
+            **reasoning_cfg(False),
+        ):
+            if event["type"] == "done":
+                resp = event["message"]
+        got = [
+            p
+            for call in parse_tool_calls(resp)
+            for p in (call.get("arguments") or {}).get("patches", [])
+            if isinstance(p, dict) and p.get("search")
+        ]
+        yield {
+            "type": "patches",
+            "patches": got,
+            "debug": f"{span[:60]!r} → " + (" / ".join(repr((p.get("replace") or "")[:60]) for p in got) or "<no patch>"),
+        }
+
+
 def _append_iteration_context(
     msgs: list[WireMessage],
     resp: dict,
-    patches: list[dict],
     errors: list[str],
     report_text: str,
-    *,
-    reasoning_on: bool,
 ):
-    """Append the assistant recap and tool-result turns for the next iteration.
-
-    ``reasoning_on=True``: structured tool-use format (role=tool) so the model
-    sees its exact call and the remaining issues in the form it was trained on.
-    ``reasoning_on=False``: a human-readable recap, more reliable for models
-    without reasoning.
+    """Append the assistant tool-call recap + tool-result turn for the next
+    iteration, in structured tool-use format (role=tool) so the model sees its
+    exact call and the remaining issues in the form it was trained on. Only the
+    reasoning/structured-replay path reaches this; non-reasoning modes re-send
+    the updated draft in place instead.
     """
     tool_response = ("\n".join(errors) + "\n\n" if errors else "") + report_text
-    if reasoning_on:
-        tool_calls = resp.get("tool_calls", [])
-        asst_msg: AssistantToolMessage = {
-            "role": "assistant",
-            "content": resp.get("content") or "",
-            "tool_calls": tool_calls,
-        }
-        if resp.get("reasoning_content"):
-            asst_msg["reasoning_content"] = resp["reasoning_content"]
-        msgs.append(asst_msg)
-        for tc in tool_calls:
-            msgs.append(
-                {
-                    "role": "tool",
-                    "tool_call_id": tc.get("id", ""),
-                    "content": tool_response,
-                }
-            )
-    else:
-        reasoning = resp.get("content", "") or ""
-        reasoning_content = resp.get("reasoning_content", "") or ""
-        patch_summary = (
-            "; ".join(f'replaced "{p.get("search", "")[:40]}…"' for p in patches if p.get("search") != p.get("replace"))
-            or "no effective changes"
-        )
-        if reasoning or reasoning_content:
-            combined = (reasoning + "\n" + reasoning_content).strip()
-            assistant_recap = combined + "\n\n" + f"[Applied patches: {patch_summary}]"
-        else:
-            assistant_recap = f"[Applied patches: {patch_summary}]"
-        msgs.append({"role": "assistant", "content": assistant_recap})
+    tool_calls = resp.get("tool_calls", [])
+    asst_msg: AssistantToolMessage = {
+        "role": "assistant",
+        "content": resp.get("content") or "",
+        "tool_calls": tool_calls,
+    }
+    if resp.get("reasoning_content"):
+        asst_msg["reasoning_content"] = resp["reasoning_content"]
+    msgs.append(asst_msg)
+    for tc in tool_calls:
         msgs.append(
             {
-                "role": "user",
-                "content": f"[Tool result — updated audit after your patches]\n{tool_response}",
+                "role": "tool",
+                "tool_call_id": tc.get("id", ""),
+                "content": tool_response,
             }
         )

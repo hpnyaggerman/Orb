@@ -8,8 +8,9 @@ it needs and the shapes stay discoverable in one place.
 from __future__ import annotations
 
 from typing import Any, List, Literal, Optional
+from urllib.parse import urlsplit
 
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class SettingsUpdate(BaseModel):
@@ -18,12 +19,12 @@ class SettingsUpdate(BaseModel):
     endpoint_url: Optional[str] = None
     api_key: Optional[str] = None
     model_name: Optional[str] = None
-    temperature: Optional[float] = None
-    min_p: Optional[float] = None
-    top_k: Optional[int] = None
-    top_p: Optional[float] = None
-    repetition_penalty: Optional[float] = None
-    max_tokens: Optional[int] = None
+    # Hyperparameters (temperature, min_p, top_k, top_p, repetition_penalty,
+    # max_tokens) are intentionally NOT on this contract: they live on the active
+    # endpoint's model_config and are edited via /models/{id}. get_settings()
+    # overlays them for reads, so a write here would be silently discarded. The
+    # frontend still includes them in its /settings PUT payload; extra fields are
+    # ignored (default Pydantic behavior), mirroring completion_mode.
     shared_system_prompt: Optional[str] = None
     system_prompt: Optional[str] = None
     user_name: Optional[str] = None
@@ -53,6 +54,9 @@ class SettingsUpdate(BaseModel):
     direction_notes_inject: Optional[Literal["off", "director", "writer", "both"]] = None
     inspector_open_states: Optional[dict] = None
     workflows_globally_enabled: Optional[bool] = None
+    retry_enabled: Optional[bool] = None
+    retry_count: Optional[int] = None
+    retry_delay_seconds: Optional[float] = None
 
 
 class DirectionNoteUpdate(BaseModel):
@@ -89,6 +93,23 @@ class EndpointUpdate(BaseModel):
     api_key: Optional[str] = None
     active_model_config_id: Optional[int] = None
     agent_active_model_config_id: Optional[int] = None
+    completion_mode: Optional[Literal["chat", "text"]] = None
+    proxy: Optional[str] = None
+
+    @field_validator("proxy")
+    @classmethod
+    def _validate_proxy(cls, v: Optional[str]) -> Optional[str]:
+        # Empty/blank means "no proxy". A set value must use a scheme httpx
+        # accepts (http/https, or socks5 via the httpx[socks] extra); reject
+        # anything else here so a typo fails at save time, not on every LLM turn.
+        if v is None:
+            return v
+        v = v.strip()
+        if not v:
+            return ""
+        if urlsplit(v).scheme.lower() not in ("http", "https", "socks5"):
+            raise ValueError("proxy URL must start with http://, https://, or socks5://")
+        return v
 
 
 class ModelConfigCreate(BaseModel):
@@ -227,6 +248,46 @@ class CheckpointRequest(BaseModel):
     title: Optional[str] = None
 
 
+class DocumentSpan(BaseModel):
+    # Offsets are JS/UTF-16-domain and opaque to the backend — only shape-validated.
+    # ge=0 only, deliberately NO coupling to len(content): Python counts code points
+    # and JS counts UTF-16 units, so a valid JS offset can legitimately exceed
+    # Python's string length on emoji-bearing docs (see plan design table).
+    start: int = Field(ge=0)
+    end: int = Field(ge=0)
+
+
+class DocumentCreate(BaseModel):
+    title: Optional[str] = None
+
+
+class DocumentUpdate(BaseModel):
+    title: Optional[str] = None
+    content: Optional[str] = None
+    generated_spans: Optional[List[DocumentSpan]] = None
+
+    @model_validator(mode="after")
+    def _spans_need_content(self) -> "DocumentUpdate":
+        # content and generated_spans must travel together: spans without content
+        # would apply offsets to stale server-side text. Title-only updates are
+        # unaffected (neither field set). Uses model_fields_set so an explicit
+        # content="" still counts as "provided".
+        if "generated_spans" in self.model_fields_set and "content" not in self.model_fields_set:
+            raise ValueError("generated_spans requires content in the same update")
+        return self
+
+
+class DocumentGenerateRequest(BaseModel):
+    prompt: str
+    # Assisted continuation: interpret ### SYSTEM/USER/ASSISTANT line macros and
+    # render through the model's chat template. Defaults false → Raw (verbatim).
+    assisted: bool = False
+    # Capture per-token alternatives (mikupad-style token swapping). Off by
+    # default: logprobs cost generation speed on llama.cpp, and providers that
+    # can't supply them degrade to no-popup. Emits `event: probs` SSE frames.
+    token_probs: bool = False
+
+
 class CharacterCardCreate(BaseModel):
     # id and source_format are normally omitted (manual creation). They are
     # supplied by the import flow: /api/characters/import parses the PNG and
@@ -340,6 +401,10 @@ class RegenerateMsg(BaseModel):
 
 class MagicRewriteMsg(BaseModel):
     direction: str
+
+
+class AutocompleteInput(BaseModel):
+    draft: str
 
 
 class PhraseGroupCreate(BaseModel):

@@ -45,6 +45,10 @@ CREATE TABLE IF NOT EXISTS settings (
     workflow_config TEXT NOT NULL DEFAULT '{}',
     workflows_globally_enabled INTEGER NOT NULL DEFAULT 1,
     workflow_enabled TEXT NOT NULL DEFAULT '{}',
+    local_ml_enabled TEXT NOT NULL DEFAULT '{}',
+    retry_enabled INTEGER NOT NULL DEFAULT 0,
+    retry_count INTEGER NOT NULL DEFAULT 10,
+    retry_delay_seconds REAL NOT NULL DEFAULT 5,
     attachment_cache_budget_bytes INTEGER NOT NULL DEFAULT 524288000,
     attachment_access_counter INTEGER NOT NULL DEFAULT 0,
     generated_chars INTEGER DEFAULT NULL
@@ -97,6 +101,14 @@ CREATE TABLE IF NOT EXISTS character_cards (
     updated_at TEXT NOT NULL,
     workflow_state TEXT DEFAULT NULL,
     persona_lock_id INTEGER REFERENCES user_personas(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS character_expressions (
+    character_card_id TEXT NOT NULL REFERENCES character_cards(id) ON DELETE CASCADE,
+    label TEXT NOT NULL,
+    data_b64 TEXT NOT NULL,
+    mime TEXT NOT NULL DEFAULT 'image/png',
+    PRIMARY KEY (character_card_id, label)
 );
 
 CREATE TABLE IF NOT EXISTS messages (
@@ -211,7 +223,9 @@ CREATE TABLE IF NOT EXISTS endpoints (
     url TEXT NOT NULL,
     api_key TEXT NOT NULL DEFAULT '',
     active_model_config_id INTEGER REFERENCES model_configs(id) ON DELETE SET NULL,
-    agent_active_model_config_id INTEGER REFERENCES model_configs(id) ON DELETE SET NULL
+    agent_active_model_config_id INTEGER REFERENCES model_configs(id) ON DELETE SET NULL,
+    completion_mode TEXT NOT NULL DEFAULT 'chat' CHECK (completion_mode IN ('chat', 'text')),
+    proxy TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS model_configs (
@@ -263,6 +277,15 @@ CREATE TABLE IF NOT EXISTS direction_notes (
 
 CREATE INDEX IF NOT EXISTS idx_dirnote_message ON direction_notes(message_id);
 CREATE INDEX IF NOT EXISTS idx_dirnote_conversation ON direction_notes(conversation_id);
+
+CREATE TABLE IF NOT EXISTS documents (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL DEFAULT 'Untitled',
+    content TEXT NOT NULL DEFAULT '',
+    generated_spans TEXT NOT NULL DEFAULT '[]',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
 
 """
 

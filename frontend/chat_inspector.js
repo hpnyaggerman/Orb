@@ -6,8 +6,8 @@ import { api } from "./api.js";
 import { renderContextSize, renderMessages } from "./chat_core.js";
 import { USER_NOTE_ID } from "./direction_notes_panel.js";
 import { closeUtilityPanel, isUtilityPanelOpen, openUtilityPanel } from "./panels.js";
-import { S, effectiveWorkflowEnabled } from "./state.js";
-import { $, esc } from "./utils.js";
+import { effectiveWorkflowEnabled, S } from "./state.js";
+import { $, esc, sentenceTail } from "./utils.js";
 
 // ── Inspector — Reasoning stepper rail
 
@@ -45,7 +45,7 @@ function _buildReasoningHtml() {
   const streamIdx = S.reasoningPassActive;
   const selectedIdx = S.reasoningPassSelected;
   const dotsHtml = REASONING_PASSES.map((p, i) => {
-    const hasText = !!S["reasoning" + p.key.charAt(0).toUpperCase() + p.key.slice(1)];
+    const hasText = !!S[`reasoning${p.key.charAt(0).toUpperCase()}${p.key.slice(1)}`];
     const isStreaming = i === streamIdx;
     const isSelected = i === selectedIdx;
     const lit = hasText || isStreaming;
@@ -61,19 +61,17 @@ function _buildReasoningHtml() {
       .join(";");
     const lineColor = i < streamIdx ? REASONING_PASSES[i + 1].color : "var(--border)";
     const checkId = `reasoning-enabled-${p.key}`;
-    return (
-      `<div class="reasoning-dot-col">
+    return `<div class="reasoning-dot-col">
         <button class="reasoning-dot" onclick="selectReasoningPass(${i})" style="${dotStyle}">${i + 1}</button>
         <label class="reasoning-enabled-label" for="${checkId}">
           <input type="checkbox" id="${checkId}" ${enabled ? "checked" : ""} onchange="toggleReasoningPass('${p.key}')">
           <span>on</span>
         </label>
-      </div>` + (i < 2 ? `<div class="reasoning-rail-line" style="background:${lineColor}"></div>` : "")
-    );
+      </div>${i < 2 ? `<div class="reasoning-rail-line" style="background:${lineColor}"></div>` : ""}`;
   }).join("");
 
   const selectedPass = REASONING_PASSES[selectedIdx];
-  const currentText = S["reasoning" + selectedPass.key.charAt(0).toUpperCase() + selectedPass.key.slice(1)] || "";
+  const currentText = S[`reasoning${selectedPass.key.charAt(0).toUpperCase()}${selectedPass.key.slice(1)}`] || "";
   const openAttr = S.reasoningOpen ? " open" : "";
 
   return `<details class="inspector-block reasoning-section" id="reasoning-section"${openAttr} ontoggle="S.reasoningOpen=this.open;saveInspectorOpenStates()">
@@ -294,7 +292,7 @@ export function setWorkflowPhase(channel, label) {
     const wid = channel.split(":")[1];
     if (wid && !effectiveWorkflowEnabled(wid)) return;
   }
-  if (label && label.trim()) S.workflowPhases[channel] = label;
+  if (label?.trim()) S.workflowPhases[channel] = label;
   else delete S.workflowPhases[channel];
   _renderWorkflowPhasesPill();
   _syncGenerationStatusVisibility();
@@ -311,7 +309,7 @@ export function clearWorkflowPhase(channel) {
 // when the id is absent from the manifest.
 export function workflowPhaseLabel(wid, verb) {
   const entry = S.workflowManifest.find((w) => w.id === wid);
-  return `${(entry && entry.display_name) || "Workflow"}: ${verb}`;
+  return `${entry?.display_name || "Workflow"}: ${verb}`;
 }
 
 export async function loadWorkflowManifest() {
@@ -353,7 +351,7 @@ export function feedbackRows(values) {
     .filter(([, v]) => v && (Array.isArray(v) ? v.length : true))
     .map(([id, v]) => {
       const frag = frags.find((f) => f.id === id);
-      const label = (frag && frag.injection_label) || (frag && frag.label) || id;
+      const label = frag?.injection_label || frag?.label || id;
       return { label, value: v };
     });
 }
@@ -504,8 +502,8 @@ function _renderInspectorMain() {
     (S.lastDirectorData && Object.keys(S.lastDirectorData).length > 0);
 
   if (!hasDirectorData) {
-    const fbHtml = buildFeedbackHtml(S.lastFeedback && S.lastFeedback.values);
-    const pnHtml = buildDirectionNotesHtml(S.lastDirectionNotes && S.lastDirectionNotes.notes);
+    const fbHtml = buildFeedbackHtml(S.lastFeedback?.values);
+    const pnHtml = buildDirectionNotesHtml(S.lastDirectionNotes?.notes);
     // Canonical order: context-size, reasoning, feedback (matches the settled
     // director-data branch so nothing shifts once director output arrives).
     $("inspector-content").innerHTML = `
@@ -533,8 +531,8 @@ function _renderInspectorMain() {
       <div>${stylesHtml || '<span style="color:var(--text-muted);font-size:12px">None</span>'}</div>
     </div>
     ${_buildReasoningHtml()}
-    ${buildFeedbackHtml(S.lastFeedback && S.lastFeedback.values)}
-    ${buildDirectionNotesHtml(S.lastDirectionNotes && S.lastDirectionNotes.notes)}
+    ${buildFeedbackHtml(S.lastFeedback?.values)}
+    ${buildDirectionNotesHtml(S.lastDirectionNotes?.notes)}
     ${tc.length ? _buildToolCallsHtml(tc) : ""}
     ${inj ? _buildInjectionBlockHtml(inj) : ""}
     ${
@@ -549,7 +547,72 @@ function _renderInspectorMain() {
   renderContextSize();
 }
 
-export function showAvatarPopup() {
+// Expression polling: while the avatar popup is open and the character has an
+// uploaded expression pack, watch the latest assistant message on a 1s tick and
+// swap the popup image to the matching expression. The tick is only a scheduler:
+// the classified unit is the last few *sentences*, but because generation speed
+// is unknowable, cadence is normalized in time:
+// never more than one call per _EXPR_MIN_INTERVAL_MS, and if no sentence has
+// completed for _EXPR_STALE_MS while text keeps streaming in, the partial
+// sentence is classified rather than leaving the expression frozen.
+const _EXPR_TAIL_SENTENCES = 7;
+const _EXPR_MIN_INTERVAL_MS = 1000;
+const _EXPR_STALE_MS = 5000;
+const _EXPR_MIN_GROWTH_CHARS = 40; // don't classify a fragment like "She"
+let _exprTimer = null;
+let _exprLastCallAt = 0;
+
+async function _expressionTick(charId) {
+  const img = document.getElementById("avatar-popup-image");
+  if (!img) return;
+  const full = S.isStreaming
+    ? S.streamingContent
+    : [...S.messages].reverse().find((m) => m.role === "assistant" && m.id)?.content;
+  if (!full) return;
+  const now = Date.now();
+  if (now - _exprLastCallAt < _EXPR_MIN_INTERVAL_MS) return; // fast models: rate floor
+  // Classify only the sentence tail: recency is enforced here by input selection
+  // (the model never sees older moods), not by trusting the classifier to weight
+  // late text. While streaming, the trailing fragment is dropped so `text` only
+  // changes — and the API only fires — when a sentence completes.
+  let text = sentenceTail(full, _EXPR_TAIL_SENTENCES, S.isStreaming);
+  if (
+    (!text || img._exprText === text) &&
+    S.isStreaming &&
+    now - _exprLastCallAt >= _EXPR_STALE_MS &&
+    full.length - (img._exprFullLen || 0) >= _EXPR_MIN_GROWTH_CHARS
+  ) {
+    // Slow models: a sentence has been streaming for a while without completing —
+    // classify it anyway, fragment included.
+    text = sentenceTail(full, _EXPR_TAIL_SENTENCES, false);
+  }
+  if (!text || img._exprText === text) return;
+  img._exprText = text;
+  img._exprFullLen = full.length;
+  _exprLastCallAt = now;
+  let label;
+  try {
+    ({ label } = await api.post("/local-ml/classify-emotion", { text }));
+  } catch (_e) {
+    // 503 = feature off / model missing; anything else — stop silently.
+    clearInterval(_exprTimer);
+    _exprTimer = null;
+    return;
+  }
+  const labels = img._exprLabels || [];
+  const resolved = labels.includes(label) ? label : labels.includes("neutral") ? "neutral" : null;
+  if (!resolved) {
+    img.src = `/api/characters/${charId}/avatar`; // no matching expression → plain avatar
+    return;
+  }
+  const next = `/api/characters/${charId}/expressions/${resolved}`;
+  if (img._exprSrc !== next) {
+    img._exprSrc = next; // swap only on change (ETag handles caching; no ?t= flicker)
+    img.src = next;
+  }
+}
+
+export async function showAvatarPopup() {
   if (!S.activeCharId) return;
   const popup = document.getElementById("avatar-popup");
   if (!popup) return;
@@ -557,12 +620,47 @@ export function showAvatarPopup() {
     hideAvatarPopup();
     return;
   }
+  const charId = S.activeCharId;
   const img = document.getElementById("avatar-popup-image");
-  if (img) img.src = `/api/characters/${S.activeCharId}/avatar?t=${Date.now()}`;
+  const hasExpr = (S.characters || []).find((c) => c.id === charId)?.has_expressions;
+  if (img) {
+    // With a pack, hold off on the plain avatar (its dimensions usually differ
+    // from the pack's, resizing the frame ~1s later) and show neutral instead
+    // once labels arrive below.
+    if (!hasExpr) img.src = `/api/characters/${charId}/avatar?t=${Date.now()}`;
+    img._exprSrc = null;
+    img._exprText = null;
+    img._exprFullLen = 0;
+  }
+  _exprLastCallAt = 0; // fresh popup: first tick classifies immediately
   popup.classList.remove("hidden");
+
+  let labels = [];
+  if (hasExpr) {
+    try {
+      ({ labels } = await api.get(`/characters/${charId}/expressions`));
+    } catch {
+      labels = [];
+    }
+  }
+  if (img && hasExpr && !popup.classList.contains("hidden")) {
+    if (labels.includes("neutral")) {
+      img._exprSrc = `/api/characters/${charId}/expressions/neutral`;
+      img.src = img._exprSrc;
+    } else {
+      img.src = `/api/characters/${charId}/avatar?t=${Date.now()}`;
+    }
+  }
+  // Popup may have been closed while the fetch was in flight.
+  if (popup.classList.contains("hidden") || !labels.length || !img) return;
+  img._exprLabels = labels;
+  _expressionTick(charId);
+  _exprTimer = setInterval(() => _expressionTick(charId), 1000);
 }
 
 export function hideAvatarPopup() {
   const popup = document.getElementById("avatar-popup");
   if (popup) popup.classList.add("hidden");
+  clearInterval(_exprTimer);
+  _exprTimer = null;
 }

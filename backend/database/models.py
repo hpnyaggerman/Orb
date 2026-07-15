@@ -101,6 +101,9 @@ class _SettingsBase(TypedDict):
     direction_notes_record: int
     direction_notes_inject: str
     workflows_globally_enabled: int
+    retry_enabled: int
+    retry_count: int
+    retry_delay_seconds: float
 
 
 class SettingsRow(_SettingsBase, total=False):
@@ -131,6 +134,17 @@ class SettingsRow(_SettingsBase, total=False):
     inspector_open_states: dict
     workflow_config: str  # left raw; decoded per-slot by get_workflow_config()
     workflow_enabled: dict[str, bool]  # decoded by get_settings(); per-workflow on/off, missing key => on
+    local_ml_enabled: dict[str, bool]  # decoded by get_settings(); per-local-ML-feature on/off, missing key => on
+    # Per-endpoint transport mode, surfaced by the get_settings() overlay from
+    # the active/agent endpoint row (default 'chat'). agent_completion_mode
+    # falls back to completion_mode when the agent shares the writer endpoint.
+    completion_mode: Literal["chat", "text"]
+    agent_completion_mode: Literal["chat", "text"]
+    # Per-endpoint proxy URL, surfaced by the same overlay (default ''); empty
+    # means a direct connection. agent_proxy falls back to proxy when the agent
+    # shares the writer endpoint.
+    proxy: str
+    agent_proxy: str
     # Agent-endpoint cascade overlays (present only when it resolves).
     agent_endpoint_url: str
     agent_api_key: str
@@ -268,13 +282,15 @@ class MessageWithAttachments(MessageRow, total=False):
 
 class EndpointRow(TypedDict):
     """A row from the ``endpoints`` table. Every query selects exactly these
-    five columns (avatar/secret columns are never projected here)."""
+    columns (avatar/secret columns are never projected here)."""
 
     id: int
     url: str
     api_key: str
     active_model_config_id: int | None
     agent_active_model_config_id: int | None
+    completion_mode: Literal["chat", "text"]
+    proxy: str
 
 
 class ModelConfigRow(TypedDict):
@@ -464,3 +480,40 @@ class CharacterCardRow(TypedDict, total=False):
     workflow_state: str | None
     persona_lock_id: int | None
     has_avatar: bool
+    has_expressions: bool
+
+
+class CharacterExpressionRow(TypedDict):
+    """A row from ``character_expressions`` — one expression image per (card, label)."""
+
+    character_card_id: str
+    label: str
+    data_b64: str
+    mime: str
+
+
+class DocumentListRow(TypedDict):
+    """The lightweight ``documents`` projection the sidebar list consumes
+    (``get_documents``): identity + timestamps, never the full ``content``.
+
+    NOTE: this is deliberately the *inverse* of the
+    ``ConversationListRow(ConversationRow)`` relationship. There the list row
+    *adds* join columns to the full base row; here the list view is a strict
+    *column projection* (it must not drag every document's full body into a list
+    payload), so the full :class:`DocumentRow` extends this projection instead.
+    """
+
+    id: str
+    title: str
+    created_at: str
+    updated_at: str
+
+
+class DocumentRow(DocumentListRow):
+    """A full ``documents`` row as ``get_document`` returns it. Extends the list
+    projection with the body and the decoded spans. ``generated_spans`` is the
+    JSON-*decoded* list (only ``get_document`` decodes it — the list query never
+    selects the column)."""
+
+    content: str
+    generated_spans: list

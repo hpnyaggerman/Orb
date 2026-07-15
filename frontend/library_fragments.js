@@ -2,7 +2,7 @@
 // CRUD + reorder. Split out of library.js; the public surface is re-exported
 // from library.js.
 import { api } from "./api.js";
-import { closeModal, showConfirmModal, showModal } from "./modal.js";
+import { closeModal, confirmDelete, showModal } from "./modal.js";
 import { S } from "./state.js";
 import { $, esc, toast } from "./utils.js";
 import { validate } from "./validate.js";
@@ -92,7 +92,7 @@ export async function saveMoodFragment(isEdit) {
     return;
   }
   try {
-    if (isEdit) await api.put("/fragments/" + d.id, d);
+    if (isEdit) await api.put(`/fragments/${d.id}`, d);
     else await api.post("/fragments", d);
     closeModal();
     await loadMoodFragments();
@@ -103,27 +103,20 @@ export async function saveMoodFragment(isEdit) {
 }
 
 export async function deleteMoodFragment(id) {
-  showConfirmModal(
-    {
-      title: "Delete Mood Fragment",
-      message: "Are you sure you want to delete this mood fragment?",
-      confirmText: "Delete",
-    },
-    async () => {
-      try {
-        await api.del("/fragments/" + id);
-        await loadMoodFragments();
-        toast("Mood fragment deleted");
-      } catch (e) {
-        toast(e.message, true);
-      }
-    },
-  );
+  confirmDelete("Mood Fragment", "Are you sure you want to delete this mood fragment?", async () => {
+    try {
+      await api.del(`/fragments/${id}`);
+      await loadMoodFragments();
+      toast("Mood fragment deleted");
+    } catch (e) {
+      toast(e.message, true);
+    }
+  });
 }
 
 export async function toggleMoodFragmentEnabled(id, newEnabled) {
   try {
-    await api.put("/fragments/" + id, { enabled: newEnabled });
+    await api.put(`/fragments/${id}`, { enabled: newEnabled });
     // Update local state optimistically
     const frag = S.moodFragments.find((f) => f.id === id);
     if (frag) frag.enabled = newEnabled;
@@ -237,7 +230,7 @@ function setupDragAndDrop(container) {
     }
   });
 
-  container.addEventListener("dragend", (e) => {
+  container.addEventListener("dragend", (_e) => {
     if (dragged) {
       dragged.classList.remove("dragging");
       dragged = null;
@@ -291,18 +284,25 @@ const INTERACTIVE_FRAGMENT_EXAMPLES = {
     label: "e.g. Pacing",
     injection_label: "e.g. Pacing",
     description: "Set the pace of the narration, e.g. 'slow', 'fast', 'time-skip'",
+    inj_hint: "sent to the writer",
+    desc_hint: "tells the Director what to set — sent in its tool schema",
   },
   array: {
     id: "e.g. plot_threads",
     label: "e.g. Plot Threads",
     injection_label: "e.g. Active Threads",
     description: "List the active plot threads, e.g. 'unresolved rivalry', 'looming deadline'",
+    inj_hint: "sent to the writer",
+    desc_hint: "tells the Director what to list — sent in its tool schema",
   },
   progressive: {
-    id: "e.g. tension",
-    label: "e.g. Tension",
-    injection_label: "e.g. Tension",
-    description: "Track a value that evolves each turn, e.g. 'calm' -> 'uneasy' -> 'breaking point'",
+    id: "e.g. trust",
+    label: "e.g. Trust",
+    injection_label: "e.g. Trust level",
+    description:
+      "How much the character trusts the user, as a percentage that shifts gradually, e.g. '10%' -> '25%' -> '40%'",
+    inj_hint: "sent to the writer",
+    desc_hint: "sent in the Director's tool schema, and shown to the writer beside the value",
   },
   direction_note: {
     id: "e.g. trajectory",
@@ -310,6 +310,8 @@ const INTERACTIVE_FRAGMENT_EXAMPLES = {
     injection_label: "e.g. Direction of travel",
     description:
       "A lasting note the director records and keeps on this branch, e.g. 'where the story is heading and the established facts that pin it'",
+    inj_hint: "sent to the writer",
+    desc_hint: "tells the Director what to record — sent in its tool schema",
   },
   feedback: {
     id: "e.g. next_actions",
@@ -317,6 +319,8 @@ const INTERACTIVE_FRAGMENT_EXAMPLES = {
     injection_label: "e.g. What you could do next",
     description:
       "A short out-of-character note shown to you after each reply, e.g. 'suggest what the player could do or say next'",
+    inj_hint: "shown to you",
+    desc_hint: "tells the model what to write — sent in its tool schema",
   },
 };
 
@@ -330,6 +334,12 @@ export function updateInteractiveFragmentExample(fieldType) {
   set("interactive-frag-label", ex.label);
   set("interactive-frag-inj-label", ex.injection_label);
   set("interactive-frag-desc", ex.description);
+  const setHint = (elId, text) => {
+    const el = document.getElementById(elId);
+    if (el) el.textContent = `(${text})`;
+  };
+  setHint("interactive-frag-inj-hint", ex.inj_hint);
+  setHint("interactive-frag-desc-hint", ex.desc_hint);
   // The recording-timing selector applies only to direction-note fragments.
   const timingRow = document.getElementById("interactive-frag-timing-row");
   if (timingRow) timingRow.style.display = fieldType === "direction_note" ? "" : "none";
@@ -359,7 +369,7 @@ export function showInteractiveFragmentModal(fragId = null) {
         <input id="interactive-frag-label" value="${esc(d.label)}" placeholder="${esc(ex.label)}"></div>
     </div>
     <div class="field-row">
-      <div class="field"><label>Injection Label</label>
+      <div class="field"><label>Injection Label <span id="interactive-frag-inj-hint" style="font-size:10px;color:var(--text-muted)">(${esc(ex.inj_hint)})</span></label>
         <input id="interactive-frag-inj-label" value="${esc(d.injection_label)}" placeholder="${esc(ex.injection_label)}"></div>
       <div class="field"><label>Field Type</label>
         <select id="interactive-frag-type" onchange="updateInteractiveFragmentExample(this.value)">
@@ -378,7 +388,7 @@ export function showInteractiveFragmentModal(fragId = null) {
         <option value="pre_writer" ${d.direction_note_timing === "pre_writer" ? "selected" : ""}>Before writer</option>
       </select>
     </div>
-    <div class="field"><label>Description <span style="font-size:10px;color:var(--text-muted)">(shown to the LLM in the tool schema)</span></label>
+    <div class="field"><label>Description <span id="interactive-frag-desc-hint" style="font-size:10px;color:var(--text-muted)">(${esc(ex.desc_hint)})</span></label>
       <textarea id="interactive-frag-desc" rows="4" placeholder="${esc(ex.description)}">${esc(d.description)}</textarea></div>
     <div class="field-row">
       <div class="field" style="align-self:flex-end;padding-bottom:4px">
@@ -411,7 +421,7 @@ export async function saveInteractiveFragment(isEdit) {
     return;
   }
   try {
-    if (isEdit) await api.put("/interactive-fragments/" + d.id, d);
+    if (isEdit) await api.put(`/interactive-fragments/${d.id}`, d);
     else await api.post("/interactive-fragments", d);
     closeModal();
     await loadInteractiveFragments();
@@ -422,27 +432,20 @@ export async function saveInteractiveFragment(isEdit) {
 }
 
 export async function deleteInteractiveFragment(id) {
-  showConfirmModal(
-    {
-      title: "Delete Interactive Fragment",
-      message: "Are you sure you want to delete this interactive fragment?",
-      confirmText: "Delete",
-    },
-    async () => {
-      try {
-        await api.del("/interactive-fragments/" + id);
-        await loadInteractiveFragments();
-        toast("Interactive fragment deleted");
-      } catch (e) {
-        toast(e.message, true);
-      }
-    },
-  );
+  confirmDelete("Interactive Fragment", "Are you sure you want to delete this interactive fragment?", async () => {
+    try {
+      await api.del(`/interactive-fragments/${id}`);
+      await loadInteractiveFragments();
+      toast("Interactive fragment deleted");
+    } catch (e) {
+      toast(e.message, true);
+    }
+  });
 }
 
 export async function toggleInteractiveFragmentEnabled(id, newEnabled) {
   try {
-    await api.put("/interactive-fragments/" + id, { enabled: newEnabled });
+    await api.put(`/interactive-fragments/${id}`, { enabled: newEnabled });
     const frag = S.interactiveFragments.find((f) => f.id === id);
     if (frag) frag.enabled = newEnabled;
     renderInteractiveFragments();

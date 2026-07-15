@@ -53,6 +53,7 @@ DOMAIN_ROOTS: dict[str, str] = {
     "mood_fragments": "fragments",
     "interactive_fragments": "fragments",
     "phrase_bank": "phrase_bank",
+    "documents": "documents",
     "settings": "configs",
     "endpoints": "configs",
     "user_personas": "configs",
@@ -81,6 +82,7 @@ SECRET_COLUMNS: dict[tuple[str, str], str] = {
     ("settings", "shared_system_prompt"): "",
     ("settings", "agent_shared_system_prompt"): "",
     ("endpoints", "api_key"): "",
+    ("endpoints", "proxy"): "",
 }
 
 # Touch when: exporting one domain only makes sense alongside another (a product
@@ -101,6 +103,7 @@ PRESERVED_COLUMNS: dict[str, tuple[str, ...]] = {
         "generated_chars",
         "workflows_globally_enabled",
         "workflow_enabled",
+        "local_ml_enabled",
     ),
 }
 

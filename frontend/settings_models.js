@@ -23,6 +23,16 @@ const SETTING_FIELDS = [
   { k: "endpoint_url", l: "Endpoint URL", t: "text" },
   { k: "api_key", l: "API Key", t: "api_key" },
   { k: "model_name", l: "Model Name", t: "text" },
+  {
+    k: "completion_mode",
+    l: "API Mode",
+    t: "select",
+    opts: [
+      ["chat", "Chat Completions"],
+      ["text", "Text Completion (llama.cpp)"],
+    ],
+  },
+  { k: "proxy", l: "Proxy", t: "text", ph: "socks5://127.0.0.1:1080" },
   { k: "shared_system_prompt", l: "System Prompt (global)", t: "textarea" },
   { k: "system_prompt", l: "System Prompt (model)", t: "textarea" },
   { k: "temperature", l: "Temperature", t: "number", s: "0.05", mn: "0", mx: "2" },
@@ -44,6 +54,16 @@ const AGENT_SETTING_FIELDS = [
   { k: "agent_endpoint_url", l: "Agent Endpoint URL", t: "text" },
   { k: "agent_api_key", l: "Agent API Key", t: "api_key" },
   { k: "agent_model_name", l: "Agent Model Name", t: "text" },
+  {
+    k: "agent_completion_mode",
+    l: "Agent API Mode",
+    t: "select",
+    opts: [
+      ["chat", "Chat Completions"],
+      ["text", "Text Completion (llama.cpp)"],
+    ],
+  },
+  { k: "agent_proxy", l: "Agent Proxy", t: "text", ph: "socks5://127.0.0.1:1080" },
   { k: "agent_shared_system_prompt", l: "Agent System Prompt (global)", t: "textarea" },
   { k: "agent_temperature", l: "Agent Temperature", t: "number", s: "0.05", mn: "0", mx: "2" },
   { k: "agent_top_p", l: "Agent Top P", t: "number", s: "0.05", mn: "0", mx: "1" },
@@ -59,6 +79,8 @@ const WRITER_CTX = {
   urlField: "endpoint_url",
   apiKeyField: "api_key",
   modelField: "model_name",
+  completionModeField: "completion_mode",
+  proxyField: "proxy",
   activeConfigDbField: "active_model_config_id",
   settingsEndpointField: "active_endpoint_id",
   hyperparamKeys: MODEL_HYPERPARAM_KEYS,
@@ -73,6 +95,8 @@ const AGENT_CTX = {
   urlField: "agent_endpoint_url",
   apiKeyField: "agent_api_key",
   modelField: "agent_model_name",
+  completionModeField: "agent_completion_mode",
+  proxyField: "agent_proxy",
   activeConfigDbField: "agent_active_model_config_id",
   settingsEndpointField: "agent_endpoint_id",
   hyperparamKeys: AGENT_MODEL_HYPERPARAM_KEYS,
@@ -83,7 +107,7 @@ export async function toggleAgentSameAsWriter(checked) {
   S.agentSameAsWriter = checked;
   try {
     await api.put("/settings", { agent_same_as_writer: checked });
-  } catch (e) {
+  } catch (_e) {
     toast("Failed to save agent toggle", true);
     return;
   }
@@ -103,7 +127,9 @@ export function renderEndpoints() {
     const saveFn = isAgent ? "saveAgentSetting" : "saveSetting";
     if (f.t === "textarea") {
       const rows = f.k === "system_prompt" || f.k === "agent_system_prompt" ? ' rows="2"' : "";
-      return `<div class="field"><label>${f.l}</label>
+      // System-prompt fields are chat-only: hidden in document mode (see document.css).
+      const cls = f.k === "system_prompt" || f.k === "shared_system_prompt" ? " ep-chat-only" : "";
+      return `<div class="field${cls}"><label>${f.l}</label>
                 <textarea data-key="${f.k}"${rows} onchange="${saveFn}(this)">${v}</textarea>
               </div>`;
     }
@@ -136,29 +162,41 @@ export function renderEndpoints() {
         ${warningHtml}
       </div>`;
     }
+    if (f.t === "select") {
+      const opts = f.opts
+        .map(([val, label]) => `<option value="${val}"${v === val ? " selected" : ""}>${esc(label)}</option>`)
+        .join("");
+      return `<div class="field"><label>${f.l}</label>
+                <select data-key="${f.k}" onchange="${saveFn}(this)">${opts}</select>
+              </div>`;
+    }
     const attrs = f.s ? `step="${f.s}" min="${f.mn}" max="${f.mx}"` : "";
+    const ph = f.ph ? ` placeholder="${esc(f.ph)}"` : "";
     return `<div class="field"><label>${f.l}</label>
-              <input type="${f.t}" value="${v}" data-key="${f.k}" ${attrs} onchange="${saveFn}(this)">
+              <input type="${f.t}" value="${v}" data-key="${f.k}" ${attrs}${ph} onchange="${saveFn}(this)">
             </div>`;
   }
 
   const agentHidden = S.agentSameAsWriter ? ' style="display:none"' : "";
 
+  // The whole Agent block is chat-only: hidden in document mode (see document.css).
   $("endpoints-form").innerHTML = `
     ${SETTING_FIELDS.map((f) => renderField(f, false)).join("")}
-    <div style="display:flex;align-items:center;gap:12px;margin:12px 0 8px"><div style="flex:1;height:1px;background:var(--accent-dim)"></div><span style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--accent-dim)">Agent</span><div style="flex:1;height:1px;background:var(--accent-dim)"></div></div>
-    <div class="tool-card" style="margin-bottom:12px">
-      <div class="tool-card-header">
-        <span class="tool-card-name">Same as Writer</span>
-        <label class="tog" onclick="event.stopPropagation()">
-          <input type="checkbox" ${S.agentSameAsWriter ? "checked" : ""} onchange="toggleAgentSameAsWriter(this.checked)">
-          <span class="tog-slider"></span>
-        </label>
+    <div class="ep-chat-only">
+      <div style="display:flex;align-items:center;gap:12px;margin:12px 0 8px"><div style="flex:1;height:1px;background:var(--accent-dim)"></div><span style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--accent-dim)">Agent</span><div style="flex:1;height:1px;background:var(--accent-dim)"></div></div>
+      <div class="tool-card" style="margin-bottom:12px">
+        <div class="tool-card-header">
+          <span class="tool-card-name">Same as Writer</span>
+          <label class="tog" onclick="event.stopPropagation()">
+            <input type="checkbox" ${S.agentSameAsWriter ? "checked" : ""} onchange="toggleAgentSameAsWriter(this.checked)">
+            <span class="tog-slider"></span>
+          </label>
+        </div>
+        <div class="tool-card-desc">Use the same endpoint and model for Agent passes as the Writer.</div>
       </div>
-      <div class="tool-card-desc">Use the same endpoint and model for Agent passes as the Writer.</div>
-    </div>
-    <div id="agent-fields"${agentHidden}>
-      ${AGENT_SETTING_FIELDS.map((f) => renderField(f, true)).join("")}
+      <div id="agent-fields"${agentHidden}>
+        ${AGENT_SETTING_FIELDS.map((f) => renderField(f, true)).join("")}
+      </div>
     </div>
   `;
   initComboboxes();
@@ -182,7 +220,7 @@ export function updateEndpointsLabel() {
   }
   const MAX = 30;
   const EDGE = 12;
-  el.textContent = model.length <= MAX ? model : model.slice(0, EDGE) + "..." + model.slice(-EDGE);
+  el.textContent = model.length <= MAX ? model : `${model.slice(0, EDGE)}...${model.slice(-EDGE)}`;
   el.title = model;
 }
 
@@ -225,7 +263,9 @@ function highlightMatch(text, query) {
 }
 
 export function initComboboxes() {
-  _comboboxCleanups.forEach((fn) => fn());
+  _comboboxCleanups.forEach((fn) => {
+    fn();
+  });
   _comboboxCleanups = [];
   const epRoot = document.querySelector('[data-combobox="endpoint_url"]');
   if (epRoot) initCombobox(epRoot, () => S.endpoints.map((e) => ({ value: e.url, id: e.id, type: "endpoint" })), false);
@@ -245,7 +285,7 @@ export function initComboboxes() {
 }
 
 // Global delete function for combobox items
-window.deleteComboboxItem = (btn, type, id, isAgent = false) => {
+window.deleteComboboxItem = (_btn, type, id, isAgent = false) => {
   const typeName = type === "endpoint" ? "endpoint" : "model configuration";
   showConfirmModal(
     {
@@ -314,7 +354,7 @@ window.deleteComboboxItem = (btn, type, id, isAgent = false) => {
         populateModelDatalist();
         toast("Deleted");
       } catch (e) {
-        toast("Failed to delete: " + e.message, true);
+        toast(`Failed to delete: ${e.message}`, true);
       }
     },
   );
@@ -494,7 +534,7 @@ async function _loadConfigs(ctx, endpointId) {
     const all = await api.get(`/endpoints/${endpointId}/models`);
     S[ctx.configsKey] = all.filter((m) => m.role === ctx.role || (ctx.role === "writer" && !m.role));
     initComboboxes();
-  } catch (e) {
+  } catch (_e) {
     S[ctx.configsKey] = [];
     initComboboxes();
   }
@@ -516,6 +556,10 @@ function _fillEndpointFields(ctx) {
     if (epEl) epEl.value = ep.url || "";
     const keyEl = document.querySelector(`[data-key="${ctx.apiKeyField}"]`);
     if (keyEl) keyEl.value = ep.api_key || "";
+    const cmEl = document.querySelector(`[data-key="${ctx.completionModeField}"]`);
+    if (cmEl) cmEl.value = ep.completion_mode || "chat";
+    const pxEl = document.querySelector(`[data-key="${ctx.proxyField}"]`);
+    if (pxEl) pxEl.value = ep.proxy || "";
   }
   const activeModel = S[ctx.configsKey].find((m) => m.id === S[ctx.configIdKey]) || S[ctx.configsKey][0];
   if (activeModel) {
@@ -633,7 +677,7 @@ async function _doSaveEndpointSetting(ctx, el) {
     S.settings = await api.put("/settings", payload);
     toast("Settings saved");
   } catch (e) {
-    toast("Failed: " + e.message, true);
+    toast(`Failed: ${e.message}`, true);
     return;
   }
   try {
@@ -641,6 +685,14 @@ async function _doSaveEndpointSetting(ctx, el) {
       await _syncEndpointRecord(ctx, v, payload[ctx.apiKeyField] || "");
     } else if (key === ctx.apiKeyField && S[ctx.endpointIdKey]) {
       await api.put(`/endpoints/${S[ctx.endpointIdKey]}`, { api_key: v });
+    } else if (baseKey === "completion_mode" && S[ctx.endpointIdKey]) {
+      // Endpoint-scoped like api_key; the /settings PUT above is a harmless
+      // no-op (not in the settings allowlist — it lives on the endpoint row).
+      await api.put(`/endpoints/${S[ctx.endpointIdKey]}`, { completion_mode: v });
+    } else if (baseKey === "proxy" && S[ctx.endpointIdKey]) {
+      // Endpoint-scoped like completion_mode; the /settings PUT above is a
+      // harmless no-op (proxy lives on the endpoint row, not settings).
+      await api.put(`/endpoints/${S[ctx.endpointIdKey]}`, { proxy: v });
     } else if (key === ctx.modelField) {
       await _syncModelConfigRecord(ctx, v, payload);
     } else if (ctx.hyperparamKeys.includes(key) && S[ctx.configIdKey]) {
@@ -648,7 +700,7 @@ async function _doSaveEndpointSetting(ctx, el) {
     }
   } catch (e) {
     console.error("Endpoint/model sync error:", e);
-    toast("Failed to sync " + (key === ctx.modelField ? "model" : "endpoint") + ": " + e.message, true);
+    toast(`Failed to sync ${key === ctx.modelField ? "model" : "endpoint"}: ${e.message}`, true);
   }
   updateAgentModelWarning();
   updateEndpointsLabel();
@@ -668,6 +720,10 @@ async function _onHybridInputCtx(ctx, el) {
     }
     const apiKeyEl = document.querySelector(`[data-key="${ctx.apiKeyField}"]`);
     if (apiKeyEl) apiKeyEl.value = match.api_key || "";
+    const cmEl = document.querySelector(`[data-key="${ctx.completionModeField}"]`);
+    if (cmEl) cmEl.value = match.completion_mode || "chat";
+    const pxEl = document.querySelector(`[data-key="${ctx.proxyField}"]`);
+    if (pxEl) pxEl.value = match.proxy || "";
     await _loadConfigs(ctx, match.id);
     const modelEl = document.querySelector(`[data-key="${ctx.modelField}"]`);
     if (!modelEl || !S[ctx.configsKey].length) return;

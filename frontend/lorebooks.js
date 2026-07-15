@@ -1,6 +1,7 @@
 import { api } from "./api.js";
+import { createChipInput } from "./chips.js";
 import { closeModal, showConfirmModal, showModal } from "./modal.js";
-import { S } from "./state.js";
+import { charactersView } from "./state.js";
 import { $, esc, toast } from "./utils.js";
 
 // ── Module state
@@ -27,6 +28,21 @@ let _draft = {
   constant: false,
   enabled: true,
 };
+
+// The keyword chip editor. Reads/writes the live `_draft.keywords`, marks the
+// entry dirty on any change, and disables (Constant entries take no keywords).
+const _keywordChips = createChipInput({
+  wrapId: "lb-chip-wrap",
+  inputId: "lb-chip-text",
+  placeholder: "Add keyword…",
+  disabledPlaceholder: "Keywords disabled — Constant entry",
+  getItems: () => _draft.keywords,
+  setItems: (v) => {
+    _draft.keywords = v;
+  },
+  onChange: _markDirty,
+  isDisabled: () => _draft.constant,
+});
 
 // ── Worlds API
 export async function loadWorlds() {
@@ -217,7 +233,7 @@ export async function renameWorld(worldId) {
     closeModal();
     renderWorldsSidebar();
     if (_focusWorldId === worldId) renderLorebookDrawer();
-  } catch (e) {
+  } catch (_e) {
     toast("Failed to rename lorebook", true);
   }
 }
@@ -248,7 +264,7 @@ export async function createWorld() {
     closeModal();
     renderWorldsSidebar();
     openLorebook(w.id);
-  } catch (e) {
+  } catch (_e) {
     toast("Failed to create world", true);
   }
 }
@@ -259,13 +275,13 @@ export async function toggleWorldEnabled(worldId, enabled) {
     const idx = _worlds.findIndex((w) => w.id === worldId);
     if (idx !== -1) _worlds[idx] = { ..._worlds[idx], ...updated };
     renderWorldsSidebar();
-  } catch (e) {
+  } catch (_e) {
     toast("Failed to update world", true);
   }
 }
 
 export async function deleteWorld(worldId) {
-  const linked = (S.allCharacters || S.characters || []).filter((c) => c.world_id === worldId);
+  const linked = charactersView().filter((c) => c.world_id === worldId);
   let extraHtml = "";
   if (linked.length) {
     const names = linked.map((c) => `<li>${esc(c.name)}</li>`).join("");
@@ -287,12 +303,12 @@ export async function deleteWorld(worldId) {
         _worlds = _worlds.filter((w) => w.id !== worldId);
         delete _entries[worldId];
         // Backend sets character_cards.world_id to NULL on delete; mirror that locally
-        for (const c of S.allCharacters || S.characters || []) {
+        for (const c of charactersView()) {
           if (c.world_id === worldId) c.world_id = null;
         }
         if (_focusWorldId === worldId) closeLorebook();
         renderWorldsSidebar();
-      } catch (e) {
+      } catch (_e) {
         toast("Failed to delete lorebook", true);
       }
     },
@@ -318,7 +334,7 @@ export async function openLorebook(worldId) {
   renderWorldsSidebar();
   try {
     await _loadEntries(worldId);
-  } catch (e) {
+  } catch (_e) {
     toast("Failed to load entries", true);
   }
   renderLorebookDrawer();
@@ -424,7 +440,7 @@ function renderLorebookDrawer() {
   const scrollEl = drawer.querySelector(".lb-entries-scroll");
   if (scrollEl) scrollEl.scrollTop = prevScrollTop;
 
-  if (_selectedEntryId) _renderKeywordChips();
+  if (_selectedEntryId) _keywordChips.render();
 }
 
 function _buildEditorHtml() {
@@ -475,23 +491,6 @@ function _buildEditorHtml() {
     </div>`;
 }
 
-function _renderKeywordChips() {
-  const wrap = $("lb-chip-wrap");
-  if (!wrap) return;
-  const chips = _draft.keywords;
-  const disabled = _draft.constant;
-  const chipHtml = chips
-    .map((c, i) => {
-      const removeBtn = disabled ? "" : `<button class="lb-chip-remove" onclick="lbRemoveChip(${i})">×</button>`;
-      return `<span class="lb-chip">${esc(c)}${removeBtn}</span>`;
-    })
-    .join("");
-  const inputHtml = disabled
-    ? `<span class="lb-chip-placeholder">${chips.length ? "" : "Keywords disabled — Constant entry"}</span>`
-    : `<input id="lb-chip-text" class="lb-chip-text" placeholder="${chips.length ? "" : "Add keyword…"}" onkeydown="lbChipKeydown(event)" oninput="lbChipInput(this)">`;
-  wrap.innerHTML = chipHtml + inputHtml;
-}
-
 // ── Dirty state — surgical DOM updates to avoid losing input focus
 function _markDirty() {
   if (_dirty) return;
@@ -538,46 +537,8 @@ export function lbToggleConstant(checked) {
   renderLorebookDrawer();
 }
 
-// ── Keyword chip handlers
-export function lbChipKeydown(e) {
-  const input = e.target;
-  if ((e.key === "Enter" || e.key === ",") && input.value.trim()) {
-    e.preventDefault();
-    const val = input.value.replace(/,$/, "").trim();
-    if (val && !_draft.keywords.includes(val)) {
-      _draft.keywords = [..._draft.keywords, val];
-      _markDirty();
-      _renderKeywordChips();
-      setTimeout(() => $("lb-chip-text")?.focus(), 0);
-    }
-    return;
-  }
-  if (e.key === "Backspace" && !input.value && _draft.keywords.length) {
-    _draft.keywords = _draft.keywords.slice(0, -1);
-    _markDirty();
-    _renderKeywordChips();
-    setTimeout(() => $("lb-chip-text")?.focus(), 0);
-  }
-}
-
-export function lbChipInput(input) {
-  if (input.value.endsWith(",")) {
-    const val = input.value.slice(0, -1).trim();
-    if (val && !_draft.keywords.includes(val)) {
-      _draft.keywords = [..._draft.keywords, val];
-      _markDirty();
-      _renderKeywordChips();
-      setTimeout(() => $("lb-chip-text")?.focus(), 0);
-    }
-  }
-}
-
-export function lbRemoveChip(i) {
-  _draft.keywords = _draft.keywords.filter((_, j) => j !== i);
-  _markDirty();
-  _renderKeywordChips();
-  setTimeout(() => $("lb-chip-text")?.focus(), 0);
-}
+// Keyword chips are handled by the shared chips.js widget (`_keywordChips`, above);
+// its listeners are (re)attached on each `.render()`.
 
 // ── Entry search
 export function lbEntrySearch(value) {
@@ -661,7 +622,7 @@ export async function lbToggleEntry(entryId, enabled) {
     const activeCount = (_entries[worldId] || []).filter((e) => e.enabled === true || e.enabled === 1).length;
     const countEl = document.querySelector(".lb-active-count");
     if (countEl) countEl.textContent = `${activeCount} active`;
-  } catch (e) {
+  } catch (_e) {
     toast("Failed to update entry", true);
   }
 }
@@ -685,7 +646,7 @@ export async function lbSaveEntry() {
     _dirty = false;
     renderLorebookDrawer();
     toast("Entry saved");
-  } catch (e) {
+  } catch (_e) {
     toast("Failed to save entry", true);
   }
 }
@@ -727,7 +688,7 @@ export function lbDeleteEntry() {
         _dirty = false;
         renderLorebookDrawer();
         toast("Entry deleted");
-      } catch (e) {
+      } catch (_e) {
         toast("Failed to delete entry", true);
       }
     },
@@ -750,7 +711,7 @@ export async function lbAddEntry() {
     if (!_entries[worldId]) _entries[worldId] = [];
     _entries[worldId].push(entry);
     _doSelectEntry(entry.id);
-  } catch (e) {
+  } catch (_e) {
     toast("Failed to create entry", true);
   }
 }
@@ -789,7 +750,7 @@ export function lbImportJson() {
       renderWorldsSidebar();
       openLorebook(world.id);
       toast(`Imported ${result.imported} ${result.imported === 1 ? "entry" : "entries"}`);
-    } catch (e) {
+    } catch (_e) {
       toast("Import failed", true);
     }
   };

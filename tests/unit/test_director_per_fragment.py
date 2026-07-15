@@ -46,9 +46,11 @@ class _FakeBase:
         self.prefix: list = []
         self._responses = list(responses)
         self.calls: list[tuple[str, str]] = []
+        self.schemas: list[dict | None] = []
 
-    async def complete(self, *_, label, trailing, **__):
+    async def complete(self, *_, label, trailing, **kw):
         self.calls.append((label, trailing[0]["content"]))
+        self.schemas.append(kw.get("json_schema"))
         yield {"type": "done", "message": self._responses.pop(0)}
 
 
@@ -80,14 +82,10 @@ class TestStepPrompt:
     def test_moods_stage_targets_moods_only(self):
         out = build_director_scene_step_prompt("msg", ["tense"], _MOODS, target_fragment=None)
         assert "Fill ONLY: moods" in out
+        # Lorebook selection is no longer part of direct_scene (own select_lorebook tool).
         assert "selected_lorebook_entries" not in out
         assert "Available writing moods" in out
         assert "[tense]" in out
-
-    def test_moods_stage_names_lorebook_when_catalog_present(self):
-        out = build_director_scene_step_prompt("msg", [], _MOODS, target_fragment=None, lorebook_catalog="ENTRY CATALOG")
-        assert "Fill ONLY: moods, selected_lorebook_entries" in out
-        assert "ENTRY CATALOG" in out
 
     def test_fragment_stage_targets_one_field(self):
         out = build_director_scene_step_prompt("msg", [], _MOODS, target_fragment=_FRAGMENTS[0])
@@ -125,42 +123,98 @@ class TestStepPrompt:
 
 class TestPerFragmentLoop:
     async def test_one_call_per_fragment_plus_moods(self):
+        # Interactive fragments resolve first, moods last (fed the decided scene).
         responses = [
-            _ds_message({"moods": ["tense"]}),
             _ds_message({"user_intent": "wants X", "moods": ["wrong"]}),
             _ds_message({"keywords": ["a", "b"], "user_intent": "override"}),
             _ds_message({}),
+            _ds_message({"moods": ["tense"]}),
         ]
         base = _FakeBase(_FRAGMENTS, responses)
         result = await _run(base, _FRAGMENTS, {"director_individual_fragments": 1})
 
-        assert len(base.calls) == 4  # one moods/lorebook call + one per fragment
+        assert len(base.calls) == 4  # one per fragment + one moods call
         assert result.active_moods == ["tense"]  # fragment-stage moods are ignored
         assert result.extra_fields == {"user_intent": "wants X", "keywords": ["a", "b"]}  # empty next_event skipped
-        assert len(result.calls) == 4
+        # Each recorded call keeps only its stage's field — extras the model
+        # volunteered (moods on call 1, user_intent on call 2) are stripped.
+        assert [tc["arguments"] for tc in result.calls] == [
+            {"user_intent": "wants X"},
+            {"keywords": ["a", "b"]},
+            {},
+            {"moods": ["tense"]},
+        ]
+        # Each step call narrows the decoding grammar to its target field only
+        # (applied in text mode; the chat transport drops it).
+        assert [list((s or {}).get("properties", {})) for s in base.schemas] == [
+            ["user_intent"],
+            ["keywords"],
+            ["next_event"],
+            ["moods"],
+        ]
 
     def _toggle_on(self):
         return {"director_individual_fragments": 1}
 
     async def test_earlier_fragments_feed_forward(self):
         responses = [
-            _ds_message({"moods": []}),
             _ds_message({"user_intent": "wants X"}),
             _ds_message({"keywords": ["a"]}),
             _ds_message({"next_event": "she leaves"}),
+            _ds_message({"moods": []}),
         ]
         base = _FakeBase(_FRAGMENTS, responses)
         await _run(base, _FRAGMENTS, self._toggle_on())
-        # The third call (keywords) must show the user_intent decided in call two.
-        keywords_call = base.calls[2][1]
+        # The keywords call (second) must show the user_intent decided in the first.
+        keywords_call = base.calls[1][1]
         assert "Decided so far this turn" in keywords_call
         assert "wants X" in keywords_call
 
+    async def test_moods_call_last_sees_decided_scene(self):
+        # Moods run last and are shown the interactive fields decided this turn.
+        responses = [
+            _ds_message({"user_intent": "wants X"}),
+            _ds_message({"keywords": ["a"]}),
+            _ds_message({"next_event": "she leaves"}),
+            _ds_message({"moods": ["tense"]}),
+        ]
+        base = _FakeBase(_FRAGMENTS, responses)
+        await _run(base, _FRAGMENTS, self._toggle_on())
+        moods_call = base.calls[-1][1]
+        assert "Scene direction decided this turn" in moods_call
+        assert "Next event: she leaves" in moods_call
+        assert "Fill ONLY: moods" in moods_call
+
     async def test_moods_cleared_when_omitted(self):
-        responses = [_ds_message({}), _ds_message({"user_intent": "x"})]
+        # Moods stage is last; an empty moods call clears the prior active moods.
+        responses = [_ds_message({"user_intent": "x"}), _ds_message({})]
         base = _FakeBase(_FRAGMENTS[:1], responses)
         result = await _run(base, _FRAGMENTS[:1], self._toggle_on(), director={"active_moods": ["pre"]})
         assert result.active_moods == []
+
+    async def test_failed_fragment_call_is_skipped_not_fatal(self):
+        # Second fragment's call raises; the pass must skip it and still finish,
+        # so the turn keeps going (director failures are non-fatal).
+        class _FlakyBase(_FakeBase):
+            async def complete(self, *_, label, trailing, **__):
+                self.calls.append((label, trailing[0]["content"]))
+                r = self._responses.pop(0)
+                if r is None:
+                    raise RuntimeError("boom")
+                yield {"type": "done", "message": r}
+
+        responses = [
+            _ds_message({"user_intent": "wants X"}),
+            None,  # keywords call fails
+            _ds_message({"next_event": "she leaves"}),
+            _ds_message({"moods": ["tense"]}),
+        ]
+        base = _FlakyBase(_FRAGMENTS, responses)
+        result = await _run(base, _FRAGMENTS, self._toggle_on())
+
+        assert len(base.calls) == 4  # every fragment still attempted
+        assert result.active_moods == ["tense"]
+        assert result.extra_fields == {"user_intent": "wants X", "next_event": "she leaves"}  # failed keywords absent
 
     async def test_toggle_off_uses_single_call(self):
         responses = [_ds_message({"moods": ["tense"], "user_intent": "x", "keywords": ["k"]})]

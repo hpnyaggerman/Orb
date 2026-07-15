@@ -10,8 +10,10 @@ from __future__ import annotations
 from . import (
     characters,
     conversations,
+    documents,
     endpoints,
     fragments,
+    local_ml,
     messages,
     misc,
     personas,
@@ -39,4 +41,6 @@ ROUTERS = [
     presets.router,
     messages.router,
     workflows.router,
+    local_ml.router,
+    documents.router,
 ]

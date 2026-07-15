@@ -53,15 +53,41 @@ import {
 } from "./chat.js";
 import { initComposer, triggerAttachImage } from "./chat_composer.js";
 import {
+  addUserDirectionNote,
+  deleteDirectionNote,
+  editDirectionNote,
+  saveDirectionNote,
+  saveUserDirectionNote,
+  toggleDirectionNotesPanel,
+} from "./direction_notes_panel.js";
+import {
+  collapseDocs,
+  createDocument,
+  deleteDocument,
+  docGenerate,
+  docRedo,
+  docStop,
+  docUndo,
+  expandDocs,
+  initDocumentMode,
+  loadDocuments,
+  onDocSearch,
+  openDocument,
+  renameActiveDocument,
+  renameDocument,
+  setDocAssisted,
+  setDocProbs,
+  toggleDocumentMode,
+} from "./document.js";
+import {
   addAltGreeting,
-  charTagInput,
-  charTagKeydown,
-  charTagRemoveChip,
+  clearExpressions,
   createCharacter,
   deleteCharacter,
   deleteInteractiveFragment,
   deleteMoodFragment,
   exportCharacter,
+  handleExpressionsZip,
   handleImportFile,
   importInternetChar,
   loadCharacters,
@@ -71,7 +97,6 @@ import {
   onCharBrowserSearch,
   randomizeInternet,
   refreshCharacters,
-  renderCharacters,
   saveCharEdit,
   saveImportedChar,
   saveInteractiveFragment,
@@ -100,14 +125,11 @@ import {
   expandWorlds,
   lbAddEntry,
   lbBackToList,
-  lbChipInput,
-  lbChipKeydown,
   lbDeleteEntry,
   lbDiscardChanges,
   lbDraftChange,
   lbEntrySearch,
   lbImportJson,
-  lbRemoveChip,
   lbSaveEntry,
   lbSelectEntry,
   lbToggleConstant,
@@ -116,7 +138,6 @@ import {
   onWorldSearch,
   openLorebook,
   renameWorld,
-  renderWorldsSidebar,
   showCreateWorldModal,
   showRenameWorldModal,
   toggleWorldEnabled,
@@ -148,6 +169,7 @@ import {
   activatePersona,
   applyTheme,
   deletePersona,
+  downloadLocalMlModel,
   editPersona,
   initTheme,
   initThemeList,
@@ -173,6 +195,7 @@ import {
   toggleHideUntilBaked,
   toggleLengthGuard,
   toggleLengthGuardEnforce,
+  toggleLocalMlEnabled,
   togglePreventPromptOverrides,
   toggleShowEditorDiff,
   toggleToolEnabled,
@@ -180,16 +203,9 @@ import {
   toggleWorkflowEnabled,
   toggleWorkflowsGlobal,
 } from "./settings.js";
-import {
-  addUserDirectionNote,
-  deleteDirectionNote,
-  editDirectionNote,
-  saveDirectionNote,
-  saveUserDirectionNote,
-  toggleDirectionNotesPanel,
-} from "./direction_notes_panel.js";
+import { scoreSlop } from "./slop_score.js";
 import { S } from "./state.js";
-import { initTabLock, setLockStateChangeCallback } from "./tabLock.js";
+import { initTabLock } from "./tabLock.js";
 import { $ } from "./utils.js";
 import { loadWorkflowModules } from "./workflow_loader.js";
 import { initWorkflowTextInteraction } from "./workflow_text_interaction.js";
@@ -260,6 +276,9 @@ Object.assign(window, {
   togglePreventPromptOverrides,
   toggleWorkflowsGlobal,
   toggleWorkflowEnabled,
+  downloadLocalMlModel,
+  toggleLocalMlEnabled,
+  scoreSlop,
   // phrase bank
   showPhraseBankModal,
   showAddPhraseGroupModal,
@@ -299,6 +318,8 @@ Object.assign(window, {
   addAltGreeting,
   triggerAvatarCrop,
   exportCharacter,
+  handleExpressionsZip,
+  clearExpressions,
   showCharacterBrowserModal,
   setCharBrowserView,
   onCharBrowserSearch,
@@ -310,9 +331,6 @@ Object.assign(window, {
   importInternetChar,
   randomizeInternet,
   refreshCharacters,
-  charTagKeydown,
-  charTagInput,
-  charTagRemoveChip,
   // crop modal
   closeCropModal,
   // conversations
@@ -369,6 +387,22 @@ Object.assign(window, {
   triggerAttachImage,
   showAvatarPopup,
   hideAvatarPopup,
+  // document mode
+  toggleDocumentMode,
+  setDocAssisted,
+  setDocProbs,
+  createDocument,
+  openDocument,
+  deleteDocument,
+  renameDocument,
+  renameActiveDocument,
+  onDocSearch,
+  expandDocs,
+  collapseDocs,
+  docGenerate,
+  docStop,
+  docUndo,
+  docRedo,
   // worlds / lorebook
   showCreateWorldModal,
   createWorld,
@@ -391,9 +425,6 @@ Object.assign(window, {
   lbDiscardChanges,
   lbDraftChange,
   lbToggleConstant,
-  lbChipKeydown,
-  lbChipInput,
-  lbRemoveChip,
   lbImportJson,
   // state
   S,
@@ -409,12 +440,6 @@ initChatSwipeNav();
 initWorkflowTextInteraction();
 initAudioPlayer();
 initTabLock();
-// Re-render messages when tab lock state changes to update toolbar buttons
-setLockStateChangeCallback((hasMultipleTabs) => {
-  if (S.activeConvId && !S.isStreaming) {
-    renderMessages();
-  }
-});
 initWorkflowMutationListener();
 
 // On a fresh load with no conversation selected, render the JS empty state so
@@ -465,6 +490,13 @@ async function initAll() {
     await loadWorlds();
   } catch (e) {
     console.error("Failed to load worlds:", e);
+  }
+
+  initDocumentMode();
+  try {
+    await loadDocuments();
+  } catch (e) {
+    console.error("Failed to load documents:", e);
   }
 
   try {

@@ -34,6 +34,31 @@ input[type="range"]::-moz-range-track {
   height: 6px; background: var(--bg-elevated); border-radius: var(--radius);
 }
 
+/* Section demarcation inside the tools list (Director / Editor), matching the
+   Settings panel's "DATA" divider: a centered uppercase label flanked by rules. */
+.tools-divider {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 16px 0 8px;
+}
+.tools-divider:first-child {
+  margin-top: 4px;
+}
+.tools-divider::before,
+.tools-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--accent-dim);
+}
+.tools-divider span {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  color: var(--accent-dim);
+}
+
 .tool-card {
   padding: 10px 12px;
   border-radius: var(--radius);
@@ -46,6 +71,12 @@ input[type="range"]::-moz-range-track {
 .tool-card.tool-on {
   border-color: var(--accent-dim);
   background: var(--accent-glow);
+}
+
+/* Director/Editor items grayed out and inert while Main Workflows is off. */
+#tools-list.workflows-off .tool-card {
+  opacity: 0.5;
+  pointer-events: none;
 }
 
 .tool-card-header {
@@ -82,8 +113,8 @@ input[type="range"]::-moz-range-track {
   display: grid;
   grid-template-columns: auto 1fr;
   align-items: center;
-  gap: 6px 10px;
-  margin: 4px 0 6px;
+  gap: 8px 10px;
+  margin: 8px 0;
 }
 
 .dn-config label {

@@ -13,9 +13,9 @@ Keyword triggering is simple and cheap, but blunt: it only fires on a literal su
 
 ## What the agentic mode adds
 
-With **Agentic Lorebook** enabled, the Director takes over activation. On each turn it's handed a compact **catalog** of the available entries (names plus their first few keywords, grouped by World) and picks the ones relevant to the scene as part of its normal `direct_scene` tool call. Because the Director actually *reads the room*, it can pull in lore that keyword matching would miss.
+With **Agentic Lorebook** enabled, the Director takes over activation. On each turn it's handed a compact **catalog** of the available entries (names plus their first few keywords, grouped by World) and picks the ones relevant to the scene. Because the Director actually *reads the room*, it can pull in lore that keyword matching would miss.
 
-This rides the Director's existing pass — no extra LLM call — so the cost is just a slightly larger tool schema.
+The selection runs as its own short `select_lorebook` call during the Director stage, independent of the scene-direction tool — so the cost is one extra lightweight tool call per turn.
 
 ## What still happens automatically
 
@@ -30,4 +30,4 @@ The final set the Writer sees is: constant entries ∪ the Director's picks ∪ 
 
 Open **Settings → Agents** and turn on the **Agentic Lorebook** card (it sits just under the Prompt Rewriter).
 
-It depends on the Director: if `direct_scene` is off, the toggle is greyed out with a *Requires Director* hint, and Orb falls back to the plain keyword scan. The same fallback applies when there are no non-constant entries to choose from — there's nothing for the Director to manage, so no catalog is offered.
+It only needs the global **Agent** on — it works whether or not the Director's scene-direction tool (`direct_scene`) is enabled. It falls back to the plain keyword scan when there are no non-constant entries to choose from — there's nothing to manage, so no catalog is offered.

@@ -6,12 +6,35 @@
 // for app.js and chat modules.
 import { api } from "./api.js";
 import { loadConversations, resetChatUI } from "./chat.js";
+import { createChipInput } from "./chips.js";
 import { loadWorlds } from "./lorebooks.js";
 import { closeModal, showConfirmModal, showCropModal, showModal } from "./modal.js";
-import { S } from "./state.js";
-import { $, avatarCell, avatarUrl, CHAT_AVATAR_ICON, convActivity, esc, NO_AVATAR_ICON, toast } from "./utils.js";
+import { charactersView, S } from "./state.js";
+import {
+  $,
+  avatarCell,
+  avatarUrl,
+  CHAT_AVATAR_ICON,
+  convActivity,
+  downloadBlob,
+  esc,
+  NO_AVATAR_ICON,
+  toast,
+} from "./utils.js";
 import { validate } from "./validate.js";
 
+export {
+  importInternetChar,
+  loadMoreInternet,
+  onCharBrowserSearch,
+  randomizeInternet,
+  searchInternet,
+  setCharBrowserSort,
+  setCharBrowserView,
+  setInternetSource,
+  showCharacterBrowserModal,
+  toggleTagSelection,
+} from "./library_browser.js";
 export {
   deleteInteractiveFragment,
   deleteMoodFragment,
@@ -27,18 +50,6 @@ export {
   toggleMoodFragmentEnabled,
   updateInteractiveFragmentExample,
 } from "./library_fragments.js";
-export {
-  importInternetChar,
-  loadMoreInternet,
-  onCharBrowserSearch,
-  randomizeInternet,
-  searchInternet,
-  setCharBrowserSort,
-  setCharBrowserView,
-  setInternetSource,
-  showCharacterBrowserModal,
-  toggleTagSelection,
-} from "./library_browser.js";
 
 // Pending avatar for the character create modal (cleared on submit or cancel)
 let _pendingAvatar = null;
@@ -104,8 +115,8 @@ export async function loadCharacters() {
  * message to promote the active character to the top of the recent list.
  */
 export function refreshCharacters() {
-  const source = S.allCharacters || S.characters;
-  if (!source || source.length === 0) return;
+  const source = charactersView();
+  if (!source.length) return;
   S.characters = filterRecentCharacters(source, S.conversations || []);
   renderCharacters();
 }
@@ -123,7 +134,7 @@ export function renderCharacters() {
       const meta = esc(c.creator_notes || (c.tags || []).slice(0, 2).join(", ") || c.source_format || "");
       const isActive = S.activeCharId === c.id;
       return `<div class="char-item${isActive ? " active" : ""}" onclick="selectChar('${c.id}', 'recent')">
-      <div class="char-avatar-sm">${av}</div>
+      <div class="char-avatar-sm${c.has_expressions ? " has-expr-halo" : ""}">${av}</div>
       <div class="char-item-info">
         <div class="char-item-name">${esc(c.name)}</div>
         <div class="char-item-meta">${meta}</div>
@@ -150,12 +161,12 @@ export async function handleImportFile(inp) {
     const r = await api.upload("/characters/import", f);
     showCharEditModal(r);
   } catch (e) {
-    toast("Import failed: " + e.message, true);
+    toast(`Import failed: ${e.message}`, true);
   }
 }
 
 export async function deleteCharacter(id) {
-  const charName = (S.allCharacters || S.characters || []).find((c) => c.id === id)?.name;
+  const charName = charactersView().find((c) => c.id === id)?.name;
   showConfirmModal(
     {
       title: "Delete Character",
@@ -175,7 +186,7 @@ export async function deleteCharacter(id) {
 
 async function performDeleteCharacter(id) {
   const deleteConversations = document.getElementById("delete-conversations-checkbox")?.checked || false;
-  const url = "/characters/" + id + (deleteConversations ? "?delete_conversations=true" : "");
+  const url = `/characters/${id}${deleteConversations ? "?delete_conversations=true" : ""}`;
   try {
     await api.del(url);
     if (S.activeCharId === id) resetChatUI();
@@ -207,7 +218,7 @@ function _readAltGreetings(prefix) {
 
 // ── Avatar crop helpers
 
-export function triggerAvatarCrop(prefix, cardId) {
+export function triggerAvatarCrop(prefix, _cardId) {
   // TODO: unused param cardId
   showCropModal(({ b64, mime }) => {
     _pendingAvatar = { b64, mime };
@@ -219,12 +230,33 @@ export function triggerAvatarCrop(prefix, cardId) {
 // ── Export
 
 export function exportCharacter(id, name) {
-  const a = document.createElement("a");
-  a.href = `/api/characters/${id}/export`;
-  a.download = (name || "character") + ".png";
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
+  downloadBlob(`${name || "character"}.png`, `/api/characters/${id}/export`);
+}
+
+// ── Expression images (uploaded per character, shown in the avatar popup)
+
+export async function handleExpressionsZip(inp, id) {
+  const f = inp.files[0];
+  if (!f) return;
+  inp.value = "";
+  const status = inp.parentElement.parentElement.querySelector('[id$="-expr-status"]');
+  if (status) status.textContent = "Uploading…";
+  try {
+    const r = await api.upload(`/characters/${id}/expressions`, f);
+    if (status) status.textContent = `${r.labels.length} expressions loaded`;
+  } catch (e) {
+    if (status) status.textContent = `Error: ${e.message}`;
+  }
+}
+
+export async function clearExpressions(id) {
+  try {
+    await api.del(`/characters/${id}/expressions`);
+    const status = document.querySelector('[id$="-expr-status"]');
+    if (status) status.textContent = "Cleared";
+  } catch (e) {
+    toast(e.message, true);
+  }
 }
 
 // ── Shared tab template for create / edit modals
@@ -286,6 +318,19 @@ function charFormTabs(prefix, d, isEdit, worlds = []) {
       <div class="field"><label>System Prompt Override</label><textarea id="${prefix}-sysprompt" rows="1">${esc(d.system_prompt || "")}</textarea></div>
       <div class="field"><label>Post-History Instructions</label><textarea id="${prefix}-posthist" rows="1">${esc(d.post_history_instructions || "")}</textarea></div>
       ${
+        d.id
+          ? `<div class="field">
+        <label>Expression Images</label>
+        <input type="file" id="${prefix}-expr-zip" accept=".zip" style="display:none" onchange="handleExpressionsZip(this, '${d.id}')">
+        <div>
+          <button class="btn btn-sm" onclick="document.getElementById('${prefix}-expr-zip').click()">Upload .zip</button>
+          <button class="btn btn-sm" onclick="clearExpressions('${d.id}')">Clear</button>
+        </div>
+        <div id="${prefix}-expr-status" style="font-size:11px;color:var(--text-muted);margin-top:4px"></div>
+      </div>`
+          : ""
+      }
+      ${
         d.character_book
           ? `<div style="font-size:11px;color:var(--text-muted);margin-top:8px">Imported card contains an embedded lorebook (${(d.character_book.entries || []).length} entries). It will be imported as a new lorebook unless you select one above.</div>`
           : ""
@@ -317,44 +362,57 @@ export function showCharCreateModal() {
     </div>`);
 }
 
+// The character-form validation gauntlet, run against the live DOM fields of the
+// create ("cc") or edit/import ("ce") modal. Returns the first failing
+// `{valid:false,error}` or `{valid:true}`. `advanced` also checks the System
+// Prompt / Post-History fields, which exist only in the edit/import modal.
+// Replaces the three hand-inlined copies (create / edit / import).
+function _validateCharForm(prefix, { advanced = false } = {}) {
+  const checks = [
+    validate.validateCharacterName($(`${prefix}-name`).value),
+    validate.validateCharacterField($(`${prefix}-desc`).value, "Description"),
+    validate.validateCharacterField($(`${prefix}-personality`).value, "Personality"),
+    validate.validateCharacterField($(`${prefix}-scenario`).value, "Scenario"),
+    validate.validateCharacterField($(`${prefix}-first-mes`).value, "First message"),
+    validate.validateCharacterField($(`${prefix}-mes-example`).value, "Example messages"),
+  ];
+  if (advanced) {
+    checks.push(
+      validate.validateCharacterAdvancedField($(`${prefix}-sysprompt`).value, "System prompt"),
+      validate.validateCharacterAdvancedField($(`${prefix}-posthist`).value, "Post-history instructions"),
+    );
+  }
+  checks.push(validate.validateAlternateGreetings(_readAltGreetings(prefix)));
+  return checks.find((c) => !c.valid) || { valid: true };
+}
+
+// The character payload built from the edit/import modal's "ce" fields.
+// saveCharEdit and saveImportedChar share this shape exactly (the import path then
+// tacks on id / source_format / character_book).
+function _readCharEditForm() {
+  return {
+    name: $("ce-name").value.trim(),
+    description: $("ce-desc").value.trim(),
+    personality: $("ce-personality").value.trim(),
+    scenario: $("ce-scenario").value.trim(),
+    first_mes: $("ce-first-mes").value.trim(),
+    mes_example: $("ce-mes-example").value.trim(),
+    creator_notes: $("ce-creator-notes").value.trim(),
+    system_prompt: $("ce-sysprompt").value.trim(),
+    post_history_instructions: $("ce-posthist").value.trim(),
+    tags: _pendingTags || [],
+    alternate_greetings: _readAltGreetings("ce"),
+    world_id: $("ce-world-id")?.value || null,
+  };
+}
+
 export async function createCharacter() {
-  const name = $("cc-name").value.trim();
-  const validation = validate.validateCharacterName(name);
+  const validation = _validateCharForm("cc");
   if (!validation.valid) {
     toast(validation.error, true);
     return;
   }
-
-  const descValidation = validate.validateCharacterField($("cc-desc").value, "Description");
-  if (!descValidation.valid) {
-    toast(descValidation.error, true);
-    return;
-  }
-  const personalityValidation = validate.validateCharacterField($("cc-personality").value, "Personality");
-  if (!personalityValidation.valid) {
-    toast(personalityValidation.error, true);
-    return;
-  }
-  const scenarioValidation = validate.validateCharacterField($("cc-scenario").value, "Scenario");
-  if (!scenarioValidation.valid) {
-    toast(scenarioValidation.error, true);
-    return;
-  }
-  const firstMesValidation = validate.validateCharacterField($("cc-first-mes").value, "First message");
-  if (!firstMesValidation.valid) {
-    toast(firstMesValidation.error, true);
-    return;
-  }
-  const mesExampleValidation = validate.validateCharacterField($("cc-mes-example").value, "Example messages");
-  if (!mesExampleValidation.valid) {
-    toast(mesExampleValidation.error, true);
-    return;
-  }
-  const greetingsValidation = validate.validateAlternateGreetings(_readAltGreetings("cc"));
-  if (!greetingsValidation.valid) {
-    toast(greetingsValidation.error, true);
-    return;
-  }
+  const name = $("cc-name").value.trim();
 
   try {
     const payload = {
@@ -371,7 +429,7 @@ export async function createCharacter() {
       payload.avatar_mime = _pendingAvatar.mime;
     }
     _pendingAvatar = null;
-    const created = await api.post("/characters", payload);
+    const _created = await api.post("/characters", payload);
     closeModal();
     await loadCharacters();
     toast("Created");
@@ -380,63 +438,22 @@ export async function createCharacter() {
   }
 }
 
-// ── Character tag chip helpers
-function _renderCharTagChips(prefix) {
-  const wrap = document.getElementById(`${prefix}-tag-wrap`);
-  if (!wrap) return;
-  const tags = _pendingTags || [];
-  wrap.innerHTML =
-    tags
-      .map(
-        (t, i) =>
-          `<span class="lb-chip">${esc(t)}<button class="lb-chip-remove" onclick="charTagRemoveChip(${i})">×</button></span>`,
-      )
-      .join("") +
-    `<input id="${prefix}-tag-text" class="lb-chip-text" placeholder="${tags.length ? "" : "Add tag…"}" onkeydown="charTagKeydown(event)" oninput="charTagInput(this)">`;
-}
-
-export function charTagKeydown(e) {
-  const input = e.target;
-  if ((e.key === "Enter" || e.key === ",") && input.value.trim()) {
-    e.preventDefault();
-    const val = input.value.replace(/,$/, "").trim();
-    if (val && !_pendingTags.includes(val)) {
-      _pendingTags = [..._pendingTags, val];
-      _renderCharTagChips("ce");
-      setTimeout(() => document.getElementById("ce-tag-text")?.focus(), 0);
-    }
-    return;
-  }
-  if (e.key === "Backspace" && !input.value && _pendingTags.length) {
-    _pendingTags = _pendingTags.slice(0, -1);
-    _renderCharTagChips("ce");
-    setTimeout(() => document.getElementById("ce-tag-text")?.focus(), 0);
-  }
-}
-
-export function charTagInput(input) {
-  if (input.value.endsWith(",")) {
-    const val = input.value.slice(0, -1).trim();
-    if (val && !_pendingTags.includes(val)) {
-      _pendingTags = [..._pendingTags, val];
-      _renderCharTagChips("ce");
-      setTimeout(() => document.getElementById("ce-tag-text")?.focus(), 0);
-    } else {
-      input.value = "";
-    }
-  }
-}
-
-export function charTagRemoveChip(i) {
-  _pendingTags = _pendingTags.filter((_, j) => j !== i);
-  _renderCharTagChips("ce");
-  setTimeout(() => document.getElementById("ce-tag-text")?.focus(), 0);
-}
+// ── Character tag chips (edit/import modal only; prefix "ce"), via the shared
+// chips.js widget. Reads/writes the live `_pendingTags` array.
+const _charTagChips = createChipInput({
+  wrapId: "ce-tag-wrap",
+  inputId: "ce-tag-text",
+  placeholder: "Add tag…",
+  getItems: () => _pendingTags || [],
+  setItems: (v) => {
+    _pendingTags = v;
+  },
+});
 
 export async function showCharEditModal(idOrData) {
   _pendingAvatar = null;
   const isNew = typeof idOrData === "object";
-  const c = isNew ? idOrData : await api.get("/characters/" + idOrData);
+  const c = isNew ? idOrData : await api.get(`/characters/${idOrData}`);
 
   let av;
   if (isNew && c.avatar_b64) {
@@ -449,15 +466,8 @@ export async function showCharEditModal(idOrData) {
     av = avatarCell(c.has_avatar ? avatarUrl(c.id) + bust : "");
   }
 
-  if (isNew) {
-    _pendingTags = c.tags || [];
-    _pendingCharacterBook = c.character_book || null;
-    console.log("showCharEditModal import tags:", c.tags, "pending:", _pendingTags);
-  } else {
-    _pendingTags = c.tags || [];
-    _pendingCharacterBook = null;
-    console.log("showCharEditModal edit tags:", c.tags, "pending:", _pendingTags);
-  }
+  _pendingTags = c.tags || [];
+  _pendingCharacterBook = isNew ? c.character_book || null : null;
 
   const tags = (c.tags || []).map((t) => `<span class="char-tag">${esc(t)}</span>`).join("");
 
@@ -493,76 +503,27 @@ export async function showCharEditModal(idOrData) {
           : `<button class="btn btn-accent" onclick="saveCharEdit('${c.id}')">Save</button>`
       }
     </div>`);
-  _renderCharTagChips("ce");
+  _charTagChips.render();
+  if (c.id) {
+    api
+      .get(`/characters/${c.id}/expressions`)
+      .then((r) => {
+        const status = document.getElementById("ce-expr-status");
+        if (status) status.textContent = `${r.labels.length} expressions`;
+      })
+      .catch(() => {});
+  }
 }
 
 export async function saveCharEdit(id, exportAfter = false) {
-  const name = $("ce-name").value.trim();
-  const nameValidation = validate.validateCharacterName(name);
-  if (!nameValidation.valid) {
-    toast(nameValidation.error, true);
+  const validation = _validateCharForm("ce", { advanced: true });
+  if (!validation.valid) {
+    toast(validation.error, true);
     return;
   }
 
-  const descValidation = validate.validateCharacterField($("ce-desc").value, "Description");
-  if (!descValidation.valid) {
-    toast(descValidation.error, true);
-    return;
-  }
-  const personalityValidation = validate.validateCharacterField($("ce-personality").value, "Personality");
-  if (!personalityValidation.valid) {
-    toast(personalityValidation.error, true);
-    return;
-  }
-  const scenarioValidation = validate.validateCharacterField($("ce-scenario").value, "Scenario");
-  if (!scenarioValidation.valid) {
-    toast(scenarioValidation.error, true);
-    return;
-  }
-  const firstMesValidation = validate.validateCharacterField($("ce-first-mes").value, "First message");
-  if (!firstMesValidation.valid) {
-    toast(firstMesValidation.error, true);
-    return;
-  }
-  const mesExampleValidation = validate.validateCharacterField($("ce-mes-example").value, "Example messages");
-  if (!mesExampleValidation.valid) {
-    toast(mesExampleValidation.error, true);
-    return;
-  }
-  const syspromptValidation = validate.validateCharacterAdvancedField($("ce-sysprompt").value, "System prompt");
-  if (!syspromptValidation.valid) {
-    toast(syspromptValidation.error, true);
-    return;
-  }
-  const posthistValidation = validate.validateCharacterAdvancedField(
-    $("ce-posthist").value,
-    "Post-history instructions",
-  );
-  if (!posthistValidation.valid) {
-    toast(posthistValidation.error, true);
-    return;
-  }
-  const greetingsValidation = validate.validateAlternateGreetings(_readAltGreetings("ce"));
-  if (!greetingsValidation.valid) {
-    toast(greetingsValidation.error, true);
-    return;
-  }
-
-  const d = {
-    name,
-    description: $("ce-desc").value.trim(),
-    personality: $("ce-personality").value.trim(),
-    scenario: $("ce-scenario").value.trim(),
-    first_mes: $("ce-first-mes").value.trim(),
-    mes_example: $("ce-mes-example").value.trim(),
-    creator_notes: $("ce-creator-notes").value.trim(),
-    system_prompt: $("ce-sysprompt").value.trim(),
-    post_history_instructions: $("ce-posthist").value.trim(),
-    tags: _pendingTags || [],
-    alternate_greetings: _readAltGreetings("ce"),
-    world_id: $("ce-world-id")?.value || null,
-  };
-  console.log("saveCharEdit payload:", d);
+  const d = _readCharEditForm();
+  const name = d.name;
   if (_pendingAvatar) {
     d.avatar_b64 = _pendingAvatar.b64;
     d.avatar_mime = _pendingAvatar.mime;
@@ -570,7 +531,7 @@ export async function saveCharEdit(id, exportAfter = false) {
   const avatarChanged = !!_pendingAvatar;
   _pendingAvatar = null;
   try {
-    await api.put("/characters/" + id, d);
+    await api.put(`/characters/${id}`, d);
     if (avatarChanged) {
       _avatarBust.set(id, Date.now());
       if (S.activeCharId === id) {
@@ -595,72 +556,13 @@ export async function saveCharEdit(id, exportAfter = false) {
 }
 
 export async function saveImportedChar() {
-  console.log("saveImportedChar pendingTags:", _pendingTags);
-  const name = $("ce-name").value.trim();
-  const nameValidation = validate.validateCharacterName(name);
-  if (!nameValidation.valid) {
-    toast(nameValidation.error, true);
+  const validation = _validateCharForm("ce", { advanced: true });
+  if (!validation.valid) {
+    toast(validation.error, true);
     return;
   }
 
-  const descValidation = validate.validateCharacterField($("ce-desc").value, "Description");
-  if (!descValidation.valid) {
-    toast(descValidation.error, true);
-    return;
-  }
-  const personalityValidation = validate.validateCharacterField($("ce-personality").value, "Personality");
-  if (!personalityValidation.valid) {
-    toast(personalityValidation.error, true);
-    return;
-  }
-  const scenarioValidation = validate.validateCharacterField($("ce-scenario").value, "Scenario");
-  if (!scenarioValidation.valid) {
-    toast(scenarioValidation.error, true);
-    return;
-  }
-  const firstMesValidation = validate.validateCharacterField($("ce-first-mes").value, "First message");
-  if (!firstMesValidation.valid) {
-    toast(firstMesValidation.error, true);
-    return;
-  }
-  const mesExampleValidation = validate.validateCharacterField($("ce-mes-example").value, "Example messages");
-  if (!mesExampleValidation.valid) {
-    toast(mesExampleValidation.error, true);
-    return;
-  }
-  const syspromptValidation = validate.validateCharacterAdvancedField($("ce-sysprompt").value, "System prompt");
-  if (!syspromptValidation.valid) {
-    toast(syspromptValidation.error, true);
-    return;
-  }
-  const posthistValidation = validate.validateCharacterAdvancedField(
-    $("ce-posthist").value,
-    "Post-history instructions",
-  );
-  if (!posthistValidation.valid) {
-    toast(posthistValidation.error, true);
-    return;
-  }
-  const greetingsValidation = validate.validateAlternateGreetings(_readAltGreetings("ce"));
-  if (!greetingsValidation.valid) {
-    toast(greetingsValidation.error, true);
-    return;
-  }
-
-  const d = {
-    name,
-    description: $("ce-desc").value.trim(),
-    personality: $("ce-personality").value.trim(),
-    scenario: $("ce-scenario").value.trim(),
-    first_mes: $("ce-first-mes").value.trim(),
-    mes_example: $("ce-mes-example").value.trim(),
-    creator_notes: $("ce-creator-notes").value.trim(),
-    system_prompt: $("ce-sysprompt").value.trim(),
-    post_history_instructions: $("ce-posthist").value.trim(),
-    tags: _pendingTags || [],
-    alternate_greetings: _readAltGreetings("ce"),
-    world_id: $("ce-world-id")?.value || null,
-  };
+  const d = _readCharEditForm();
   if (_pendingAvatar) {
     d.avatar_b64 = _pendingAvatar.b64;
     d.avatar_mime = _pendingAvatar.mime;

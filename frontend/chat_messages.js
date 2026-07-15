@@ -11,19 +11,12 @@ import {
   setMessages,
 } from "./chat_core.js";
 import { renderInspector } from "./chat_inspector.js";
+import { agentPayload, runStreamRequest } from "./chat_stream.js";
 import { renderDirectionNotesPanel } from "./direction_notes_panel.js";
+import { confirmDelete } from "./modal.js";
 import { isUtilityPanelOpen } from "./panels.js";
-import {
-  afterStream,
-  agentPayload,
-  createStreamingDiv,
-  processSSEStream,
-  setGenerationPhase,
-  setStreaming,
-  streamPost,
-} from "./chat_stream.js";
-import { showConfirmModal } from "./modal.js";
 import { S } from "./state.js";
+import { requestSendPermission } from "./tabLock.js";
 import { $, convUrl, resolvePlaceholders, scrollToBottom, scrollToMessage, toast } from "./utils.js";
 import { validate } from "./validate.js";
 
@@ -43,7 +36,7 @@ export function startEdit(msgId) {
   } else {
     scrollToMessage(msgId);
   }
-  focusEditTextarea($("edit-textarea-" + msgId), cancelEdit);
+  focusEditTextarea($(`edit-textarea-${msgId}`), cancelEdit);
   // Editing is isolated to the message itself; it must not re-fetch the
   // director-log or repaint the inspector bar.
 }
@@ -70,7 +63,7 @@ export function startForkEdit(msgId) {
   } else {
     scrollToMessage(msgId);
   }
-  focusEditTextarea($("edit-textarea-" + msgId), cancelForkEdit);
+  focusEditTextarea($(`edit-textarea-${msgId}`), cancelForkEdit);
   // Surface the director data for the reply that currently follows this message.
   const childAssistant = S.messages.find((c) => c.parent_id === msgId && c.role === "assistant");
   if (childAssistant) inspectMessage(childAssistant.id);
@@ -94,7 +87,7 @@ export async function inspectMessage(msgId) {
     S.reasoningPassSelected = highestPassIdx;
     S.reasoningUserOverride = false;
     renderInspector();
-  } catch (e) {
+  } catch (_e) {
     // If the log doesn't exist (e.g. very old messages before logs were added), silently ignore
     S.inspectedDirectorData = null;
     renderInspector();
@@ -119,39 +112,35 @@ function focusEditTextarea(ta, onEscape) {
   ta.selectionStart = ta.selectionEnd = ta.value.length;
   ta.style.height = "auto";
   const lineH = parseFloat(getComputedStyle(ta).lineHeight) || 20;
-  ta.style.height = Math.max(lineH * 3, ta.scrollHeight) + "px";
+  ta.style.height = `${Math.max(lineH * 3, ta.scrollHeight)}px`;
 }
 
 export async function deleteMessage(msgId) {
   if (S.isStreaming) return;
-  showConfirmModal(
-    {
-      title: "Delete Message",
-      message: "Delete this message, all its siblings, and all their children?",
-      confirmText: "Delete",
-    },
-    async () => {
-      try {
-        setMessages(await api.del(convUrl(S.activeConvId, "messages", msgId)));
-        S.lastDirectorData = null;
-        // Re-fetch director state so moods are correct after deletion
-        S.directorState = await api.get(convUrl(S.activeConvId, "director"));
-        renderMessages();
-        clearInspectedMessage();
-        // Deletion cascades to the notes on the removed messages and moves the active branch,
-        // so the panel's path-scoped set is stale; refetch it if open (mirrors switchBranch).
-        if (isUtilityPanelOpen("direction-notes-panel")) await renderDirectionNotesPanel();
-        scrollToBottom();
-        toast("Message deleted");
-      } catch (e) {
-        toast(e.message, true);
-      }
-    },
-  );
+  if (!requestSendPermission()) return;
+  confirmDelete("Message", "Delete this message, all its siblings, and all their children?", async () => {
+    try {
+      setMessages(await api.del(convUrl(S.activeConvId, "messages", msgId)));
+      S.lastDirectorData = null;
+      // Re-fetch director state so moods are correct after deletion
+      S.directorState = await api.get(convUrl(S.activeConvId, "director"));
+      renderMessages();
+      clearInspectedMessage();
+      // Deletion cascades to the notes on the removed messages and moves the active branch,
+      // so the panel's path-scoped set is stale; refetch it if open (mirrors switchBranch).
+      if (isUtilityPanelOpen("direction-notes-panel")) await renderDirectionNotesPanel();
+      scrollToBottom();
+      toast("Message deleted");
+    } catch (e) {
+      toast(e.message, true);
+    }
+  });
 }
 
 export async function switchBranch(msgId) {
   if (!msgId || S.isStreaming) return;
+  // Branch switching mutates active_leaf_id server-side, so it's tab-locked too.
+  if (!requestSendPermission()) return;
   try {
     // Use the parent user message as scroll anchor so the viewport doesn't jump
     const currentBranchMsg = S.messages.find((m) => m.next_branch_id === msgId || m.prev_branch_id === msgId);
@@ -185,6 +174,10 @@ export async function switchBranch(msgId) {
 // Shared gate for arrow-key / touch-swipe branch navigation. Returns true if
 // we should ignore the gesture entirely (typing, streaming, modal open, …).
 function isChatNavBlocked(target) {
+  // Document mode hides the chat but keeps it mounted; without this, ←/→ with
+  // focus on a button (e.g. right after Generate) would silently switch branches
+  // of the hidden chat.
+  if (S.documentMode) return true;
   if (target) {
     const tag = target.tagName;
     if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target.isContentEditable) return true;
@@ -356,8 +349,11 @@ export function initChatSwipeNav() {
 }
 
 // ── Edit Message
-export async function saveEdit(msgId, role) {
-  const ta = $("edit-textarea-" + msgId);
+export async function saveEdit(msgId, _role) {
+  // Multi-tab guard sits here (not canStartGeneration): edits are legal during
+  // streaming via the queued-edit path below, which that helper would block.
+  if (!requestSendPermission()) return;
+  const ta = $(`edit-textarea-${msgId}`);
   if (!ta) return;
   const content = ta.value;
   const validation = validate.validateEditMessage(content);
@@ -401,7 +397,7 @@ export async function saveEdit(msgId, role) {
 // user row repaints with its sibling swipe-nav (afterStream's in-place finalize
 // fast path only adds nav to the assistant bubble).
 export async function saveForkEdit(msgId) {
-  const ta = $("edit-textarea-" + msgId);
+  const ta = $(`edit-textarea-${msgId}`);
   if (!ta) return;
   const content = ta.value;
   const validation = validate.validateEditMessage(content);
@@ -428,40 +424,28 @@ export async function saveForkEdit(msgId) {
     next_branch_id: null,
     user_attachments: original?.user_attachments ? [...original.user_attachments] : [],
   };
-  if (idx >= 0) {
-    S.messages.splice(idx, 0, userMsg);
-    S.streamCutoffIndex = idx + 1;
-  } else {
-    S.messages.push(userMsg);
-    S.streamCutoffIndex = S.messages.length;
-  }
-  S.pendingUserMsg = userMsg;
-  S.autoscrollEnabled = true;
 
-  setStreaming(true);
-  setGenerationPhase("pending");
-  $("send-btn").disabled = true;
-  renderMessages();
-
-  const ct = $("chat-messages");
-  const msgDiv = createStreamingDiv();
-  if (!S.hideUntilBaked) ct.appendChild(msgDiv);
-  scrollToBottom();
-
-  S.abortController = new AbortController();
-  try {
-    const resp = await streamPost(
-      convUrl(S.activeConvId, "messages", msgId, "fork-edit"),
-      { content: resolved, ...agentPayload() },
-      S.abortController.signal,
-    );
-    await processSSEStream(resp, ct, msgDiv, S.abortController.signal);
-  } catch (e) {
-    if (e.name === "AbortError") S.wasAborted = true;
-    else toast("Error: " + e.message, true);
-  }
-  await afterStream();
-  renderMessages();
+  await runStreamRequest(
+    convUrl(S.activeConvId, "messages", msgId, "fork-edit"),
+    { content: resolved, ...agentPayload() },
+    {
+      beforeRender() {
+        if (idx >= 0) {
+          S.messages.splice(idx, 0, userMsg);
+          S.streamCutoffIndex = idx + 1;
+        } else {
+          S.messages.push(userMsg);
+          S.streamCutoffIndex = S.messages.length;
+        }
+        S.pendingUserMsg = userMsg;
+        S.autoscrollEnabled = true;
+      },
+      // The trailing renderMessages() guarantees the user row repaints with its
+      // sibling swipe-nav (afterStream's in-place finalize only adds nav to the
+      // assistant bubble).
+      afterDone: renderMessages,
+    },
+  );
 }
 
 // ── Edit Pending Message

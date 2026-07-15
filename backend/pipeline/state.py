@@ -59,6 +59,10 @@ class _PipelineConfig:
     length_guard: LengthGuard | None
     do_edit: bool
     writer_enabled_tools: Mapping[str, bool]
+    # True when the writer endpoint is in text-completion mode: suppress the
+    # no-tools nudge (meaningless without a rendered tool harness). The shared
+    # tool blob is untouched — director/editor keep their schemas.
+    writer_text_mode: bool
     # The two call surfaces for the turn. ``writer_lane`` runs the writer pass;
     # ``agent_lane`` runs director + editor. In single-model mode they are the
     # same object by construction (see :class:`ModelLane`).
@@ -177,8 +181,8 @@ class TurnState:
 class LorebookTurn:
     """The lorebook inputs for one main-pipeline turn.
 
-    Bundles what was previously five loose parameters threaded through the
-    pipeline. ``block`` and ``catalog`` are the Director-facing context and are
+    Bundles the per-turn lorebook inputs threaded through the pipeline.
+    ``block`` and ``catalog`` are the Director-facing context and are
     mutually exclusive by mode (kept separate because they inject at different
     positions in the Director prompt). ``writer_block`` derives the final block
     shown to the writer.
