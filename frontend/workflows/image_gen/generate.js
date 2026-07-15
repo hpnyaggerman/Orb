@@ -5,7 +5,7 @@
 
 import { S, registerWorkflowMessageButton } from "/static/state.js";
 import { convUrl } from "/static/utils.js";
-import { streamPost } from "/static/chat_stream.js";
+import { streamPost } from "/static/sse.js";
 import { setWorkflowPhase, clearWorkflowPhase, selectWorkflowPipelinePass } from "/static/chat_inspector.js";
 import { refreshConversationMessages } from "/static/chat_workflow.js";
 
