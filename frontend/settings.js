@@ -122,8 +122,6 @@ export async function loadSettings() {
   else if (typeof S.settings.prevent_prompt_overrides === "boolean")
     S.preventPromptOverrides = S.settings.prevent_prompt_overrides;
 
-  S.llmProxy = S.settings.llm_proxy || "";
-
   if (typeof S.settings.agent_same_as_writer === "number") S.agentSameAsWriter = S.settings.agent_same_as_writer !== 0;
   else if (typeof S.settings.agent_same_as_writer === "boolean") S.agentSameAsWriter = S.settings.agent_same_as_writer;
   S.agentEndpointId = S.settings.agent_endpoint_id || null;
@@ -173,13 +171,6 @@ export function renderSettings() {
         </label>
       </div>
       <div class="tool-card-desc">Ignore system prompt and post-history instructions from character cards.</div>
-    </div>
-    <div class="tool-card">
-      <div class="tool-card-header">
-        <span class="tool-card-name">LLM Proxy</span>
-      </div>
-      <div class="tool-card-desc">Route all LLM requests through a proxy. Accepts http://, https://, or socks5:// URLs. Leave empty to connect directly.</div>
-      <input type="text" value="${esc(S.llmProxy)}" placeholder="socks5://127.0.0.1:1080" spellcheck="false" style="width:100%;margin-top:8px;box-sizing:border-box" onchange="saveLlmProxy(this.value)">
     </div>
     <div style="display:flex;align-items:center;gap:12px;margin:16px 0 8px"><div style="flex:1;height:1px;background:var(--accent-dim)"></div><span style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--accent-dim)">Data</span><div style="flex:1;height:1px;background:var(--accent-dim)"></div></div>
     <div class="field" style="display:flex;flex-direction:column;gap:8px">
@@ -350,14 +341,6 @@ export async function togglePreventPromptOverrides(on) {
   S.preventPromptOverrides = on;
   renderSettings();
   await persistSettings({ prevent_prompt_overrides: on });
-}
-
-export async function saveLlmProxy(value) {
-  // Backend validates the scheme and normalizes empty to "no proxy"; persist
-  // the trimmed value and mirror it locally. No re-render: the input already
-  // shows what the user typed.
-  S.llmProxy = (value || "").trim();
-  await persistSettings({ llm_proxy: S.llmProxy });
 }
 
 export async function saveLengthGuardConfig() {

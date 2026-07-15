@@ -1,7 +1,7 @@
 fastapi==0.128.8
 uvicorn[standard]==0.30.6
 aiosqlite==0.20.0
-httpx[socks]==0.27.2
+httpx==0.27.2
 pydantic==2.13.2
 Pillow==11.3.0
 python-multipart==0.0.20

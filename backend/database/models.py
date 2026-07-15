@@ -71,7 +71,6 @@ class _SettingsBase(TypedDict):
 
     endpoint_url: str
     api_key: str
-    llm_proxy: str
     model_name: str
     temperature: float
     min_p: float

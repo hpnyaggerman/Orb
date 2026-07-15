@@ -63,14 +63,10 @@ class LLMClient:
         api_key: str = "",
         timeout: float = 120.0,
         abort_token: AbortToken | None = None,
-        proxy: str | None = None,
     ):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.timeout = timeout
-        # Empty string (the settings default = "no proxy") normalizes to None so
-        # httpx connects directly; httpx rejects "" as a proxy URL.
-        self.proxy = proxy or None
         # Shared across the turn's clients when passed in; otherwise a private
         # token so a standalone client (e.g. a workflow hook) is still abortable.
         self.abort_token = abort_token or AbortToken()
@@ -146,7 +142,7 @@ class LLMClient:
         # model rejecting tool_choice). The error lands before any SSE event,
         # so the retry is clean.
         for attempt in range(2):
-            async with httpx.AsyncClient(timeout=self.timeout, proxy=self.proxy) as client:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
                 async with client.stream("POST", self._url(), json=body, headers=self._headers()) as resp:
                     if resp.status_code >= 400:
                         # Concern 1: surface the error body. Streaming responses

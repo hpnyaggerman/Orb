@@ -154,7 +154,6 @@ import {
   loadSettings,
   onHybridInput,
   saveLengthGuardConfig,
-  saveLlmProxy,
   savePersona,
   saveSetting,
   saveUserProfile,
@@ -227,7 +226,6 @@ Object.assign(window, {
   applyTheme,
   // settings / user
   saveSetting,
-  saveLlmProxy,
   onHybridInput,
   showUserModal,
   saveUserProfile,
