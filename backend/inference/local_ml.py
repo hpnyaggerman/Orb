@@ -85,8 +85,8 @@ GO_EMOTIONS: tuple[str, ...] = (
     "neutral",
 )
 
-_REPEAT_PENALTY = 1.2
-_FREQUENCY_PENALTY = 0.15
+_REPEAT_PENALTY = 1.1
+_FREQUENCY_PENALTY = 0.1
 _TOP_P = 0.8
 _TOP_K = 20
 
@@ -192,6 +192,10 @@ def _load_blocking(feature: str) -> None:
             model_path=resolve_path(feature),
             n_ctx=1024,
             n_threads=int(os.environ.get("ORB_AUTOCOMPLETE_THREADS", "4")),
+            # prefill is compute-bound (gen is bandwidth-bound: more threads don't
+            # help it); measured flat beyond 8 batch threads.
+            n_threads_batch=int(os.environ.get("ORB_AUTOCOMPLETE_BATCH_THREADS", "8")),
+            flash_attn=True,
             verbose=False,
         )
     except Exception as e:  # bad wheel, unknown arch, OOM
