@@ -96,6 +96,7 @@ def apply_reasoning_effort(body: dict, effort: str, param: str = "", value: str 
     body["reasoning_effort"] = effort
     body["reasoning"] = {**reasoning, "effort": effort}
 
+
 def strictify_schema(schema: dict) -> dict:
     """Copy *schema* into OpenAI strict-mode shape, recursively.
 
