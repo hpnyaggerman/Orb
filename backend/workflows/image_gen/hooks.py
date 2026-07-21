@@ -5,9 +5,9 @@ the ComfyUI client, and shapes the result for the framework. Four hooks plus an
 on-demand action router:
 
 - ``post_pipeline`` -- per-turn auto-generation, gated on a per-character enable
-  flag. Runs the scene analyzer and prompt composer, renders, and attaches the
-  image. Any LLM-noise or ComfyUI failure degrades to no image so the turn still
-  completes.
+  flag. Runs the optional subject-trait inference, the scene analyzer, and the
+  prompt composer, renders, and attaches the image. Any LLM-noise or ComfyUI
+  failure degrades to no image so the turn still completes.
 - ``regenerate`` -- full reprocess: re-run both passes against the anchor message
   and the character's current prompt/config, so an edited prompt takes effect.
 - ``reroll_gen`` -- re-render the stored prompt with a supplied seed, no LLM
@@ -41,7 +41,7 @@ from backend.workflows.toolkit import (
 )
 
 from .comfy import ComfyError, generate_image, inject_graph, load_template
-from .passes import analyze_scene, compose_prompt
+from .passes import analyze_scene, compose_prompt, infer_traits
 from .prompt_assembly import (
     CONFIG_DEFAULTS,
     assemble_positive,
@@ -205,6 +205,16 @@ def _scene_ok(scene) -> bool:
     return isinstance(scene, dict) and bool(scene.get("characters_present")) and bool(scene.get("outfits"))
 
 
+def _inferred_or(inferred: dict, key: str, fallback: str) -> str:
+    """The inferred description when the model produced a usable one, else the
+    stored value -- so an empty or noisy inference degrades to exactly the
+    no-inference behavior."""
+    value = inferred.get(key) if isinstance(inferred, dict) else None
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return fallback
+
+
 def _graph_values(positive: str, negative: str, params: dict) -> dict:
     return {
         "positive": positive,
@@ -252,6 +262,11 @@ async def _generate_core(
     single ``{"type": "artifact", "attachment": <dict>}`` and stops; on any
     LLM-noise or ComfyUI failure yields ``_phase_done`` and stops with no artifact.
 
+    When the config requests it, a subject-trait inference pass runs first, per
+    invocation, and its per-side output replaces the character/persona prompt for
+    both downstream passes; a side it produces nothing for keeps the stored value,
+    and nothing inferred is ever persisted.
+
     The per-turn auto path and the on-demand production path both drive this, so a
     manually generated image is identical to the one auto-generation would have
     produced. The artifact is handed back as a sentinel rather than persisted here
@@ -260,6 +275,33 @@ async def _generate_core(
     ``schema_overrides`` thread the turn's KV state so the in-turn passes reuse the
     turn's cache; off-turn callers leave them None and pay the cold prompt.
     """
+    if cfg["infer_char_traits"] or cfg["infer_persona_traits"]:
+        yield _phase("Inferring subjects...")
+        inferred: dict = {}
+        async for event in infer_traits(
+            client=client,
+            prefix=prefix,
+            infer_char=bool(cfg["infer_char_traits"]),
+            infer_persona=bool(cfg["infer_persona_traits"]),
+            char_prompt=char_prompt,
+            persona_prompt=persona_prompt,
+            moment=moment,
+            direction_notes=direction_notes,
+            settings=settings,
+            pass_id=f"{WORKFLOW_ID}:infer",
+            kv_tracker=kv_tracker,
+            enabled_tools=enabled_tools,
+            schema_overrides=schema_overrides,
+        ):
+            if event.get("type") == "result":
+                inferred = event.get("args") or {}
+            else:
+                yield event
+        if cfg["infer_char_traits"]:
+            char_prompt = _inferred_or(inferred, "character_description", char_prompt)
+        if cfg["infer_persona_traits"]:
+            persona_prompt = _inferred_or(inferred, "persona_description", persona_prompt)
+
     yield _phase("Analyzing scene...")
     scene: dict = {}
     async for event in analyze_scene(

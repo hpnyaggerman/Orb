@@ -23,6 +23,8 @@ const DEFAULTS = {
   negative_prompt: "",
   persona_prompts: {},
   prompt_guideline: "",
+  infer_char_traits: false,
+  infer_persona_traits: false,
   cfg: 5,
   steps: 40,
   width: 1536,
@@ -129,6 +131,12 @@ function formHtml(personas) {
       ${personaRows}
     </div>
     <div class="ig-section">
+      <div class="ig-heading">Context inference</div>
+      <label class="ig-row"><input type="checkbox" id="ig-infer_char_traits"${cfg.infer_char_traits ? " checked" : ""}> Infer character description from chat context</label>
+      <label class="ig-row"><input type="checkbox" id="ig-infer_persona_traits"${cfg.infer_persona_traits ? " checked" : ""}> Infer persona description from chat context</label>
+      <div class="ig-note">Runs an extra LLM pass per image; nothing is saved. A filled-in description is passed to the model as optional material.</div>
+    </div>
+    <div class="ig-section">
       <div class="ig-heading">Generation</div>
       ${row("CFG", `<input type="number" step="0.1" id="ig-cfg" value="${esc(String(cfg.cfg))}">`)}
       ${row("Steps", `<input type="number" id="ig-steps" value="${esc(String(cfg.steps))}">`)}
@@ -180,6 +188,8 @@ function readGlobal() {
     negative_prompt: strVal("ig-negative_prompt"),
     persona_prompts,
     prompt_guideline: strVal("ig-prompt_guideline"),
+    infer_char_traits: !!document.getElementById("ig-infer_char_traits")?.checked,
+    infer_persona_traits: !!document.getElementById("ig-infer_persona_traits")?.checked,
     cfg: numVal("ig-cfg", 5),
     steps: intVal("ig-steps", 40),
     width: intVal("ig-width", 1536),

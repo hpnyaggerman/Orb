@@ -1,8 +1,8 @@
 // Frontend entry point for the "image_gen" workflow. loadWorkflowModules()
 // dynamic-imports this file from the /static mount when the workflow is listed
 // in the manifest. It registers the Tools-panel config card and declares the
-// two-pass reasoning rail. Rendered images use the framework's default image
-// widget, so no attachment renderer is registered.
+// reasoning rail. Rendered images use the framework's default image widget, so
+// no attachment renderer is registered.
 
 import { registerWorkflowPipeline, registerWorkflowToolsPanelCard } from "/static/state.js";
 import { initConfigPanel, configPanelRenderer } from "./config_panel.js";
@@ -28,6 +28,7 @@ registerWorkflowPipeline({
   id: WORKFLOW_ID,
   label: "Image Generation",
   passes: [
+    { id: "image_gen:infer", label: "Subjects" },
     { id: "image_gen:analyze", label: "Scene" },
     { id: "image_gen:compose", label: "Prompt" },
   ],

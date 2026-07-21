@@ -7,9 +7,9 @@ submodules that carry no workflow-framework reference, so they stay
 independently importable and testable; workflow binding (registration metadata
 and hooks) is wired in ``backend/workflows/__init__.py``.
 
-Two standalone tools are declared here so ``register_workflow`` inserts them
+The standalone tools are declared here so ``register_workflow`` inserts them
 into the global tool registry, which is where ``forced_tool_call`` resolves them
-for the two passes. ``standalone=True`` keeps them out of the director/writer/
+for the passes. ``standalone=True`` keeps them out of the director/writer/
 editor tool union.
 """
 
@@ -29,6 +29,8 @@ from .tool_defs import (
     ANALYZE_SCENE_TOOL,
     COMPOSE_PROMPT_CHOICE,
     COMPOSE_PROMPT_TOOL,
+    INFER_TRAITS_CHOICE,
+    INFER_TRAITS_TOOL,
 )
 
 # Informational schema surfaced in the manifest. The config form is hand-built
@@ -44,6 +46,8 @@ _CONFIG_SCHEMA = {
         "negative_prompt": {"type": "string", "title": "Negative prompt", "default": DEFAULT_NEGATIVE},
         "persona_prompts": {"type": "object", "title": "Per-persona prompts"},
         "prompt_guideline": {"type": "string", "title": "Backend prompting guideline", "default": DEFAULT_GUIDELINE},
+        "infer_char_traits": {"type": "boolean", "title": "Infer character description from chat context"},
+        "infer_persona_traits": {"type": "boolean", "title": "Infer persona description from chat context"},
         "cfg": {"type": "number", "title": "CFG scale"},
         "steps": {"type": "integer", "minimum": 1, "title": "Sampling steps"},
         "width": {"type": "integer", "minimum": 1, "title": "Image width"},
@@ -59,6 +63,7 @@ image_gen_workflow = Workflow(
     config_schema=_CONFIG_SCHEMA,
     config_defaults=dict(CONFIG_DEFAULTS),
     tools=[
+        ToolSpec(name="infer_subject_traits", schema=INFER_TRAITS_TOOL, choice=INFER_TRAITS_CHOICE, standalone=True),
         ToolSpec(name="analyze_scene", schema=ANALYZE_SCENE_TOOL, choice=ANALYZE_SCENE_CHOICE, standalone=True),
         ToolSpec(name="compose_image_prompt", schema=COMPOSE_PROMPT_TOOL, choice=COMPOSE_PROMPT_CHOICE, standalone=True),
     ],
