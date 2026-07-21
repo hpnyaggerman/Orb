@@ -12,49 +12,34 @@ from __future__ import annotations
 import secrets
 
 # Backend prompting guideline applied when the config field is left empty. A
-# step-by-step procedure (count -> identity/appearance -> outfit -> pose/action
-# -> scene -> setting) mixing booru tags and natural language; surfaced to the
-# user as the field's placeholder (via the config schema) rather than a stored
-# value, so editing it is an explicit override.
-DEFAULT_GUIDELINE = """Follow this procedure to compose the positive_prompt string. Mix comma-separated tags and natural language sentences as the steps below direct.
+# step-by-step procedure (count -> classify -> identity -> outfit -> per-character
+# sentences -> interaction/setting -> camera -> emphasis -> final check) mixing
+# booru tags and natural language; surfaced to the user as the field's placeholder
+# (via the config schema) rather than a stored value, so editing it is an explicit
+# override. Raw string: the examples carry booru-escaped parens (\( \)).
+DEFAULT_GUIDELINE = r"""You compose one prompt for a booru-tag image model from the scene description and the character base blocks. Code prepends quality, artist, style, safety, meta, and year tags; begin at the count tag and write none of them: no masterpiece, best quality, score tags, @artists, safe, sensitive, nsfw, explicit, highres, absurdres, newest, or year tags.
 
-NEVER EMIT THESE: masterpiece, best quality, quality tags, score tags (score_N), @artist tags, safe, nsfw, sensitive, explicit, highres, absurdres, newest, recent, year tags. If you emit any of these the prompt breaks.
+Step 1, count. Read the Characters present line. Decide girl, boy, or other for each listed name from the count tag in their base block or from scene pronouns; skip anyone unlisted, including the persona. First write one combined tally, never recopying count tags from the blocks: 1girl, 2girls, 1boy, 1other, or 1boy, 1girl; add solo for one.
 
-STEP 1 - CHARACTER COUNT
-Read "Characters present" in the scene. Emit the count tag first: 1girl, 2girls, 1boy, 1girl 1boy, etc.
+Step 2, classify. In each base block look for a booru character tag: a lowercase name, sometimes with escaped parentheses, usually followed by a series tag. Found: KNOWN. Only appearance and outfit tags: ORIGINAL. No block: KNOWN only if you recognize a famous franchise character the image model was trained on, else ORIGINAL.
 
-STEP 2 - IDENTITY AND APPEARANCE
-For each character, read their Character base description or User-persona base description block.
+Step 3, identity. Copy each KNOWN character's tag exactly, then its series tag, keeping escapes: elaina \(majo no tabitabi\). ORIGINAL characters get nothing here.
 
-(A) If the block contains a character tag (a recognizable character name like "rem" or "hatsune miku"): emit that tag exactly as-is. If a series tag is present, emit it exactly as-is. Do not reformat either. These are known characters -- the image model has learned their appearance.
-Example: a base description has character tag "rem" and series tag "re:zero kara hajimeru isekai seikatsu" -> emit: rem, re:zero kara hajimeru isekai seikatsu
+Step 4, outfit. Take each character's base outfit list; from their scene outfit line, add articles after wearing, delete articles after without; default outfit keeps the base list. Mention only final-list items; never write without X or no X, naming an item makes it appear.
 
-(B) If the block has NO character tag: the character is original. Emit every visual trait from the block as tags: hair color, length, style, eye color, skin, body type, distinguishing features. Do NOT invent a name tag.
-Example: block has "long silver hair, red eyes, pointed ears, dark skin, tall" -> emit all of those tags.
+Step 5, one sentence per character. Gather appearance (base block), final outfit (step 4), and the position, pose, action lines. Referent: KNOWN, the capitalized name, Megumin; ORIGINAL, a descriptor from their appearance tags, a tall woman with short silver hair and red eyes, never the name, which the model does not know and may collide. Turn each position line into left, right, center, or behind relative to the anchor or the other character. Then write it: referent, appearance, outfit, position, pose, action, expression. Restate every ORIGINAL character's hair, eyes, and outfit; keep each attribute inside its owner's sentence, never as loose tags.
 
-STEP 3 - OUTFIT
-For each character, read the outfit line in the scene.
-- "default outfit" or no outfit line: emit clothing tags from the base description block.
-- "wearing [items]; without [items]": emit the ADDED articles as tags. Do NOT emit the removed articles. Keep all non-clothing tags (hair, eyes, features) from the base description.
-- The outfit delta always overrides the base. If the scene says "without armor" then drop armor even if the base description includes it.
+Example, original solo: 1girl, solo, a young woman with long silver hair, violet eyes, and a black coat stands on a rainy street at night, arms crossed, calm expression. neon lights, cowboy shot, from side
 
-STEP 4 - POSE AND ACTION
-Read each character's pose and action lines. Emit as tags or short phrases: sitting, arms crossed, holding cup, looking away, smile, open mouth, etc.
+Example, known plus original: 2girls, sorakado ao \(summer pockets\), summer pockets, Sorakado Ao (blue hair, purple eyes) stands on the left in a miko kimono, laughing. A pink-twintailed girl in a school uniform pouts at her from the right. indoors, full body
 
-STEP 5 - SCENE DESCRIPTION
-If the scene has 2+ characters OR complex spatial positioning: write 1-3 natural language sentences describing who is where and doing what. Name each character by a key visual marker so the image model keeps identities straight.
-Example: "A girl with blue hair sits on the left holding a book. A girl with blonde twintails stands on the right, pointing forward."
-If the scene is solo with a simple pose, skip NL -- tags from previous steps are enough.
+Step 6, interaction, setting, background. When action lines connect characters, pick the single most visual instant and write one sentence naming who does what to whom; then, after, starts to signal you kept two instants, cut back to one. From the Scene anchors line write one sentence placing the characters at the location with the one or two anchors they use, inferring lighting from time and place. Figures missing from Characters present go only in a background phrase: in the background, a nervous waitress.
 
-STEP 6 - SETTING
-Emit setting tags from the scene anchors: indoors, forest, classroom, night, rain, etc. Add camera or composition tags at the end only if the scene calls for them: dutch angle, from above, depth of field, wide shot.
+Step 7, camera. Decide distance by asking what must stay visible, then write the tightest tag that shows it: faces or emotion, close-up or upper body; outfit, pose, or action, cowboy shot or full body; three or more characters or the place itself, wide shot. Straight-on needs no angle tag; otherwise at most one: from above (lying, vulnerable), from below (dominance), from side (profile), from behind (hides faces), dutch angle (action or unease only). pov only for scenes seen through the persona's eyes, persona shown as hands at most; add looking at viewer only when someone faces the viewer. Last, one tag per true answer: indoors or outdoors? light source (sunset, backlighting)? fast motion (motion blur)? Skip tags that add nothing.
 
-ADDITIONAL RULES
-- All tags lowercase, spaces not underscores.
-- For known characters in multi-char scenes, still include their hair/eye color in the NL section (step 5) to prevent the model from swapping appearances between characters.
-- For original characters, be thorough. The image model has never seen them. Every visible trait matters.
-- Stay concise. You do not need every possible tag. Focus on what makes this scene distinct.
-- Use (tag:weight) only when a concept is niche or critical and might render too weakly. Weight range 1.3-2.0. Do not weight ordinary tags."""
+Step 8, emphasis. Is one concept load-bearing for the scene and likely to be missed? Weight only that at 1.5 to 2: (cross counter:1.5). Otherwise weight nothing.
+
+Step 9, final check: only the prompt string, starting at the count tags, lowercase tags with spaces, capitals only in names inside sentences, at least two sentences, 40 to 140 words, one moment."""
 
 # Quality tags and negative prompt applied when their config fields are left
 # empty, surfaced to the user as placeholders (via the config schema) rather than
