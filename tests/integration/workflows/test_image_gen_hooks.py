@@ -27,7 +27,9 @@ from backend.workflows import (
     RegenCtx,
     RerollGenCtx,
     _readonly,
+    get_workflow_character_state,
     set_workflow_character_state,
+    set_workflow_config,
 )
 from backend.workflows.image_gen import hooks
 from backend.workflows.image_gen.comfy import ComfyError
@@ -253,6 +255,7 @@ async def test_on_demand_test_unifies_config_without_llm(client, monkeypatch):
         raise AssertionError("a config test must not run the LLM passes")
         yield  # pragma: no cover
 
+    monkeypatch.setattr(hooks, "infer_traits", fail)
     monkeypatch.setattr(hooks, "analyze_scene", fail)
     monkeypatch.setattr(hooks, "compose_prompt", fail)
 
@@ -538,3 +541,109 @@ async def test_post_pipeline_threads_notes_into_both_passes(client, monkeypatch)
     assert "She lost her left arm." in (seen["analyze"] or "")
     assert "**Direction Notes**" in (seen["analyze"] or "")
     assert seen["compose"] == seen["analyze"]
+
+
+# --- subject-trait inference pass --------------------------------------------
+
+
+def _capture_prompt_passes(monkeypatch) -> dict:
+    """Stub analyze/compose to record the char/persona prompts each receives while
+    keeping the render path completable."""
+    seen: dict = {}
+
+    async def cap_analyze(**kwargs):
+        seen["analyze_char"] = kwargs.get("char_prompt")
+        yield {"type": "result", "args": _SCENE}
+
+    async def cap_compose(**kwargs):
+        seen["compose_char"] = kwargs.get("char_prompt")
+        seen["compose_persona"] = kwargs.get("persona_prompt")
+        yield {"type": "result", "args": {"positive_prompt": "a tester, hat"}}
+
+    monkeypatch.setattr(hooks, "analyze_scene", cap_analyze)
+    monkeypatch.setattr(hooks, "compose_prompt", cap_compose)
+    return seen
+
+
+def _stub_infer(monkeypatch, args: dict, capture: dict | None = None):
+    async def fake_infer(**kwargs):
+        if capture is not None:
+            capture.update(kwargs)
+        yield {"type": "result", "args": args}
+
+    monkeypatch.setattr(hooks, "infer_traits", fake_infer)
+
+
+async def test_post_pipeline_inference_feeds_both_passes(client, monkeypatch):
+    cid, char_id = await _seed()
+    await set_workflow_character_state(char_id, WID, {"enabled": True, "prompt": "a tester"})
+    await set_workflow_config(WID, {"infer_char_traits": True, "infer_persona_traits": True})
+    seen = _capture_prompt_passes(monkeypatch)
+    _stub_render(monkeypatch)
+    infer_seen: dict = {}
+    _stub_infer(monkeypatch, {"character_description": "inferred char", "persona_description": "inferred persona"}, infer_seen)
+
+    events = [ev async for ev in hooks.post_pipeline(_post_ctx(cid, char_id, "She smiles."))]
+
+    # The stored value rides into the inference pass as optional material; the
+    # inferred output replaces it for both downstream passes.
+    assert infer_seen["infer_char"] is True and infer_seen["infer_persona"] is True
+    assert infer_seen["char_prompt"] == "a tester"
+    assert seen["analyze_char"] == "inferred char"
+    assert seen["compose_char"] == "inferred char"
+    assert seen["compose_persona"] == "inferred persona"
+    assert any(e.get("event") == "phase_status" and e["data"].get("label") == "Inferring subjects..." for e in events)
+    assert any(e.get("type") == "attach_artifact" for e in events)
+    # Nothing inferred is persisted: the stored per-character prompt is untouched.
+    state = await get_workflow_character_state(char_id, WID)
+    assert state is not None and state["prompt"] == "a tester"
+
+
+async def test_post_pipeline_inference_empty_falls_back_to_stored(client, monkeypatch):
+    cid, char_id = await _seed()
+    await set_workflow_character_state(char_id, WID, {"enabled": True, "prompt": "a tester"})
+    await set_workflow_config(WID, {"infer_char_traits": True, "infer_persona_traits": True})
+    seen = _capture_prompt_passes(monkeypatch)
+    _stub_render(monkeypatch)
+    _stub_infer(monkeypatch, {"character_description": "   ", "persona_description": 42})
+
+    _ = [ev async for ev in hooks.post_pipeline(_post_ctx(cid, char_id, "Hi."))]
+
+    # Blank and non-string outputs both degrade to exactly the no-inference values.
+    assert seen["analyze_char"] == "a tester"
+    assert seen["compose_char"] == "a tester"
+    assert seen["compose_persona"] == ""
+
+
+async def test_post_pipeline_persona_only_inference_keeps_char_prompt(client, monkeypatch):
+    cid, char_id = await _seed()
+    await set_workflow_character_state(char_id, WID, {"enabled": True, "prompt": "a tester"})
+    await set_workflow_config(WID, {"infer_persona_traits": True})
+    seen = _capture_prompt_passes(monkeypatch)
+    _stub_render(monkeypatch)
+    infer_seen: dict = {}
+    _stub_infer(monkeypatch, {"character_description": "stray char", "persona_description": "inferred persona"}, infer_seen)
+
+    _ = [ev async for ev in hooks.post_pipeline(_post_ctx(cid, char_id, "Hi."))]
+
+    # Only the requested side is consumed: a stray character output is ignored.
+    assert infer_seen["infer_char"] is False
+    assert seen["analyze_char"] == "a tester"
+    assert seen["compose_char"] == "a tester"
+    assert seen["compose_persona"] == "inferred persona"
+
+
+async def test_post_pipeline_skips_inference_when_flags_off(client, monkeypatch):
+    cid, char_id = await _seed()
+    await set_workflow_character_state(char_id, WID, {"enabled": True, "prompt": "a tester"})
+    _stub_passes(monkeypatch)
+    _stub_render(monkeypatch)
+
+    async def fail_infer(**kwargs):
+        raise AssertionError("infer_traits must not run when both inference flags are off")
+        yield  # pragma: no cover
+
+    monkeypatch.setattr(hooks, "infer_traits", fail_infer)
+
+    events = [ev async for ev in hooks.post_pipeline(_post_ctx(cid, char_id, "Hi."))]
+    assert any(e.get("type") == "attach_artifact" for e in events)

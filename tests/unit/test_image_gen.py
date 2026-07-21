@@ -31,6 +31,15 @@ def test_normalize_config_rejects_non_dict_persona_prompts():
     assert cfg["persona_prompts"] == {}
 
 
+def test_normalize_config_inference_flags_default_off_and_coerce():
+    cfg = prompt_assembly.normalize_config({})
+    assert cfg["infer_char_traits"] is False
+    assert cfg["infer_persona_traits"] is False
+    cfg = prompt_assembly.normalize_config({"infer_char_traits": 1, "infer_persona_traits": True})
+    assert cfg["infer_char_traits"] is True
+    assert cfg["infer_persona_traits"] is True
+
+
 def test_assemble_positive_prepends_tags_in_order():
     # Mechanical prefix order: quality, then artist, then style, then the model's
     # composed tags.
@@ -190,6 +199,37 @@ def test_compose_instruction_keeps_notes_before_final_directive():
     # The closing compose_image_prompt directive stays last in the framing, so the scene
     # the caller appends as the next message still lands last overall.
     assert out.index(_NOTES_BLOCK) < out.index("compose_image_prompt")
+
+
+# --- subject-trait inference instruction -------------------------------------
+
+
+def test_infer_instruction_requests_enabled_sides_and_pins_disabled_empty():
+    out = prompt_assembly.infer_instruction(True, False)
+    assert "Requested: character_description" in out
+    assert "Requested: persona_description" not in out
+    assert "empty string for persona_description" in out
+    out = prompt_assembly.infer_instruction(False, True)
+    assert "Requested: persona_description" in out
+    assert "empty string for character_description" in out
+
+
+def test_infer_instruction_offers_existing_prompts_as_optional_material():
+    out = prompt_assembly.infer_instruction(True, True, "a knight", "a mage")
+    assert "a knight" in out
+    assert "a mage" in out
+    assert "optionally include" in out
+
+
+def test_infer_instruction_omits_material_block_for_empty_values():
+    out = prompt_assembly.infer_instruction(True, True, "", "   ")
+    assert "user-authored description" not in out
+
+
+def test_infer_instruction_appends_direction_notes():
+    out = prompt_assembly.infer_instruction(True, True, direction_notes=_NOTES_BLOCK)
+    assert _NOTES_BLOCK in out
+    assert prompt_assembly.infer_instruction(True, True) == prompt_assembly.infer_instruction(True, True, direction_notes="")
 
 
 # --- sentinel injection ------------------------------------------------------

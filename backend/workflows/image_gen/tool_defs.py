@@ -1,14 +1,45 @@
 """Forced-call tool schemas for the image_gen passes.
 
-Two standalone tools, registered into the global ``TOOLS`` registry through the
+Standalone tools, registered into the global ``TOOLS`` registry through the
 workflow's ``Workflow.tools`` so ``forced_tool_call`` can resolve them by name.
-``analyze_scene`` is structured so the required scene components (per-character
-outfit delta, spatial anchors, poses, actions) are enforced by the schema rather
-than parsed out of prose; ``compose_image_prompt`` returns the single positive
-prompt string the ComfyUI graph consumes.
+``infer_subject_traits`` returns the per-subject base descriptions the optional
+inference pass derives from the conversation; ``analyze_scene`` is structured so
+the required scene components (per-character outfit delta, spatial anchors,
+poses, actions) are enforced by the schema rather than parsed out of prose;
+``compose_image_prompt`` returns the single positive prompt string the ComfyUI
+graph consumes.
 """
 
 from __future__ import annotations
+
+INFER_TRAITS_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "infer_subject_traits",
+        "description": (
+            "Report base visual descriptions inferred from the conversation: the main "
+            "character's and the user persona's identity, appearance, and default outfit. "
+            "Empty string for a subject that was not requested or that the conversation "
+            "establishes nothing about."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "character_description": {
+                    "type": "string",
+                    "description": "Base visual description of the main character, or empty.",
+                },
+                "persona_description": {
+                    "type": "string",
+                    "description": "Base visual description of the user's character, or empty.",
+                },
+            },
+            "required": ["character_description", "persona_description"],
+        },
+    },
+}
+
+INFER_TRAITS_CHOICE = {"type": "function", "function": {"name": "infer_subject_traits"}}
 
 ANALYZE_SCENE_TOOL = {
     "type": "function",

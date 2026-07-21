@@ -1,4 +1,4 @@
-"""The two image_gen LLM passes, each a thin async generator over
+"""The image_gen LLM passes, each a thin async generator over
 ``forced_tool_call``.
 
 Both own their message-tail assembly so the hook layer stays focused on flow.
@@ -19,10 +19,46 @@ from backend.workflows.toolkit import forced_tool_call
 from .prompt_assembly import (
     analyze_instruction,
     compose_instruction,
+    infer_instruction,
     render_scene_block,
 )
 
 logger = logging.getLogger(__name__)
+
+
+async def infer_traits(
+    *,
+    client: Any,
+    prefix: Sequence[dict],
+    infer_char: bool,
+    infer_persona: bool,
+    char_prompt: str,
+    persona_prompt: str,
+    moment: str,
+    settings: Any,
+    direction_notes: str = "",
+    pass_id: str | None = None,
+    kv_tracker: Any = None,
+    enabled_tools: Any = None,
+    schema_overrides: Any = None,
+) -> AsyncIterator[dict]:
+    instruction = infer_instruction(infer_char, infer_persona, char_prompt, persona_prompt, direction_notes)
+    tail = [{"role": "user", "content": instruction + "\n\n" + moment}]
+    async for event in forced_tool_call(
+        client=client,
+        prefix=prefix,
+        tail_messages=tail,
+        tool_name="infer_subject_traits",
+        settings=settings,
+        pass_id=pass_id,
+        enabled_tools=enabled_tools,
+        schema_overrides=schema_overrides,
+        kv_tracker=kv_tracker,
+        temperature=0.4,
+    ):
+        if event.get("type") == "result":
+            logger.info("image_gen: infer_subject_traits tool result: %s", event.get("args"))
+        yield event
 
 
 async def analyze_scene(

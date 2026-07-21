@@ -1,5 +1,5 @@
 """Pure value transforms for the image_gen workflow: config normalization, the
-two pass instructions, scene rendering, positive/negative assembly, generation
+pass instructions, scene rendering, positive/negative assembly, generation
 parameters, and the attachment reproduction record.
 
 No conversation, turn, HTTP, or DB state is touched here -- every function maps
@@ -81,6 +81,8 @@ CONFIG_DEFAULTS: dict = {
     "negative_prompt": "",
     "persona_prompts": {},
     "prompt_guideline": "",
+    "infer_char_traits": False,
+    "infer_persona_traits": False,
     "cfg": 5.0,
     "steps": 40,
     "width": 1536,
@@ -138,6 +140,8 @@ def normalize_config(raw: object) -> dict:
     out["seed"] = _as_int(out["seed"], CONFIG_DEFAULTS["seed"])
     if not isinstance(out["persona_prompts"], dict):
         out["persona_prompts"] = {}
+    for key in ("infer_char_traits", "infer_persona_traits"):
+        out[key] = bool(out[key])
     for key in _STRING_KEYS:
         if not isinstance(out[key], str):
             out[key] = CONFIG_DEFAULTS[key] if out[key] is None else str(out[key])
@@ -247,6 +251,65 @@ def build_generation_metadata(positive: str, negative: str, params: dict, comfy_
         "height": params["height"],
         "comfy_url": comfy_url,
     }
+
+
+def _infer_subject_line(field: str, subject: str, existing: str) -> str:
+    """One requested-subject line for ``infer_instruction``, folding in the
+    user-authored description as optional material when one exists."""
+    line = f"Requested: {field} -- {subject}."
+    if existing and existing.strip():
+        line += (
+            " An existing user-authored description follows; optionally include, refine, "
+            "or extend it where the conversation supports doing so:\n" + existing.strip()
+        )
+    return line
+
+
+def infer_instruction(
+    infer_char: bool,
+    infer_persona: bool,
+    char_prompt: str = "",
+    persona_prompt: str = "",
+    direction_notes: str = "",
+) -> str:
+    """The inference-pass instruction: derive base visual descriptions for the
+    requested subjects from the conversation, in the same shape the user-authored
+    prompt fields carry, so the analyzer and composer consume them unchanged.
+
+    Existing user-authored values ride along per side as material the model may
+    optionally include; a non-requested side is pinned to an empty string.
+    *direction_notes* is the pre-rendered Direction Notes block (empty when
+    injection is off or the branch has none).
+    """
+    parts = [
+        "Infer base visual descriptions from the conversation, then call "
+        "infer_subject_traits. A base description is the subject's lasting baseline -- "
+        "identity, appearance, and default outfit -- not the current moment's pose, "
+        "action, or temporary state.",
+        "For each requested subject: if it is a recognizable known character, give the "
+        'character tag (and series tag) exactly, e.g. "rem, re:zero kara hajimeru '
+        'isekai seikatsu". Otherwise emit comma-separated booru-style tags for every '
+        "stable visual trait the conversation establishes or clearly implies: hair "
+        "color, length, and style, eye color, skin, body type, distinguishing features, "
+        "and default outfit articles. Do not invent traits the conversation contradicts; "
+        "when the conversation establishes nothing about a requested subject, return an "
+        "empty string for it.",
+    ]
+    if infer_char:
+        parts.append(_infer_subject_line("character_description", "the main character the assistant plays", char_prompt))
+    else:
+        parts.append("Not requested: return an empty string for character_description.")
+    if infer_persona:
+        parts.append(_infer_subject_line("persona_description", "the user's character", persona_prompt))
+    else:
+        parts.append("Not requested: return an empty string for persona_description.")
+    if direction_notes and direction_notes.strip():
+        parts.append(
+            "Lasting developments already established on this branch -- fold any that "
+            "change a subject's identity, appearance, or default outfit into the "
+            "descriptions:\n" + direction_notes.strip()
+        )
+    return "\n\n".join(parts)
 
 
 def analyze_instruction(char_prompt: str, direction_notes: str = "") -> str:
