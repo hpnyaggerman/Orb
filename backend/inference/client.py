@@ -47,10 +47,15 @@ def reasoning_cfg(on: bool) -> dict:
     reads a boolean ``thinking``. Each template reads only the name it knows and
     ignores the other, so sending both is safe and makes the toggle actually take
     on all of them (a template that silently ignores the flag would keep thinking).
+
+    The on-dict deliberately carries no effort level: how hard to think is the
+    per-model ``reasoning_effort`` setting, injected by the client in
+    :func:`apply_reasoning_effort` -- absent there too, the provider default
+    governs.
     """
     return (
         {
-            "reasoning": {"effort": "low", "enabled": True},
+            "reasoning": {"enabled": True},
             "chat_template_kwargs": {"enable_thinking": True, "thinking": True},
             "thinking": {"type": "enabled"},
         }
@@ -61,6 +66,105 @@ def reasoning_cfg(on: bool) -> dict:
             "thinking": {"type": "disabled"},
         }
     )
+
+
+def apply_reasoning_effort(body: dict, effort: str, param: str = "", value: str = "") -> None:
+    """Inject the per-model reasoning-effort setting into an outbound chat body.
+
+    Applies only when the call itself has reasoning enabled (the
+    ``reasoning_cfg(True)`` shape); reasoning-off calls and callers that sent no
+    reasoning params are left untouched. A standard level lands as the OpenAI
+    ``reasoning_effort`` param plus the OpenRouter-style ``reasoning.effort``
+    mirror; the ``custom`` sentinel sends exactly ``{param: value}`` instead,
+    with *value* JSON-decoded when it parses (numbers, objects) and sent as a
+    raw string otherwise. Runs before the endpoint profile, so providers that
+    reject these params get them stripped there (e.g. DeepSeek's allowlist).
+    """
+    if not effort:
+        return
+    reasoning = body.get("reasoning")
+    if not (isinstance(reasoning, dict) and reasoning.get("enabled")):
+        return
+    if effort == "custom":
+        if not param:
+            return
+        try:
+            body[param] = json.loads(value)
+        except json.JSONDecodeError:
+            body[param] = value
+        return
+    body["reasoning_effort"] = effort
+    body["reasoning"] = {**reasoning, "effort": effort}
+
+
+def parse_extra_headers(text: str) -> dict[str, str]:
+    """Parse ``Name: value`` lines into a header dict.
+
+    Blank lines and ``#`` comments are skipped; a line without a colon is
+    ignored rather than raised on. The API layer (``ModelConfigUpdate``) rejects
+    malformed input at save time, so anything reaching here is already valid --
+    being permissive means a row that predates that validation, or was edited in
+    the DB by hand, degrades to "send fewer headers" instead of killing a turn.
+    """
+    out: dict[str, str] = {}
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        name, sep, value = line.partition(":")
+        name = name.strip()
+        if not sep or not name or any(c in name for c in " \t"):
+            logger.warning("Ignoring malformed extra header line: %r", line)
+            continue
+        out[name] = value.strip()
+    return out
+
+
+def parse_extra_body(text: str) -> dict:
+    """Parse a JSON object of extra body fields; ``{}`` when absent or unusable."""
+    text = (text or "").strip()
+    if not text:
+        return {}
+    try:
+        parsed = json.loads(text)
+    except ValueError:
+        logger.warning("Ignoring extra body: not valid JSON")
+        return {}
+    if not isinstance(parsed, dict):
+        logger.warning("Ignoring extra body: expected a JSON object, got %s", type(parsed).__name__)
+        return {}
+    return parsed
+
+
+def strictify_schema(schema: dict) -> dict:
+    """Copy *schema* into OpenAI strict-mode shape, recursively.
+
+    Strict structured output requires every object to list all properties in
+    ``required`` and set ``additionalProperties: false``. Originally-optional
+    properties are made nullable so "may omit" survives as "may be null" --
+    the passes' unpackers already discard empty/null argument values.
+    """
+    node = dict(schema)
+    props = node.get("properties")
+    if isinstance(props, dict):
+        required = set(node.get("required") or [])
+        out_props: dict = {}
+        for key, prop in props.items():
+            sub = strictify_schema(prop) if isinstance(prop, dict) else prop
+            if key not in required and isinstance(sub, dict) and "type" in sub:
+                t = sub["type"]
+                if isinstance(t, list):
+                    t = t if "null" in t else [*t, "null"]
+                elif t != "null":
+                    t = [t, "null"]
+                sub = {**sub, "type": t}
+            out_props[key] = sub
+        node["properties"] = out_props
+        node["required"] = list(props.keys())
+        node["additionalProperties"] = False
+    if isinstance(node.get("items"), dict):
+        node["items"] = strictify_schema(node["items"])
+    return node
 
 
 def _parse_chat_logprobs(choice: Mapping[str, Any]) -> list[dict]:
@@ -102,10 +206,20 @@ class LLMClient:
         completion_mode: str = "chat",
         retry: RetryPolicy | None = None,
         proxy: str | None = None,
+        reasoning_effort: str = "",
+        reasoning_effort_param: str = "",
+        reasoning_effort_value: str = "",
+        extra_headers: str = "",
+        extra_body: str = "",
     ):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.timeout = timeout
+        # Per-model reasoning effort (see apply_reasoning_effort): '' = provider
+        # default, a level name, or 'custom' + the param/value pair to send.
+        self.reasoning_effort = reasoning_effort
+        self.reasoning_effort_param = reasoning_effort_param
+        self.reasoning_effort_value = reasoning_effort_value
         # "chat" = OpenAI-compatible /chat/completions; "text" = llama.cpp's
         # native /apply-template + /completion transport (byte-level prompt
         # control). See text_completion.py and _complete_text.
@@ -113,6 +227,12 @@ class LLMClient:
         # Empty string (the settings default = "no proxy") normalizes to None so
         # httpx connects directly; httpx rejects "" as a proxy URL.
         self.proxy = proxy or None
+        # Arbitrary per-model request additions (see migration 0044). Parsed
+        # once here rather than per call. They are applied last on both the
+        # header and body sides, so an explicit setting wins over anything Orb
+        # computed -- that is the point of the escape hatch.
+        self.extra_headers = parse_extra_headers(extra_headers)
+        self.extra_body = parse_extra_body(extra_body)
         # Shared across the turn's clients when passed in; otherwise a private
         # token so a standalone client (e.g. a workflow hook) is still abortable.
         self.abort_token = abort_token or AbortToken()
@@ -129,9 +249,14 @@ class LLMClient:
         return self.abort_token.is_aborted
 
     def _headers(self) -> dict:
+        headers: dict = {}
         if self.api_key:
-            return {"Authorization": f"Bearer {self.api_key}"}
-        return {}
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        # Applied over the base, so a configured header can deliberately replace
+        # Authorization for a gateway that wants a different scheme. Shared by
+        # both transports, unlike extra_body, which is chat-only.
+        headers.update(self.extra_headers)
+        return headers
 
     def _url(self) -> str:
         return f"{self.base_url}/chat/completions"
@@ -169,12 +294,12 @@ class LLMClient:
         if self.completion_mode == "text" and not text_completion.has_image_parts(messages):
             transport = self._complete_text
         else:
-            # Chat transport: prefill (no render step), raw GBNF grammar, and the
-            # per-call json_schema narrowing are text-mode concepts; drop them so
-            # such calls degrade cleanly here.
+            # Chat transport: prefill (no render step) and raw GBNF grammar are
+            # text-mode concepts; drop them so such calls degrade cleanly here.
+            # json_schema is NOT dropped: _complete_chat consumes it for
+            # structured forced calls (and discards it otherwise).
             params.pop("prefill", None)
             params.pop("grammar", None)
-            params.pop("json_schema", None)
             # n_probs is a llama.cpp /completion field; a text→chat fallback (e.g. a
             # call carrying image parts) must not leak it into the OpenAI-compat body.
             params.pop("n_probs", None)
@@ -245,18 +370,70 @@ class LLMClient:
         **params,
     ) -> AsyncIterator[dict]:
         """The OpenAI-compatible ``/chat/completions`` transport (default)."""
+        # Structured forced calls: on providers whose profile opts in, a
+        # forced-function tool_choice is rewritten as a strict
+        # ``response_format`` structured-output request -- the chat analogue of
+        # text mode's forced grammar (see _complete_text). The provider then
+        # grammar-constrains the content to the tool's argument schema, which
+        # guarantees byte-exact argument keys where free-decoded tool calls do
+        # not (e.g. GLM-5.2 snake-cases hyphenated keys). The caller-supplied
+        # ``json_schema`` (per-fragment director steps) narrows the schema
+        # exactly as it narrows the text-mode grammar.
+        schema_override = params.pop("json_schema", None)
+        structured = endpoint_profiles.supports_structured_tool_calls(self.base_url, model)
+        forced_name: str | None = None
+        if structured and isinstance(tool_choice, dict):
+            name = (tool_choice.get("function") or {}).get("name")
+            schema = schema_override or text_completion.forced_schema(tools, tool_choice)
+            if name and schema:
+                forced_name = name
+                params["response_format"] = {
+                    "type": "json_schema",
+                    "json_schema": {"name": name, "strict": True, "schema": strictify_schema(schema)},
+                }
+                tool_choice = None
+
         body = {
             "model": model,
             "messages": messages,
             "stream": True,
             **params,
         }
-        if tools:
+        # On a structured-output endpoint the tool blob is withheld from the
+        # body for EVERY pass, not just the forced ones. Two reasons:
+        #
+        # Correctness -- a model that can still see `tools` may answer with a
+        # native tool call instead, and that path bypasses the schema entirely.
+        # DeepSeek rewrites the argument keys when it does (0/39 came back
+        # intact under `tools` + strict schema, 22/22 without `tools`), so the
+        # caller's lookup by the name it sent silently finds nothing.
+        #
+        # Caching -- the server renders `tools` into the prompt, so dropping it
+        # only on forced passes would leave the writer with a different prefix
+        # from the director and editor and thrash the shared KV base they sit
+        # on (Invariant 1, docs/architecture/kv-cache.md). Dropping it for every
+        # pass keeps one stable prefix, and a smaller one.
+        #
+        # `tools` still arrives here: it is the source of the response_format
+        # schema built above. If that derivation fails the call goes out with
+        # neither tools nor tool_choice and degrades to the parse_tool_calls
+        # recovery chain, which is the same posture as any unforced pass.
+        if tools and not structured:
             body["tools"] = tools
-        if tool_choice:
+        if tool_choice and not structured:
             body["tool_choice"] = tool_choice
         # Requests usage in the terminal SSE chunk; servers that don't support it silently ignore this field.
         body.setdefault("stream_options", {"include_usage": True})
+
+        apply_reasoning_effort(body, self.reasoning_effort, self.reasoning_effort_param, self.reasoning_effort_value)
+
+        # Arbitrary per-model body fields, last so they override anything above.
+        # Applied before the endpoint profile, so a profile with an `allow_extra`
+        # allowlist still gets to drop a key its endpoint would reject -- the
+        # profile knows the wire contract, this field only knows what was typed.
+        if self.extra_body:
+            body.update(self.extra_body)
+            logger.info("LLM extra body fields: %s", sorted(self.extra_body))
 
         # Provider-specific body translation (profiles + session-learned
         # workarounds) lives entirely in endpoint_profiles; the client just
@@ -329,11 +506,16 @@ class LLMClient:
                                 reasoning_parts.append(rc)
                                 yield {"type": "reasoning", "delta": rc}
 
-                            # Content delta
+                            # Content delta. A structured forced call buffers
+                            # instead of yielding: the content is the tool's
+                            # arguments JSON, and chat mode never surfaces
+                            # argument streams as content (they arrive as
+                            # tool_calls deltas, which the pipeline hides).
                             c = delta.get("content")
                             if c:
                                 content_parts.append(c)
-                                yield {"type": "content", "delta": c}
+                                if forced_name is None:
+                                    yield {"type": "content", "delta": c}
 
                             # Per-token alternatives (Document mode steering) —
                             # present only when the caller passed logprobs and the
@@ -371,7 +553,12 @@ class LLMClient:
         # Assemble the final message dict (mirrors the non-streaming message format)
         message: dict = {}
         content = "".join(content_parts)
-        if content:
+        if forced_name is not None and not tool_calls_acc:
+            # Structured forced call: the constrained content IS the arguments
+            # JSON; re-synthesize the tool-call shape the pipeline expects. A
+            # provider that answered with real tool_calls anyway wins below.
+            message = text_completion.forced_tool_message(forced_name, content)
+        elif content:
             message["content"] = content
         reasoning = "".join(reasoning_parts)
         if reasoning:
@@ -701,6 +888,11 @@ def client_from_settings(settings: Mapping[str, Any], *, abort_token: AbortToken
         completion_mode=settings.get("completion_mode", "chat"),
         retry=RetryPolicy.from_settings(settings),
         proxy=settings.get("proxy"),
+        reasoning_effort=settings.get("reasoning_effort", ""),
+        reasoning_effort_param=settings.get("reasoning_effort_param", ""),
+        reasoning_effort_value=settings.get("reasoning_effort_value", ""),
+        extra_headers=settings.get("extra_headers", ""),
+        extra_body=settings.get("extra_body", ""),
     )
 
 
@@ -717,6 +909,11 @@ def agent_client_from_settings(settings: Mapping[str, Any], *, abort_token: Abor
         completion_mode=settings.get("agent_completion_mode", "chat"),
         retry=RetryPolicy.from_settings(settings),
         proxy=settings.get("agent_proxy", settings.get("proxy")),
+        reasoning_effort=settings.get("agent_reasoning_effort", settings.get("reasoning_effort", "")),
+        reasoning_effort_param=settings.get("agent_reasoning_effort_param", settings.get("reasoning_effort_param", "")),
+        reasoning_effort_value=settings.get("agent_reasoning_effort_value", settings.get("reasoning_effort_value", "")),
+        extra_headers=settings.get("agent_extra_headers", settings.get("extra_headers", "")),
+        extra_body=settings.get("agent_extra_body", settings.get("extra_body", "")),
     )
 
 

@@ -7,6 +7,7 @@ it needs and the shapes stay discoverable in one place.
 
 from __future__ import annotations
 
+import json
 from typing import Any, List, Literal, Optional
 from urllib.parse import urlsplit
 
@@ -124,6 +125,11 @@ class ModelConfigCreate(BaseModel):
     repetition_penalty: float = 1.0
     max_tokens: int = 4096
     role: str = "writer"
+    reasoning_effort: str = ""
+    reasoning_effort_param: str = ""
+    reasoning_effort_value: str = ""
+    extra_headers: str = ""
+    extra_body: str = ""
 
 
 class ModelConfigUpdate(BaseModel):
@@ -137,6 +143,51 @@ class ModelConfigUpdate(BaseModel):
     top_p: Optional[float] = None
     repetition_penalty: Optional[float] = None
     max_tokens: Optional[int] = None
+    reasoning_effort: Optional[str] = None
+    reasoning_effort_param: Optional[str] = None
+    reasoning_effort_value: Optional[str] = None
+    extra_headers: Optional[str] = None
+    extra_body: Optional[str] = None
+
+    @field_validator("extra_headers")
+    @classmethod
+    def _validate_extra_headers(cls, v: Optional[str]) -> Optional[str]:
+        # Blank lines and '#' comments are allowed so the field can be annotated.
+        # Rejecting a malformed line here means a typo fails at save time rather
+        # than silently sending nothing on every turn.
+        if v is None:
+            return v
+        v = v.strip()
+        if not v:
+            return ""
+        for line in v.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            name, sep, _ = line.partition(":")
+            if not sep or not name.strip():
+                raise ValueError("each header line must be 'Name: value' (got %r)" % line)
+            if any(c in name for c in " \t"):
+                raise ValueError("header name may not contain whitespace (got %r)" % name.strip())
+        return v
+
+    @field_validator("extra_body")
+    @classmethod
+    def _validate_extra_body(cls, v: Optional[str]) -> Optional[str]:
+        # Must be an object: it is merged into the request body, and a list or
+        # scalar has nothing to merge.
+        if v is None:
+            return v
+        v = v.strip()
+        if not v:
+            return ""
+        try:
+            parsed = json.loads(v)
+        except ValueError as e:
+            raise ValueError("extra body must be valid JSON: %s" % e) from e
+        if not isinstance(parsed, dict):
+            raise ValueError("extra body must be a JSON object, not %s" % type(parsed).__name__)
+        return v
 
 
 class MoodFragmentCreate(BaseModel):

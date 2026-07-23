@@ -9,7 +9,7 @@
 
 const MAX_CHAT_INPUT = 100000;
 const MAX_CHARACTER_NAME = 200;
-const MAX_CHARACTER_FIELD = 10000;
+const MAX_CHARACTER_FIELD = 40000;
 const MAX_CHARACTER_ADVANCED = 5000;
 const MAX_ALT_GREETING = 10000;
 const MAX_ALT_GREETINGS_COUNT = 30;
@@ -481,6 +481,18 @@ export function validateSetting(key, value) {
       const numCheck = isNumber(value, "Retry delay");
       if (!numCheck.valid) return numCheck;
       return numberRange(numCheck.parsed, 0, 300, "Retry delay");
+    }
+    case "reasoning_effort_param": {
+      if (typeof value === "string") {
+        return maxLength(value, 128, "Reasoning param name");
+      }
+      return { valid: true };
+    }
+    case "reasoning_effort_value": {
+      if (typeof value === "string") {
+        return maxLength(value, 4096, "Reasoning param value");
+      }
+      return { valid: true };
     }
     default:
       return { valid: true };

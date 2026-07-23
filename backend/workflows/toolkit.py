@@ -35,6 +35,7 @@ from ..core import (
 from ..database import (
     get_character_card,
     get_conversation,
+    get_direction_notes_for_path,
     get_director_state,
     get_interactive_fragments,
     get_message_by_id,
@@ -52,6 +53,7 @@ from ..inference import (
     format_message_with_attachments,
     parse_tool_calls,
     reasoning_cfg,
+    render_direction_notes_block,
 )
 from ._forced_call import forced_tool_call
 from .attachment_cache import insert_workflow_attachment
@@ -80,6 +82,7 @@ __all__ = [
     "format_report",
     "get_character_card",
     "get_conversation",
+    "get_direction_notes_for_path",
     "get_interactive_fragments",
     "get_director_state",
     "get_message_by_id",
@@ -96,6 +99,7 @@ __all__ = [
     "overlay_enable_tools",
     "parse_tool_calls",
     "reasoning_cfg",
+    "render_direction_notes_block",
     "run_audit",
     "set_workflow_character_state",
     "set_workflow_config",
