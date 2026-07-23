@@ -324,14 +324,13 @@ class LLMClient:
         # text mode's forced grammar (see _complete_text). The provider then
         # grammar-constrains the content to the tool's argument schema, which
         # guarantees byte-exact argument keys where free-decoded tool calls do
-        # not (e.g. GLM-5.2 snake-cases hyphenated keys). ``tools`` stays in
-        # the body so the server-rendered prompt -- and with it the KV cache --
-        # is unchanged; only ``tool_choice`` is replaced. The caller-supplied
+        # not (e.g. GLM-5.2 snake-cases hyphenated keys). The caller-supplied
         # ``json_schema`` (per-fragment director steps) narrows the schema
         # exactly as it narrows the text-mode grammar.
         schema_override = params.pop("json_schema", None)
+        structured = endpoint_profiles.supports_structured_tool_calls(self.base_url, model)
         forced_name: str | None = None
-        if isinstance(tool_choice, dict) and endpoint_profiles.supports_structured_tool_calls(self.base_url, model):
+        if structured and isinstance(tool_choice, dict):
             name = (tool_choice.get("function") or {}).get("name")
             schema = schema_override or text_completion.forced_schema(tools, tool_choice)
             if name and schema:
@@ -348,9 +347,28 @@ class LLMClient:
             "stream": True,
             **params,
         }
-        if tools:
+        # On a structured-output endpoint the tool blob is withheld from the
+        # body for EVERY pass, not just the forced ones. Two reasons:
+        #
+        # Correctness -- a model that can still see `tools` may answer with a
+        # native tool call instead, and that path bypasses the schema entirely.
+        # DeepSeek rewrites the argument keys when it does (0/39 came back
+        # intact under `tools` + strict schema, 22/22 without `tools`), so the
+        # caller's lookup by the name it sent silently finds nothing.
+        #
+        # Caching -- the server renders `tools` into the prompt, so dropping it
+        # only on forced passes would leave the writer with a different prefix
+        # from the director and editor and thrash the shared KV base they sit
+        # on (Invariant 1, docs/architecture/kv-cache.md). Dropping it for every
+        # pass keeps one stable prefix, and a smaller one.
+        #
+        # `tools` still arrives here: it is the source of the response_format
+        # schema built above. If that derivation fails the call goes out with
+        # neither tools nor tool_choice and degrades to the parse_tool_calls
+        # recovery chain, which is the same posture as any unforced pass.
+        if tools and not structured:
             body["tools"] = tools
-        if tool_choice:
+        if tool_choice and not structured:
             body["tool_choice"] = tool_choice
         # Requests usage in the terminal SSE chunk; servers that don't support it silently ignore this field.
         body.setdefault("stream_options", {"include_usage": True})
