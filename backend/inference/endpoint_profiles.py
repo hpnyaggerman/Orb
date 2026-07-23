@@ -6,6 +6,7 @@ body before it leaves ``LLMClient.complete()``.
 
 Two-level lookup (PROFILES dict):
 - Known endpoint + known model → model-specific profile (replaces default).
+- Known endpoint + model matching a ``"*substring"`` key -> that profile.
 - Known endpoint + unknown/blank model → endpoint default (``None`` key).
 - Unknown endpoint → ``None`` = pass-through (local llama.cpp, vLLM, etc.).
 
@@ -58,8 +59,10 @@ class ModelProfile:
     # If True, the chat transport rewrites forced-function tool calls as
     # strict ``response_format`` structured-output requests (the chat analogue
     # of text mode's forced grammar), guaranteeing byte-exact argument keys.
-    # Opt-in per provider: only set after verifying the endpoint honors
-    # ``response_format: {"type": "json_schema", "strict": true}``.
+    # Opt-in per (provider, model): only set after verifying that pairing
+    # honors ``response_format: {"type": "json_schema", "strict": true}``.
+    # Whether it helps or hurts is a property of the model, not the endpoint --
+    # a gateway fronting many models needs both settings. See PROFILES.
     structured_tool_calls: bool = False
 
     # Bespoke transforms applied after typed knobs, in order. Each callable
@@ -140,7 +143,15 @@ def _deepseek_coerce_tool_choice_when_thinking(body: dict) -> Optional[str]:
 # order matters if adding more specific URL prefixes like "api.deepseek.com/beta"
 # -- the more specific one must come first).
 # Inner None key: endpoint default profile. Inner str keys: exact-match
-# per-model overrides (replace, not merge).
+# per-model overrides (replace, not merge). An inner key prefixed with "*" is a
+# case-insensitive substring match on the model id, tried only after exact
+# match fails, in insertion order -- put the more specific pattern first.
+#
+# The "*" convention is deliberately the smallest thing that expresses "this
+# whole model family behaves differently", because a gateway can front hundreds
+# of ids that cannot be enumerated. If a third kind of match is ever needed
+# (prefix-only, regex, version ranges), replace the prefix hack with a real
+# matcher rather than adding a second sigil.
 PROFILES: dict[str, dict[Optional[str], ModelProfile]] = {
     "api.deepseek.com": {
         # deepseek-chat supports forced-function tool_choice in chat mode but
@@ -176,8 +187,29 @@ PROFILES: dict[str, dict[Optional[str], ModelProfile]] = {
     # under a forced call), but its documented response_format json_schema
     # strict mode is honored -- so forced calls go out as structured output.
     "nano-gpt.com": {
-        None: ModelProfile(
+        # DeepSeek is the exception, and it fails the opposite way round. When a
+        # request carries both `tools` and a strict json_schema, DeepSeek answers
+        # with a native tool call whose argument keys are rewritten
+        # ("user-intent-hypothesis" comes back as "user_intent_hypothesis"), so
+        # the caller's lookup by the name it sent finds nothing and the value is
+        # dropped. Measured over 10 attempts per shape on
+        # deepseek/deepseek-v4-pro:thinking: structured output 6/10 usable and
+        # 0/39 tool-call keys intact, plain forced tool_choice 10/10 and 22/22.
+        # GLM-5.2 is the mirror image (10/10 structured, 7/10 forced), hence the
+        # split rather than a single endpoint-wide setting.
+        #
+        # UNVERIFIED GENERALISATION: measured on one DeepSeek id, applied to the
+        # whole family by substring. NanoGPT lists ~29 DeepSeek ids and routes
+        # each model to its own upstream backend, so the real axis may be the
+        # backend rather than the family. Re-measure before trusting this for a
+        # specific id; the failure is silent (a renamed key, not an error), so
+        # a wrong guess here loses data without surfacing anything.
+        "*deepseek": ModelProfile(
             allow_extra=None,  # lenient passthrough; drop nothing
+            structured_tool_calls=False,
+        ),
+        None: ModelProfile(
+            allow_extra=None,
             structured_tool_calls=True,
         ),
     },
@@ -193,8 +225,10 @@ def supports_structured_tool_calls(endpoint_url: str, model: str = "") -> bool:
 def profile_for(endpoint_url: str, model: str = "") -> Optional[ModelProfile]:
     """Resolve (endpoint_url, model) to a ``ModelProfile``, or ``None`` for pass-through.
 
-    A blank *model* falls through to the endpoint default. An unmatched URL
-    returns ``None`` — the body is sent unchanged (local / unknown backends).
+    Match order within a matched endpoint: exact model id, then ``"*substring"``
+    keys in insertion order, then the ``None`` default. A blank *model* falls
+    through to the default. An unmatched URL returns ``None`` — the body is sent
+    unchanged (local / unknown backends).
     """
     if not endpoint_url:
         return None
@@ -203,6 +237,11 @@ def profile_for(endpoint_url: str, model: str = "") -> Optional[ModelProfile]:
         if needle in haystack:
             if model and model in models:
                 return models[model]
+            if model:
+                lowered = model.lower()
+                for key, profile in models.items():
+                    if isinstance(key, str) and key.startswith("*") and key[1:] in lowered:
+                        return profile
             return models.get(None)
     return None
 

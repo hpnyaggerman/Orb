@@ -75,6 +75,28 @@ def test_gating_by_endpoint():
     assert not supports_structured_tool_calls("")
 
 
+def test_deepseek_on_nanogpt_opts_out_of_structured():
+    # DeepSeek rewrites argument keys when a strict schema rides alongside
+    # `tools`; GLM only gets them right that way. Both live behind the same
+    # gateway, so the split is per-model.
+    for model in (
+        "deepseek/deepseek-v4-pro:thinking",
+        "deepseek-chat",
+        "deepseek-ai/DeepSeek-V3.1-Terminus:thinking",  # mixed case
+        "TEE/deepseek-v3.2",  # vendor-prefixed
+    ):
+        assert not supports_structured_tool_calls("https://nano-gpt.com/api/v1", model), model
+    for model in ("TEE/glm-5.2:thinking", "zai-org/glm-5.2:thinking", "openai/gpt-5.2"):
+        assert supports_structured_tool_calls("https://nano-gpt.com/api/v1", model), model
+
+
+def test_substring_key_does_not_leak_to_other_endpoints():
+    # The "*" pattern is scoped to its endpoint; a DeepSeek id elsewhere keeps
+    # that endpoint's own profile.
+    assert not supports_structured_tool_calls("https://api.deepseek.com/v1", "deepseek/deepseek-v4-pro")
+    assert not supports_structured_tool_calls("http://localhost:5000/v1", "deepseek/deepseek-v4-pro")
+
+
 # ── wire-level: the chat transport rewrite ────────────────────────────────────
 
 
