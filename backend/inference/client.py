@@ -97,6 +97,45 @@ def apply_reasoning_effort(body: dict, effort: str, param: str = "", value: str 
     body["reasoning"] = {**reasoning, "effort": effort}
 
 
+def parse_extra_headers(text: str) -> dict[str, str]:
+    """Parse ``Name: value`` lines into a header dict.
+
+    Blank lines and ``#`` comments are skipped; a line without a colon is
+    ignored rather than raised on. The API layer (``ModelConfigUpdate``) rejects
+    malformed input at save time, so anything reaching here is already valid --
+    being permissive means a row that predates that validation, or was edited in
+    the DB by hand, degrades to "send fewer headers" instead of killing a turn.
+    """
+    out: dict[str, str] = {}
+    for line in (text or "").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        name, sep, value = line.partition(":")
+        name = name.strip()
+        if not sep or not name or any(c in name for c in " \t"):
+            logger.warning("Ignoring malformed extra header line: %r", line)
+            continue
+        out[name] = value.strip()
+    return out
+
+
+def parse_extra_body(text: str) -> dict:
+    """Parse a JSON object of extra body fields; ``{}`` when absent or unusable."""
+    text = (text or "").strip()
+    if not text:
+        return {}
+    try:
+        parsed = json.loads(text)
+    except ValueError:
+        logger.warning("Ignoring extra body: not valid JSON")
+        return {}
+    if not isinstance(parsed, dict):
+        logger.warning("Ignoring extra body: expected a JSON object, got %s", type(parsed).__name__)
+        return {}
+    return parsed
+
+
 def strictify_schema(schema: dict) -> dict:
     """Copy *schema* into OpenAI strict-mode shape, recursively.
 
@@ -170,6 +209,8 @@ class LLMClient:
         reasoning_effort: str = "",
         reasoning_effort_param: str = "",
         reasoning_effort_value: str = "",
+        extra_headers: str = "",
+        extra_body: str = "",
     ):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
@@ -186,6 +227,12 @@ class LLMClient:
         # Empty string (the settings default = "no proxy") normalizes to None so
         # httpx connects directly; httpx rejects "" as a proxy URL.
         self.proxy = proxy or None
+        # Arbitrary per-model request additions (see migration 0044). Parsed
+        # once here rather than per call. They are applied last on both the
+        # header and body sides, so an explicit setting wins over anything Orb
+        # computed -- that is the point of the escape hatch.
+        self.extra_headers = parse_extra_headers(extra_headers)
+        self.extra_body = parse_extra_body(extra_body)
         # Shared across the turn's clients when passed in; otherwise a private
         # token so a standalone client (e.g. a workflow hook) is still abortable.
         self.abort_token = abort_token or AbortToken()
@@ -202,9 +249,14 @@ class LLMClient:
         return self.abort_token.is_aborted
 
     def _headers(self) -> dict:
+        headers: dict = {}
         if self.api_key:
-            return {"Authorization": f"Bearer {self.api_key}"}
-        return {}
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        # Applied over the base, so a configured header can deliberately replace
+        # Authorization for a gateway that wants a different scheme. Shared by
+        # both transports, unlike extra_body, which is chat-only.
+        headers.update(self.extra_headers)
+        return headers
 
     def _url(self) -> str:
         return f"{self.base_url}/chat/completions"
@@ -374,6 +426,14 @@ class LLMClient:
         body.setdefault("stream_options", {"include_usage": True})
 
         apply_reasoning_effort(body, self.reasoning_effort, self.reasoning_effort_param, self.reasoning_effort_value)
+
+        # Arbitrary per-model body fields, last so they override anything above.
+        # Applied before the endpoint profile, so a profile with an `allow_extra`
+        # allowlist still gets to drop a key its endpoint would reject -- the
+        # profile knows the wire contract, this field only knows what was typed.
+        if self.extra_body:
+            body.update(self.extra_body)
+            logger.info("LLM extra body fields: %s", sorted(self.extra_body))
 
         # Provider-specific body translation (profiles + session-learned
         # workarounds) lives entirely in endpoint_profiles; the client just
@@ -831,6 +891,8 @@ def client_from_settings(settings: Mapping[str, Any], *, abort_token: AbortToken
         reasoning_effort=settings.get("reasoning_effort", ""),
         reasoning_effort_param=settings.get("reasoning_effort_param", ""),
         reasoning_effort_value=settings.get("reasoning_effort_value", ""),
+        extra_headers=settings.get("extra_headers", ""),
+        extra_body=settings.get("extra_body", ""),
     )
 
 
@@ -850,6 +912,8 @@ def agent_client_from_settings(settings: Mapping[str, Any], *, abort_token: Abor
         reasoning_effort=settings.get("agent_reasoning_effort", settings.get("reasoning_effort", "")),
         reasoning_effort_param=settings.get("agent_reasoning_effort_param", settings.get("reasoning_effort_param", "")),
         reasoning_effort_value=settings.get("agent_reasoning_effort_value", settings.get("reasoning_effort_value", "")),
+        extra_headers=settings.get("agent_extra_headers", settings.get("extra_headers", "")),
+        extra_body=settings.get("agent_extra_body", settings.get("extra_body", "")),
     )
 
 

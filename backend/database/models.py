@@ -145,6 +145,14 @@ class SettingsRow(_SettingsBase, total=False):
     # shares the writer endpoint.
     proxy: str
     agent_proxy: str
+    # Arbitrary per-model request additions, surfaced by the same overlay
+    # (default ''). extra_headers is "Name: value" lines merged into the
+    # outbound headers; extra_body is a JSON object merged into the chat body.
+    # The agent_ variants fall back to the writer's when the agent shares it.
+    extra_headers: str
+    extra_body: str
+    agent_extra_headers: str
+    agent_extra_body: str
     # Per-model reasoning effort, surfaced by the same overlay (default '');
     # empty means no effort param is sent and the provider default governs.
     # 'custom' sends {reasoning_effort_param: reasoning_effort_value} instead
@@ -153,6 +161,8 @@ class SettingsRow(_SettingsBase, total=False):
     reasoning_effort: str
     reasoning_effort_param: str
     reasoning_effort_value: str
+    extra_headers: str
+    extra_body: str
     agent_reasoning_effort: str
     agent_reasoning_effort_param: str
     agent_reasoning_effort_value: str
