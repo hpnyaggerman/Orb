@@ -69,6 +69,11 @@ async def get_settings() -> SettingsRow:
                             "top_p",
                             "repetition_penalty",
                             "max_tokens",
+                            "reasoning_effort",
+                            "reasoning_effort_param",
+                            "reasoning_effort_value",
+                            "extra_headers",
+                            "extra_body",
                         ):
                             if mc.get(field) is not None:
                                 s[field] = mc[field]
@@ -114,6 +119,11 @@ async def get_settings() -> SettingsRow:
                             "top_p",
                             "repetition_penalty",
                             "max_tokens",
+                            "reasoning_effort",
+                            "reasoning_effort_param",
+                            "reasoning_effort_value",
+                            "extra_headers",
+                            "extra_body",
                         ):
                             if amc.get(field) is not None:
                                 s[f"agent_{field}"] = amc[field]
@@ -125,6 +135,15 @@ async def get_settings() -> SettingsRow:
         s.setdefault("agent_completion_mode", s["completion_mode"])
         s.setdefault("proxy", "")
         s.setdefault("agent_proxy", s["proxy"])
+        for field in (
+            "reasoning_effort",
+            "reasoning_effort_param",
+            "reasoning_effort_value",
+            "extra_headers",
+            "extra_body",
+        ):
+            s.setdefault(field, "")
+            s.setdefault(f"agent_{field}", s[field])
         return cast(SettingsRow, s)
 
 

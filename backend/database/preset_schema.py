@@ -83,6 +83,10 @@ SECRET_COLUMNS: dict[tuple[str, str], str] = {
     ("settings", "agent_shared_system_prompt"): "",
     ("endpoints", "api_key"): "",
     ("endpoints", "proxy"): "",
+    # Free-form headers; an auth token is exactly the kind of thing that ends
+    # up here, so it never rides an exported preset. extra_body is not
+    # redacted -- it holds routing/tuning config worth carrying across.
+    ("model_configs", "extra_headers"): "",
 }
 
 # Touch when: exporting one domain only makes sense alongside another (a product

@@ -101,7 +101,7 @@ async def get_model_configs(endpoint_id: int) -> list[ModelConfigRow]:
 async def create_model_config(endpoint_id: int, data: dict) -> ModelConfigRow:
     async with get_db() as db:
         cur = await db.execute(
-            "INSERT INTO model_configs (endpoint_id, model_name, system_prompt, temperature, min_p, top_k, top_p, repetition_penalty, max_tokens, role) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO model_configs (endpoint_id, model_name, system_prompt, temperature, min_p, top_k, top_p, repetition_penalty, max_tokens, role, reasoning_effort, reasoning_effort_param, reasoning_effort_value, extra_headers, extra_body) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 endpoint_id,
                 data.get("model_name", "default"),
@@ -113,6 +113,11 @@ async def create_model_config(endpoint_id: int, data: dict) -> ModelConfigRow:
                 data.get("repetition_penalty", 1.0),
                 data.get("max_tokens", 4096),
                 data.get("role", "writer"),
+                data.get("reasoning_effort", ""),
+                data.get("reasoning_effort_param", ""),
+                data.get("reasoning_effort_value", ""),
+                data.get("extra_headers", ""),
+                data.get("extra_body", ""),
             ),
         )
         await db.commit()
@@ -131,6 +136,11 @@ async def update_model_config(config_id: int, data: dict) -> ModelConfigRow | No
             "top_p",
             "repetition_penalty",
             "max_tokens",
+            "reasoning_effort",
+            "reasoning_effort_param",
+            "reasoning_effort_value",
+            "extra_headers",
+            "extra_body",
         ]
         sets, vals = _build_set_clause(allowed, data)
         if sets:

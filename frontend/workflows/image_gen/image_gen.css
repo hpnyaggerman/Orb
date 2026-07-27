@@ -1,0 +1,71 @@
+.ig-settings-btn {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 12px;
+  padding: 3px 11px;
+  cursor: pointer;
+}
+
+.ig-settings-btn:hover {
+  color: var(--text-primary);
+  border-color: var(--accent);
+}
+
+.ig-config {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+.ig-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border, rgba(128, 128, 128, 0.25));
+}
+
+.ig-heading {
+  font-weight: 600;
+  opacity: 0.85;
+}
+
+.ig-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.ig-row.ig-stack {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.ig-row input[type="text"],
+.ig-row input[type="number"],
+.ig-row textarea {
+  flex: 1;
+  min-width: 0;
+}
+
+.ig-row textarea {
+  width: 100%;
+  resize: vertical;
+  font-family: inherit;
+}
+
+.ig-note {
+  opacity: 0.7;
+  font-style: italic;
+}
+
+.ig-preview img {
+  max-width: 100%;
+  max-height: 60vh;
+  border-radius: 4px;
+}
