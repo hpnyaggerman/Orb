@@ -208,7 +208,12 @@ async def test_settings_overlay_reasoning_effort(client, db):
     endpoint_id = endpoint_resp.json()["id"]
     model_resp = await client.post(
         f"/api/endpoints/{endpoint_id}/models",
-        json={"model_name": "overlay-model", "reasoning_effort": "high"},
+        json={
+            "model_name": "overlay-model",
+            "reasoning_effort": "custom",
+            "reasoning_effort_param": "reasoning_effort",
+            "reasoning_effort_value": "max",
+        },
     )
     config_id = model_resp.json()["id"]
 
@@ -218,8 +223,12 @@ async def test_settings_overlay_reasoning_effort(client, db):
     resp = await client.get("/api/settings")
     assert resp.status_code == 200
     settings = resp.json()
-    assert settings["reasoning_effort"] == "high"
-    assert settings["agent_reasoning_effort"] == "high"
+    assert settings["reasoning_effort"] == "custom"
+    # The custom param NAME and its VALUE both have to survive the overlay read;
+    # a gap here reads back as "value gone on reload" in the settings UI.
+    assert settings["reasoning_effort_param"] == "reasoning_effort"
+    assert settings["reasoning_effort_value"] == "max"
+    assert settings["agent_reasoning_effort_value"] == "max"
 
 
 async def test_endpoint_crud_workflow(client, db):

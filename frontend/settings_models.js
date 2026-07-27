@@ -808,6 +808,16 @@ async function _doSaveEndpointSetting(ctx, el) {
       await _syncModelConfigRecord(ctx, v, payload);
     } else if (ctx.hyperparamKeys.includes(key) && S[ctx.configIdKey]) {
       await api.put(`/models/${S[ctx.configIdKey]}`, { [baseKey]: v });
+      // The /settings PUT above reassigned S.settings to an overlay read BEFORE
+      // this /models write, so its copy of this key is one step stale. When
+      // fields save in sequence (param then value in the custom-reasoning pair),
+      // the later one is left blank in S.settings while the earlier one looks
+      // fine -- and a re-render then shows it empty, and a later model-name edit
+      // reads that empty DOM back into the DB. Write the persisted value into
+      // both caches so nothing downstream sees stale.
+      S.settings[key] = v;
+      const cfg = S[ctx.configsKey].find((m) => m.id === S[ctx.configIdKey]);
+      if (cfg) cfg[baseKey] = v;
     }
   } catch (e) {
     console.error("Endpoint/model sync error:", e);
