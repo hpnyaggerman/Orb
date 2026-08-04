@@ -371,7 +371,7 @@ test("a connection just added is listed before it holds anything", () => {
     [COMFY_CONNECTION],
   );
   assert.deepEqual(
-    connectionList(empty, PROVIDERS, ["openai"]).map((c) => c.id),
+    connectionList(empty, PROVIDERS, new Set(["openai"])).map((c) => c.id),
     [COMFY_CONNECTION, "openai"],
   );
 });

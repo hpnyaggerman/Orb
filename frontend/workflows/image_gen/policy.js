@@ -86,7 +86,7 @@ function stylesOn(config = {}, id) {
   return styles.filter((style) => styleConnectionId(style, config) === id);
 }
 
-export function connectionList(config = {}, providers = [], pending = []) {
+export function connectionList(config = {}, providers = [], pending = new Set()) {
   const entries = config.cloud?.providers || {};
   const list = [
     {
@@ -101,7 +101,7 @@ export function connectionList(config = {}, providers = [], pending = []) {
   ];
   for (const [id, entry] of Object.entries(entries)) {
     const linked = stylesOn(config, id);
-    if (!hasContent(entry) && !linked.length && !pending.includes(id)) continue;
+    if (!hasContent(entry) && !linked.length && !pending.has(id)) continue;
     list.push({
       id,
       source: "cloud",
