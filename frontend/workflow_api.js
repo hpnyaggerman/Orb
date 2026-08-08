@@ -37,11 +37,11 @@ import {
   selectWorkflowPipelinePass,
   setWorkflowPhase,
 } from "./chat.js";
-import { closeModal, showModal } from "./modal.js";
+import { closeModal, setModalCloseGuard, showModal } from "./modal.js";
 import { sseEvents, streamPost } from "./sse.js";
 import { effectiveWorkflowEnabled, S, subscribe } from "./state.js";
 import { broadcastWorkflowMutation } from "./tabLock.js";
-import { convUrl, esc, escAttr, toast } from "./utils.js";
+import { convUrl, esc, escAttr, notifyError, toast } from "./utils.js";
 import {
   registerClickHandler,
   registerTextEffect,
@@ -54,7 +54,7 @@ import {
 import { messageSegments } from "./workflow_segmentation.js";
 import { clearTextEffect, startTextEffect } from "./workflow_text_effects.js";
 
-export const WORKFLOW_API_VERSION = 1;
+export const WORKFLOW_API_VERSION = 2;
 
 // ── Pass-through surface ─────────────────────────────────────────────────────
 // Registrars (7 of the 9; registerAttachmentRenderer + registerAction are below).
@@ -74,6 +74,7 @@ export {
   esc,
   escAttr,
   messageSegments,
+  notifyError,
   onChannel,
   pauseChannel,
   playAudio,
@@ -91,6 +92,7 @@ export {
   selectWorkflowPipelinePass,
   setChannelRepeat,
   setChannelVolume,
+  setModalCloseGuard,
   setWorkflowPhase,
   showModal,
   sseEvents,

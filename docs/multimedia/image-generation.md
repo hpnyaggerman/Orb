@@ -15,11 +15,8 @@ see [ComfyUI Setup](comfyui-setup.md). For a cloud provider, see
 advanced options, refer to the
 [official ComfyUI documentation](https://docs.comfy.org/installation/system_requirements).
 
-You pick the backend per style, not globally: each style names the connection it
-renders on. Imported workflows, the camera setting, and the character's
-appearance prompt are shared across both backends, and a style keeps both
-backends' settings — its ComfyUI checkpoint and workflow, and its cloud model —
-so relinking it and relinking it back loses nothing.
+You pick the style for each gen, each style is linked to a backend/connection that
+you must provide.
 
 ## Before you start
 
@@ -160,6 +157,8 @@ provider, is the only way through; there is no Orb-side setting that changes it.
 
 Orb renders through ComfyUI workflows that you import. The ComfyUI server must
 have all nodes and models that the workflow uses.
+
+![The Image Generation settings modal, showing an imported workflow](../assets/screenshots/imagegen-import-workflow.png)
 
 Orb accepts these files:
 
@@ -534,7 +533,7 @@ details** under the image and read the **Camera** row: *picker*, *classifier* or
 **Auto** needs a small local model. Without it, **Auto** falls back to
 third-person and the picker says `Auto (classifier off)`.
 
-1. Install the machine-learning extras. See [Character Expressions](character-expressions.md).
+1. Install the machine-learning extras. See [Character Expressions](../features/character-expressions.md).
 2. Open **Settings** and find **Local ML**.
 3. Select **Download** on **Image POV**. The model is about 20 MB.
 4. Leave the toggle on.

@@ -300,7 +300,7 @@ The pinned author import surface. Importing from anywhere else inside `backend` 
 
 ### 6.1 LLM + prompt + audit helpers (re-exports)
 
-`LLMClient`, `parse_tool_calls`, `reasoning_cfg`, `Macros`, `format_report`, `run_audit`, `build_prefix`, `compute_lorebook_injection_block`, `compute_style_injection_block`, `format_message_with_attachments`, `STANDALONE_TOOLS`, `TOOLS`, `enabled_schemas`.
+`LLMClient`, `parse_tool_calls`, `reasoning_cfg`, `Macros`, `format_report`, `build_targets`, `format_numbered_report`, `run_audit`, `build_prefix`, `compute_lorebook_injection_block`, `compute_style_injection_block`, `format_message_with_attachments`, `STANDALONE_TOOLS`, `TOOLS`, `enabled_schemas`.
 
 ### 6.2 Read-only core DB helpers (re-exports)
 
@@ -778,7 +778,7 @@ The three array registrars are idempotent on `workflowId` (re-registration repla
 
 `frontend/workflow_api.js` is **THE plugin surface**. Everything a workflow is allowed to touch is re-exported (or wrapped) here, so a plugin never reaches into `state.js` / `chat.js` / `audio_player.js` / etc. directly.
 
-**Stability policy — additive only.** New exports may be added; an existing export **never changes name or signature**. That single rule is the extensibility contract. `WORKFLOW_API_VERSION` (currently `1`) bumps only when surface is added (still additive). The stage-0 ABI snapshot check (`scripts/check_frontend_layers.py`) diffs this file's exports against a frozen list, so an accidental rename/removal fails CI. Canonical names throughout — no aliases (`setWorkflowPhase` is `setWorkflowPhase`, one name per operation).
+**Stability policy — additive only.** New exports may be added; an existing export **never changes name or signature**. That single rule is the extensibility contract. `WORKFLOW_API_VERSION` (currently `2`) bumps only when surface is added (still additive). The stage-0 ABI snapshot check (`scripts/check_frontend_layers.py`) diffs this file's exports against a frozen list, so an accidental rename/removal fails CI. Canonical names throughout — no aliases (`setWorkflowPhase` is `setWorkflowPhase`, one name per operation).
 
 **ABI reference.** Tier `frozen` = payload/signature is contract; `stable` = additive-only like the rest.
 
@@ -798,8 +798,10 @@ The three array registrars are idempotent on `workflowId` (re-registration repla
 | `api` | `{get,post,put,del,upload}` | HTTP helper. | stable |
 | `convUrl` | `(...parts) => string` | Build `/conversations/...` paths. | stable |
 | `esc` / `escAttr` | `(s) => string` | HTML / attribute escaping. | stable |
-| `toast` | `(msg, isError?)` | Transient notification. | stable |
+| `toast` | `(msg, isError?)` | Transient notification. `isError: true` is now **sticky** (red, dismissible) rather than a 3 s chip — a failure the user must act on cannot expire. | stable |
+| `notifyError` | `(headline, {sentence?, onDetails?})` | Sticky error toast: headline, the provider's own sentence clamped to two lines, and an optional `Details` button. Strings are written with `textContent`, so an untrusted provider message is safe to pass. | stable |
 | `showModal` / `closeModal` | `(html)` / `()` | Framework modal. | stable |
+| `setModalCloseGuard` | `(() => bool)` | Asked before the current modal closes — return `false` to keep it open (unsaved-draft prompt). Covers all three exits: Close, overlay click, Escape. Cleared automatically whenever a modal opens or closes, so set it *after* `showModal`. | stable |
 | `playAudio` | `({channel, segments, loop?, volume?, stopOn?})` | Play on a shared audio channel. | stable |
 | `stopChannel`/`stopAll`/`pauseChannel`/`resumeChannel`/`seekChannel`/`setChannelVolume`/`setChannelRepeat`/`replayChannel` | channel controls | See sec. 15.3. | stable |
 | `channelState` | `(channel) => state\|null` | Live channel state (sec. 15.4). | stable |
@@ -860,7 +862,8 @@ Built-in cases:
 | `phase_status` | requires `data.channel` to start `"workflow:"`; calls `clearWorkflowPhase(channel)` when `state === "done"` or the label is missing/blank, else `setWorkflowPhase(channel, label)` |
 | `editor_done` | append `tool_calls` to `S.lastDirectorData` |
 | `user_message_created` | patch pending user row id; optional in-flight edit POST |
-| `error` | toast |
+| `error` | **terminal.** `JSON.parse` the payload (or fall back to the bare string as a headline); store in `S.turnError` and paint the failure card via `renderTurnError` — no toast |
+| `warning` | **non-terminal.** A hook's `WorkflowUserFacingError`, surfaced as a sticky `notifyError` toast; the turn continues |
 | `workflow_attachments_rejected` | `_mergeWorkflowRejections(msgId, null, rejected)`; no re-render |
 
 Default branch: looks up `S.workflowEventHandlers[event]` (a `{workflowId, handler}` record). If its `workflowId` is effectively enabled (sec. 3.7) and `handler` is a function, parses `data` with `JSON.parse`, falling back to the raw string on parse failure, then invokes `handler(payload, msgDiv)` -- `payload` is the parsed JSON or raw string, `msgDiv` is the streaming message element or `null`. The call is wrapped in `try/catch`; throws are logged via `console.error` and do not abort the stream.
@@ -869,7 +872,7 @@ No `done` case, so `done` falls through to the default branch and reaches `S.wor
 
 ### 12.3 Reserved event names (do not author-emit as custom)
 
-These 10 names are intercepted by built-in `case`s in `handleSSEEvent` before the custom-handler default branch, so registering a handler for them has no effect: `token`, `director_start`, `director_done`, `writer_rewrite`, `reasoning`, `phase_status`, `editor_done`, `user_message_created`, `workflow_attachments_rejected`, `error`. Separately, event names a workflow's pipeline hooks emit are filtered server-side: the pipeline drops any underscore-prefixed name from `post_pipeline` and `pre_pipeline` output (both hook loops in `workflow_bridge.py`), since the `_`-prefix is reserved for internal persistence signals (`_result`, `_refined_result`, `_editor_reasoning`). These never reach the frontend.
+These 11 names are intercepted by built-in `case`s in `handleSSEEvent` before the custom-handler default branch, so registering a handler for them has no effect: `token`, `director_start`, `director_done`, `writer_rewrite`, `reasoning`, `phase_status`, `editor_done`, `user_message_created`, `workflow_attachments_rejected`, `error`, `warning`. Separately, event names a workflow's pipeline hooks emit are filtered server-side: the pipeline drops any underscore-prefixed name from `post_pipeline` and `pre_pipeline` output (both hook loops in `workflow_bridge.py`), since the `_`-prefix is reserved for internal persistence signals (`_result`, `_refined_result`, `_editor_reasoning`). These never reach the frontend.
 
 ### 12.4 `afterStream`
 
@@ -938,7 +941,8 @@ api.post(path, body)         # JSON body
 api.put(path, body)          # JSON body
 convUrl(...parts)            # utils.js -> "/conversations/<part1>/<part2>/..."
 esc(s) / escAttr(s)          # utils.js HTML- / attribute-escape; null/undefined -> ""
-toast(msg, isError?)         # utils.js transient notification
+toast(msg, isError?)         # notify.js (re-exported by utils.js) — transient chip; isError is sticky
+notifyError(headline, {sentence?, onDetails?})   # notify.js sticky error toast
 showModal(html) / closeModal()   # modal.js
 ```
 

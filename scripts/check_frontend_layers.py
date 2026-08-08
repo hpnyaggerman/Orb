@@ -38,10 +38,12 @@ LAYERS = {
     "sse.js": 0,
     "validate.js": 0,
     "scroll_follow.js": 0,
+    "text_segmentation.js": 0,
     # L1 state + shared pure helpers.
     "state.js": 1,
     "workflow_registry.js": 1,
     "utils.js": 1,
+    "notify.js": 1,
     # L2 services.
     "tabLock.js": 2,
     "audio_schedule.js": 2,
@@ -64,6 +66,7 @@ LAYERS = {
     # the audit's target, enforced loosely here via the layer rule only).
     "chat.js": 5,
     "chat_core.js": 5,
+    "chat_error.js": 5,
     "chat_stream.js": 5,
     "chat_messages.js": 5,
     "chat_inspector.js": 5,
@@ -124,8 +127,10 @@ FROZEN_ABI = {
     "esc",
     "escAttr",
     "toast",
+    "notifyError",
     "showModal",
     "closeModal",
+    "setModalCloseGuard",
     "sseEvents",
     "streamPost",
     # audio
@@ -258,11 +263,15 @@ def main() -> int:
     if missing:
         errors.append(f"[abi] workflow_api.js is MISSING frozen exports (rename/removal breaks plugins): {sorted(missing)}")
     if added:
-        errors.append(f"[abi] workflow_api.js has NEW exports not in FROZEN_ABI — add them there (additive-only): {sorted(added)}")
+        errors.append(
+            f"[abi] workflow_api.js has NEW exports not in FROZEN_ABI — add them there (additive-only): {sorted(added)}"
+        )
 
     # Report.
-    print(f"frontend layer check: {len(top_files)} modules, inline on*={inline} (max {MAX_INLINE_ON}), "
-          f"underscore imports={us} (max {MAX_UNDERSCORE_IMPORTS}), ABI exports={len(exports)}")
+    print(
+        f"frontend layer check: {len(top_files)} modules, inline on*={inline} (max {MAX_INLINE_ON}), "
+        f"underscore imports={us} (max {MAX_UNDERSCORE_IMPORTS}), ABI exports={len(exports)}"
+    )
     if errors:
         print("\nFRONTEND LAYER CHECK FAILED:")
         for e in errors:

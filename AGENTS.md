@@ -13,6 +13,7 @@ Orb is an **agentic AI roleplay/writing frontend**: Python/FastAPI backend, vani
 Pipeline passes: **Director** (optional, pre-writer) → **Writer** (streams output) → **Editor** (optional, post-writer auditor/rewriter).
 
 - **Cross-pass KV caching:** All passes share one byte-identical prefix (same system prompt, history, tool schemas). Read [docs/architecture/kv-cache.md](docs/architecture/kv-cache.md) before touching prompt assembly, pass ordering, or tool schemas.
+- **Editor patching:** `editor_apply_patch` anchors on a numbered finding id, not a `search` string — `analysis/targets.py` resolves the audit into addressable offsets. Every replacement is healed before it lands (`analysis/healing.py`): sentences the model copied from the draft *outside* its target span are trimmed, so a mis-aimed patch can't print a sentence twice.
 - **Secondary workflows:** Pluggable hooks (pre/post pipeline, on-demand). Full reference: [docs/architecture/secondary-workflow.md](docs/architecture/secondary-workflow.md).
 - **SSE wire contract:** [docs/architecture/sse-stream.md](docs/architecture/sse-stream.md).
 
@@ -33,10 +34,10 @@ Dependency order (top to bottom — each layer may only import layers below it):
 
 | Layer | Purpose |
 |-------|---------|
-| `core/` | Dependency-free kernel: `domain_types`, `llm_types`, `macros`, `locks`, `utils` |
+| `core/` | Dependency-free kernel: `domain_types`, `llm_types`, `macros`, `locks`, `text_segmentation`, `utils` |
 | `database/` | aiosqlite foundation: schema, migrations, queries, models (TypedDicts) |
 | `inference/` | LLM transport + prompt/tool assembly (`client`, `cached_call`, `prompt_builder`, `tool_registry`) |
-| `analysis/` | Pure prose-quality detection: `audit.py` + detectors; shared by editor + workflows |
+| `analysis/` | Pure prose-quality detection: `audit.py` + detectors, `targets.py` (findings → id-addressable draft offsets), `patching.py`, `healing.py` (trims patch text that restates the draft around the span); shared by editor + workflows |
 | `workflows/` | Plugin registry + shipped workflows (TTS, image generation, format_consistency) |
 | `pipeline/` | Director→Writer→Editor turn engine (`entrypoints`, `orchestrator`, `context`, `config`, `persistence`, `passes/`) |
 | `features/` | Self-contained slices: `cards`, `lorebook`, `summarization`, `presets`, `documents` |
@@ -63,13 +64,19 @@ features/<name>/
 | `backend/pipeline/entrypoints.py` | 5 public `handle_*` functions — top of the turn lifecycle |
 | `backend/pipeline/orchestrator.py` | `_run_pipeline()`: director→writer→editor coordination |
 | `backend/pipeline/state.py` | `TurnState`, `ModelLane`, `_PipelineConfig`, `LorebookTurn` |
+| `backend/pipeline/failures.py` | `describe_failure(exc)` → the `error` event's payload; the only place a failure is classified (status class, never provider vocabulary) |
 | `backend/inference/tool_registry.py` | All tool schemas + `TOOLS`/`PRE_WRITER_TOOLS`/`POST_WRITER_TOOLS` |
+| `backend/inference/errors.py` | `LLMCallError(httpx.HTTPStatusError)` + `provider_sentence`/`redact` — keeps the provider's own words instead of `raise_for_status()`'s canned line. **Must** stay an `HTTPStatusError` or `RetryPolicy` silently stops retrying |
+| `backend/core/text_segmentation.py` | Canonical non-workflow backend sentence/quote policy; sentences never contain line breaks |
 | `backend/database/models.py` | TypedDict row contracts (the model layer) |
 | `backend/database/schema.py` | `CREATE TABLES` — source of truth for columns |
 | `backend/database/preset_schema.py` | Preset policy: `DOMAIN_ROOTS`, `SECRET_COLUMNS`, etc. |
 | `frontend/state.js` | Global `S` object — every key declared here; pub/sub bus |
-| `frontend/chat.js` | Barrel re-exporting `chat_core/stream/messages/inspector/workflow/conversations` |
+| `frontend/chat.js` | Barrel re-exporting `chat_core/stream/messages/inspector/workflow/conversations/error` |
+| `frontend/chat_error.js` | The failed-turn card: `S.turnError` → persistent card with Retry / Details / Copy, painted from `renderMessages()` |
+| `frontend/notify.js` | The toast stack — one element and one timer per entry; errors are sticky. `utils.js` re-exports `toast` from here |
 | `frontend/sse.js` | THE SSE parser (`sseEvents`, `streamPost`) — only one in the app |
+| `frontend/text_segmentation.js` | Canonical non-workflow frontend sentence policy; line breaks are standalone stream units |
 | `frontend/workflow_api.js` | Plugin facade ABI v2 — the only import for `frontend/workflows/**` |
 
 ## Database Schema (summary)
@@ -126,7 +133,7 @@ Controlled by `settings.agent_same_as_writer` (default `true`).
 
 ## Frontend Architecture
 
-Vanilla ES modules, no build step. State in `state.js` (global `S`, all keys declared). Streaming via `sse.js`. All chat generation routes through `runStreamRequest()` in `chat_stream.js`. Plugin modules in `frontend/workflows/**` import only `workflow_api.js`. Plugin buttons use `registerAction(wid, name, fn)` + `data-wf-action="wid:name"` — never `window.*` or inline `on*`.
+Vanilla ES modules, no build step. State in `state.js` (global `S`, all keys declared). Streaming via `sse.js`. All chat generation routes through `runStreamRequest()` in `chat_stream.js`. Plugin modules in `frontend/workflows/**` import only `workflow_api.js` and their own local modules. Workflows own any backend/frontend lexical parsing they need instead of importing application segmentation; shared fixtures pin cross-runtime behavior. Plugin buttons use `registerAction(wid, name, fn)` + `data-wf-action="wid:name"` — never `window.*` or inline `on*`.
 
 Guardrails enforced by `scripts/check_frontend_layers.py` (run via `scripts/lint.sh`): layer import direction, ABI snapshot, plugin-import rule, ratchets for inline handlers and underscore cross-module imports.
 

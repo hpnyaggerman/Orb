@@ -24,6 +24,7 @@ from backend.features.lorebook import (
 from backend.inference import (
     SELECT_LOREBOOK_CHOICE,
     TOOLS,
+    CachedBase,
     build_direct_scene_tool,
     build_lorebook_select_prompt,
 )
@@ -347,7 +348,7 @@ class TestConstantsOnlyTrailing:
         block = lt.writer_block(["Const"])
         assert block == ""
         # An empty block must not leave a stray ___ separator in the writer content.
-        content = build_writer_content(block, "", {}, "hi", None, None)
+        content = build_writer_content(block, "", False, "hi", None, None)
         assert content == "___\n\nhi\n\n"
 
 
@@ -449,6 +450,7 @@ class _FakeSelectBase:
     """Stands in for ``CachedBase``: serves one canned ``select_lorebook`` completion."""
 
     prefix: list = []
+    complete_into = CachedBase.complete_into
 
     def __init__(self, args: dict):
         self._args = args
