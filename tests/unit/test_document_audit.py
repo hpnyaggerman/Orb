@@ -65,6 +65,15 @@ def test_trim_single_partial_sentence_yields_empty_core():
     assert trim_incomplete_tail("just a fragment with no end") == ("", "just a fragment with no end")
 
 
+def test_trim_does_not_mistake_title_abbreviation_for_complete_sentence():
+    draft = "Dr. Rivera was still wal"
+    assert trim_incomplete_tail(draft) == ("", draft)
+
+
+def test_trim_uses_unicode_sentence_terminators():
+    assert trim_incomplete_tail("彼は帰った。 次の断片") == ("彼は帰った。 ", "次の断片")
+
+
 def test_trim_empty_and_whitespace():
     assert trim_incomplete_tail("") == ("", "")
     assert trim_incomplete_tail("   \n") == ("", "   \n")
@@ -129,7 +138,21 @@ def test_report_to_dict_flagged_sections_shape():
     hits = d["sections"]["banned_phrases"]
     assert any(_BANNED in item["phrase"] and item["sentence"] for item in hits)
     openers = d["sections"]["repetitive_openers"]
+    # No draft passed → no ids, rather than ids guessed against text we do not have.
     assert openers and set(openers[0]) == {"opener", "count", "sentences"}
+
+
+def test_report_to_dict_with_draft_carries_the_patch_ids():
+    text = f"She felt {_BANNED} at once. He ran fast. He jumped high. He sat down. He stood up."
+    d = report_to_dict(run_audit(text, _BANK), text)
+    hits = d["sections"]["banned_phrases"]
+    assert all("ids" in item for item in hits)
+    # The banned sentence is the first finding in document order.
+    assert [1] in [item["ids"] for item in hits]
+    openers = d["sections"]["repetitive_openers"]
+    # sentences[0] anchors the run and is never flagged, so the opener entry's
+    # ids cover the remainder only.
+    assert openers[0]["ids"] and len(openers[0]["ids"]) == len(openers[0]["sentences"]) - 1
 
 
 # ── audit_document ───────────────────────────────────────────────────────────
@@ -240,7 +263,7 @@ class _StubPatchClient:
 async def test_patch_applies_and_reattaches_tail():
     flagged = f"She felt {_BANNED} at once."
     draft = f"{flagged} And then he beg"
-    client = _StubPatchClient([{"search": flagged, "replace": "A chill traced her back."}])
+    client = _StubPatchClient([{"id": 1, "replace": "A chill traced her back."}])
 
     res = await patch_document(client, "m", draft, "", _BANK, None, _SETTINGS, assisted=False, truncated=True)
     assert res["patched_draft"] == "A chill traced her back. And then he beg"
@@ -292,7 +315,7 @@ async def test_patch_all_partial_skips_llm():
 async def test_patch_text_raw_byte_extends_document_with_json_schema():
     flagged = f"She felt {_BANNED} at once."
     ctx = "Earlier prose precedes the run. "
-    client = _StubPatchClient([{"search": flagged, "replace": "Cold ran through her."}], completion_mode="text")
+    client = _StubPatchClient([{"id": 1, "replace": "Cold ran through her."}], completion_mode="text")
 
     res = await patch_document(client, "m", flagged, ctx, _BANK, None, _SETTINGS, assisted=False, truncated=False)
     assert res["patched_draft"] == "Cold ran through her."
@@ -307,7 +330,7 @@ async def test_patch_text_raw_byte_extends_document_with_json_schema():
 async def test_patch_text_assisted_extends_rendered_generation_prompt():
     flagged = f"She felt {_BANNED} at once."
     ctx = "### USER: keep going\nThe last prose line"
-    client = _StubPatchClient([{"search": flagged, "replace": "Quiet."}], completion_mode="text")
+    client = _StubPatchClient([{"id": 1, "replace": "Quiet."}], completion_mode="text")
 
     res = await patch_document(client, "m", flagged, ctx, _BANK, None, _SETTINGS, assisted=True, truncated=False)
     assert res["patch_count"] == 1
@@ -323,7 +346,7 @@ async def test_patch_text_assisted_extends_rendered_generation_prompt():
 async def test_patch_chat_assisted_replays_prefill_close_turns():
     flagged = f"She felt {_BANNED} at once."
     ctx = "### USER: keep going\nThe last prose line"
-    client = _StubPatchClient([{"search": flagged, "replace": "Calm."}])
+    client = _StubPatchClient([{"id": 1, "replace": "Calm."}])
 
     await patch_document(client, "m", flagged, ctx, _BANK, None, _SETTINGS, assisted=True, truncated=False)
     msgs = client.calls[0]["messages"]
@@ -370,6 +393,9 @@ def test_patch_prompt_raw_is_byte_extension():
 def test_fix_instruction_describes_json_shape_without_tool_name():
     fix = build_fix_instruction("*** REPORT ***")
     assert fix.startswith("*** REPORT ***")
-    assert '"patches"' in fix and '"search"' in fix
+    assert '"patches"' in fix and '"id"' in fix and "[brackets]" in fix
+    # The old search/replace contract is gone: nothing asks the model to copy
+    # draft text back out.
+    assert '"search"' not in fix
     # No tool-call phrasing: neither transport shows the model a tool schema.
     assert "editor_apply_patch" not in fix
