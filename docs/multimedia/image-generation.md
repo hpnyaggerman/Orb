@@ -252,6 +252,11 @@ complex scene or writes the image prompt. It applies to both prompt steps and ca
 increase token use. Stable thinking settings generally give better prompt-cache
 reuse.
 
+**Prompter thinking budget** caps the tokens each prompt step may spend while
+thinking, reasoning and answer together (default 8192). Raise it when a
+high-effort model returns no prompt because its reasoning was cut off. With
+thinking off, each step keeps its own smaller cap.
+
 ## Troubleshooting
 
 | Problem | Try this |

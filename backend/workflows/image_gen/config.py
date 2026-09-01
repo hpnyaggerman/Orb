@@ -41,6 +41,13 @@ MAX_REFERENCE_SLOTS = 4
 MAX_REFERENCE_IMAGE_B64 = 13_400_000
 PROMPT_FORMATS = ("tags", "hybrid", "prose")
 DEFAULT_PROMPT_FORMAT = "hybrid"
+# The prompter's output budget while it thinks, reasoning and answer together: a
+# thinking model spends `max_tokens` on its reasoning first, and DeepSeek at high
+# effort reasons past 2K tokens on a long chat. With thinking off each prompter
+# call keeps the smaller cap sized for its bare answer.
+MIN_THINKING_TOKENS = 1_024
+MAX_THINKING_TOKENS = 131_072
+DEFAULT_THINKING_TOKENS = 8_192
 # The three formats Orb carries end to end, each mapped to the extension it is named
 # by. One table rather than three, because "a mime Orb accepts" and "a mime Orb can
 # name as a file" are the same set: ComfyUI's multipart upload takes the extension
@@ -124,6 +131,7 @@ CONFIG_DEFAULTS = {
     "pov_mode": DEFAULT_POV_MODE,
     "scene_analysis": False,
     "prompter_reasoning": False,
+    "prompter_thinking_tokens": DEFAULT_THINKING_TOKENS,
     "timeout_seconds": 180.0,
     "external_comfy": {
         "api_url": "http://127.0.0.1:8188",
@@ -532,6 +540,10 @@ def normalize_config(raw: Mapping[str, Any] | None) -> dict:
         timeout = float(raw.get("timeout_seconds", 180.0))
     except (TypeError, ValueError):
         timeout = 180.0
+    try:
+        thinking_tokens = int(float(raw.get("prompter_thinking_tokens", DEFAULT_THINKING_TOKENS)))
+    except (TypeError, ValueError):
+        thinking_tokens = DEFAULT_THINKING_TOKENS
 
     source = _text(raw.get("source"), 32, DEFAULT_SOURCE)
     if source not in SOURCES:
@@ -553,6 +565,7 @@ def normalize_config(raw: Mapping[str, Any] | None) -> dict:
         "pov_mode": normalize_pov_mode(raw.get("pov_mode")),
         "scene_analysis": bool(raw.get("scene_analysis", False)),
         "prompter_reasoning": raw.get("prompter_reasoning") is True,
+        "prompter_thinking_tokens": min(MAX_THINKING_TOKENS, max(MIN_THINKING_TOKENS, thinking_tokens)),
         "timeout_seconds": min(900.0, max(10.0, timeout)),
         "external_comfy": {
             "api_url": url,

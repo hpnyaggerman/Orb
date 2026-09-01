@@ -58,6 +58,7 @@ async def _run(*, client=None, model_name="m", prefix=(), settings=None, scene_a
             **lane,
             pov=kwargs.get("pov", THIRD),
             reasoning_on=kwargs.get("reasoning_on", False),
+            thinking_tokens=kwargs.get("thinking_tokens", composer.DEFAULT_THINKING_TOKENS),
             subjects=kwargs.get("subjects", ()),
             supports_negative=kwargs.get("supports_negative", True),
         )
@@ -332,15 +333,23 @@ async def test_reasoning_mode_is_explicit_and_ignores_pipeline_pass_flags(monkey
         assert all(c["reasoning_on"] is reasoning_on and c["model_name"] == "agent-m" for c in calls)
 
 
-async def test_thinking_lifts_the_answer_sized_output_cap(monkeypatch):
+async def test_thinking_swaps_the_answer_sized_caps_for_the_configured_budget(monkeypatch):
     """The per-call caps size a bare answer. A thinking model spends the same budget
-    on its reasoning first, so with the toggle on both calls get the forced-call
-    default the pipeline's own passes fall back to -- capped at the answer size,
-    DeepSeek at high effort came back truncated mid-thought with no arguments."""
-    for reasoning_on, expected in ((False, [2_048, 4_096]), (True, [composer.THINKING_MAX_TOKENS] * 2)):
+    on its reasoning first, so with the toggle on both calls get the configured
+    thinking budget instead -- capped at the answer size, DeepSeek at high effort
+    came back truncated mid-thought with no arguments."""
+    for reasoning_on, expected in ((False, [2_048, 4_096]), (True, [composer.DEFAULT_THINKING_TOKENS] * 2)):
         calls = _record_forced_calls(monkeypatch)
         await _run(reasoning_on=reasoning_on, scene_analysis=True)
         assert [c["max_tokens"] for c in calls] == expected
+
+    calls = _record_forced_calls(monkeypatch)
+    await _run(reasoning_on=True, scene_analysis=True, thinking_tokens=32_000)
+    assert [c["max_tokens"] for c in calls] == [32_000, 32_000]
+    # With thinking off the budget is inert: the answer caps hold whatever it says.
+    calls = _record_forced_calls(monkeypatch)
+    await _run(reasoning_on=False, scene_analysis=True, thinking_tokens=32_000)
+    assert [c["max_tokens"] for c in calls] == [2_048, 4_096]
 
 
 # ── scene hygiene ────────────────────────────────────────────────────────────

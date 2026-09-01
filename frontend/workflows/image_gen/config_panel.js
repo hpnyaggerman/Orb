@@ -859,9 +859,10 @@ function openSettings(expandStyleId = "") {
       <div class="ig-heading">Generation</div>
       <div class="ig-grid">
         <label>Render timeout (seconds)<input id="ig-timeout" type="number" min="10" max="900" value="${escAttr(cfg.timeout_seconds || 180)}"></label>
+        <label>Prompter thinking budget (tokens)<input id="ig-thinking-tokens" type="number" min="${MIN_THINKING_TOKENS}" max="${MAX_THINKING_TOKENS}" step="1024" value="${escAttr(cfg.prompter_thinking_tokens || DEFAULT_THINKING_TOKENS)}"></label>
       </div>
       <label class="ig-toggle"><input id="ig-scene-analysis" type="checkbox"${cfg.scene_analysis === true ? " checked" : ""}><span class="ig-toggle-body"><span class="ig-toggle-label">Analyze complex scenes</span><span class="image-gen-note">More accurate outfits and positions for scenes; one extra model call.</span></span></label>
-      <label class="ig-toggle"><input id="ig-prompter-reasoning" type="checkbox"${cfg.prompter_reasoning === true ? " checked" : ""}><span class="ig-toggle-body"><span class="ig-toggle-label">Enable prompter thinking</span><span class="image-gen-note">Uses thinking for scene analysis and prompt composition. For best prompt-cache reuse, match Editor reasoning config.</span></span></label>
+      <label class="ig-toggle"><input id="ig-prompter-reasoning" type="checkbox"${cfg.prompter_reasoning === true ? " checked" : ""}><span class="ig-toggle-body"><span class="ig-toggle-label">Enable prompter thinking</span><span class="image-gen-note">Uses thinking for scene analysis and prompt composition; the thinking budget above covers reasoning and answer together. For best prompt-cache reuse, match Editor reasoning config.</span></span></label>
     </section>
     <details class="ig-advanced">
       <summary>Imported ComfyUI workflows<span class="ig-summary-note">${draft.graphs.length || "none"}</span></summary>
@@ -902,6 +903,16 @@ function readTimeout() {
   return Math.min(MAX_TIMEOUT, Math.max(MIN_TIMEOUT, Math.round(value)));
 }
 
+const MIN_THINKING_TOKENS = 1024;
+const MAX_THINKING_TOKENS = 131072;
+const DEFAULT_THINKING_TOKENS = 8192;
+
+function readThinkingTokens() {
+  const value = Number(document.getElementById("ig-thinking-tokens")?.value);
+  if (!Number.isFinite(value) || value <= 0) return DEFAULT_THINKING_TOKENS;
+  return Math.min(MAX_THINKING_TOKENS, Math.max(MIN_THINKING_TOKENS, Math.round(value)));
+}
+
 function readConfig() {
   captureForm();
   const ext = cfg.external_comfy || {};
@@ -914,6 +925,7 @@ function readConfig() {
     pov_mode: cfg.pov_mode || "auto",
     scene_analysis: document.getElementById("ig-scene-analysis")?.checked === true,
     prompter_reasoning: document.getElementById("ig-prompter-reasoning")?.checked === true,
+    prompter_thinking_tokens: readThinkingTokens(),
     timeout_seconds: readTimeout(),
     styles: draft.styles,
     external_comfy: {

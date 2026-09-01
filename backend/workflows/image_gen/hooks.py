@@ -367,6 +367,7 @@ async def _generate_fresh(
             settings=ctx.settings,
             pov=pov,
             reasoning_on=bool(config.get("prompter_reasoning")),
+            thinking_tokens=config["prompter_thinking_tokens"],
             subjects=subjects,
             supports_negative=target.supports_negative_prompt,
         )
@@ -391,6 +392,7 @@ async def _generate_fresh(
         prompt_format=selected_style["prompt_format"],
         pov=pov,
         reasoning_on=bool(config.get("prompter_reasoning")),
+        thinking_tokens=config["prompter_thinking_tokens"],
         analysis=analysis,
         subjects=subjects,
         extra_instructions=str(selected_style.get("extra_instructions") or ""),

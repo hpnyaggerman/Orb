@@ -73,6 +73,12 @@ test("the default cloud edge agrees, so an unsized entry previews what it render
   assert.equal(jsInt(panel, "DEFAULT_EDGE"), pyInt(config, "DEFAULT_CLOUD_EDGE"));
 });
 
+test("the prompter thinking budget's bounds and default agree with the normalizer's clamp", () => {
+  for (const name of ["MIN_THINKING_TOKENS", "MAX_THINKING_TOKENS", "DEFAULT_THINKING_TOKENS"]) {
+    assert.equal(jsInt(panel, name), pyInt(config, name), name);
+  }
+});
+
 test("the reference image budget agrees with the base64 cap it is derived from", () => {
   // The panel gates raw bytes; the normalizer stores base64, which inflates by 4/3.
   const b64Cap = pyInt(config, "MAX_REFERENCE_IMAGE_B64");

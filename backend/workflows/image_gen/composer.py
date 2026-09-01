@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from ..toolkit import forced_tool_call
-from .config import DEFAULT_PROMPT_FORMAT, resolve_style
+from .config import DEFAULT_PROMPT_FORMAT, DEFAULT_THINKING_TOKENS, resolve_style
 from .pov import FIRST, THIRD
 from .prompts import OFFER_TOOLS, analyze_ooc, compose_ooc
 from .scrub import (
@@ -27,17 +27,10 @@ from .subjects import Subject
 
 logger = logging.getLogger(__name__)
 
-# The output budget while the prompter thinks. Each call's `answer_tokens` sizes a
-# bare answer -- a dozen JSON fields, a prompt of a few hundred tokens -- but a
-# thinking model spends the same `max_tokens` on its reasoning first (DeepSeek
-# counts reasoning_content against it), and at high effort it reasons past 2K
-# tokens on a long chat, so the call came back cut off mid-thought with no
-# arguments at all. Under reasoning the cap is the forced-call default, the
-# ceiling the pipeline's own passes fall back to.
-THINKING_MAX_TOKENS = 8_192
 
-
-async def _forced_args(*, client, model_name, prefix, tail, tool_name, settings, answer_tokens, reasoning_on) -> dict:
+async def _forced_args(
+    *, client, model_name, prefix, tail, tool_name, settings, answer_tokens, reasoning_on, thinking_tokens
+) -> dict:
     logger.info("[image_gen] %s tail:\n%s", tool_name, "\n--\n".join(m["content"] for m in tail))
     args: dict = {}
     async for event in forced_tool_call(
@@ -50,7 +43,12 @@ async def _forced_args(*, client, model_name, prefix, tail, tool_name, settings,
         # One workflow-owned mode for both calls, so they share a reasoning-forked lane.
         reasoning_on=reasoning_on,
         temperature=0.2,
-        max_tokens=THINKING_MAX_TOKENS if reasoning_on else answer_tokens,
+        # `answer_tokens` sizes a bare answer -- a dozen JSON fields, a prompt of a
+        # few hundred tokens -- but a thinking model spends the same `max_tokens` on
+        # its reasoning first (DeepSeek counts reasoning_content against it), so the
+        # configured budget takes over: capped at the answer size, a high-effort
+        # model came back cut off mid-thought with no arguments at all.
+        max_tokens=thinking_tokens if reasoning_on else answer_tokens,
         offer_tools=OFFER_TOOLS,
     ):
         if event.get("type") == "result" and isinstance(event.get("args"), dict):
@@ -236,6 +234,7 @@ async def analyze_scene(
     settings: Mapping[str, Any],
     pov: str = THIRD,
     reasoning_on: bool = False,
+    thinking_tokens: int = DEFAULT_THINKING_TOKENS,
     subjects: Sequence[Subject] = (),
     supports_negative: bool = True,
 ) -> dict:
@@ -249,6 +248,7 @@ async def analyze_scene(
         settings=settings,
         answer_tokens=2_048,
         reasoning_on=reasoning_on,
+        thinking_tokens=thinking_tokens,
     )
     # First-person view is the user looking at the subject: keep only the subject
     # so a stray background character does not get drawn into the shot.
@@ -274,6 +274,7 @@ async def compose_scene(
     prompt_format: str = DEFAULT_PROMPT_FORMAT,
     pov: str = THIRD,
     reasoning_on: bool = False,
+    thinking_tokens: int = DEFAULT_THINKING_TOKENS,
     analysis: Mapping[str, Any] | None = None,
     subjects: Sequence[Subject] = (),
     extra_instructions: str = "",
@@ -319,6 +320,7 @@ async def compose_scene(
         settings=settings,
         answer_tokens=4_096,
         reasoning_on=reasoning_on,
+        thinking_tokens=thinking_tokens,
     )
 
     normalized_format = normalize_prompt_format(prompt_format)
