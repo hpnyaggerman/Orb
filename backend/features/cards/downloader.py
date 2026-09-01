@@ -1,8 +1,4 @@
-"""Download character cards from external sources (CharacterHub, etc.).
-
-Use a registry pattern so new sources can be added by calling register_source()
-with a name, a browse function, a download function and a randomize function.
-"""
+"""Download character cards from external sources."""
 
 from __future__ import annotations
 
@@ -23,7 +19,9 @@ logger = logging.getLogger(__name__)
 
 _CHUB_PAGE_SIZE = 24
 _CHUB_AVATARS_BASE = "https://avatars.charhub.io/avatars"
-_CHUB_RANDOM_MAX_PAGE = 40
+# The search API serves at most 100k results and returns empty pages past them,
+# whatever the sort or query — the ceiling for a random page.
+_CHUB_MAX_RESULTS = 100_000
 # The detail API 403s a bare "Mozilla/5.0"; a full browser UA passes.
 _CHUB_SITE_HEADERS = {
     "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"),
@@ -151,11 +149,12 @@ async def _fetch_avatar(avatar_url: object, source_label: str) -> tuple[str | No
         return None, None, b""
 
 
-# ── CharacterHub ──────────────────────────────────────────────────────
+async def _chub_page(q: str, page: int) -> tuple[dict, int]:
+    """Fetch one CharacterHub search page as ``(payload, total_count)``.
 
-
-async def _chub_search(q: str, page: int) -> dict:
-    """Run a CharacterHub search and normalize the response shape."""
+    The count sizes the whole (query-filtered) result set, which the randomizer
+    needs to know how deep it may jump; browse callers only want the payload.
+    """
     params = {
         "search": q,
         "page": max(1, int(page)),
@@ -167,9 +166,11 @@ async def _chub_search(q: str, page: int) -> dict:
         "venus": "true",
     }
     url = "https://api.chub.ai/search"
-    data = (await _fetch(url, what="CharacterHub search failed", params=params, timeout=15)).json()
+    payload = (await _fetch(url, what="CharacterHub search failed", params=params, timeout=15)).json()
 
-    nodes = data.get("nodes") or data.get("data", {}).get("nodes") or []
+    # Results come wrapped in a `data` envelope; tolerate a flat response too.
+    body = payload if isinstance(payload.get("nodes"), list) else (payload.get("data") or {})
+    nodes = body.get("nodes") or []
     results = []
     for n in nodes:
         full_path = n.get("fullPath") or n.get("full_path") or ""
@@ -191,21 +192,34 @@ async def _chub_search(q: str, page: int) -> dict:
             }
         )
     has_more = len(nodes) >= _CHUB_PAGE_SIZE
-    return {"results": results, "has_more": has_more}
+    return {"results": results, "has_more": has_more}, int(body.get("count") or 0)
+
+
+async def _chub_search(q: str, page: int) -> dict:
+    """Run a CharacterHub search and normalize the response shape."""
+    data, _ = await _chub_page(q, page)
+    return data
+
+
+def _chub_max_page(count: int) -> int:
+    """Deepest fully-populated search page for a result set of *count* items."""
+    return max(1, min(count, _CHUB_MAX_RESULTS) // _CHUB_PAGE_SIZE)
 
 
 async def _randomize_characterhub(q: str) -> dict:
     """Surface a random page of CharacterHub results.
 
-    CharacterHub has no native "random" sort, so we jump to a random page of
-    the (optionally query-filtered) catalog to give a fresh selection each call.
+    ``sort=random`` reseeds only every few minutes, so consecutive calls repeat;
+    jumping to a random page of the (optionally query-filtered) catalog is what
+    varies the batch. Card quality holds up across the whole ~4166-page window,
+    so the pick spans all of it.
+
+    A query narrows the catalog and the first pick can overshoot its end; the
+    response's own count then gives the real range to re-pick from.
     """
-    page = random.randint(1, _CHUB_RANDOM_MAX_PAGE)
-    data = await _chub_search(q, page)
-    # A random deep page can land past the end of the catalog; fall back to the
-    # first page so the user still sees something rather than an empty grid.
-    if not data["results"] and page > 1:
-        data = await _chub_search(q, 1)
+    data, count = await _chub_page(q, random.randint(1, _chub_max_page(_CHUB_MAX_RESULTS)))
+    if not data["results"] and count:
+        data, _ = await _chub_page(q, random.randint(1, _chub_max_page(count)))
     # Randomized results are a one-shot batch; paging "Load More" would silently
     # switch back to ranked order, so don't advertise more.
     data["has_more"] = False
@@ -268,7 +282,6 @@ register_source(
 )
 
 
-# ── Character Archive (chararc.bernkastel.pictures) ───────────────────
 #
 # Character Archive mirrors cards from upstream sites (chub, etc.) behind a
 # FastAPI JSON API. Browse hits the meilisearch-backed search endpoint; the
@@ -432,7 +445,6 @@ register_source(
 )
 
 
-# ── Botbooru (botbooru.com) ───────────────────────────────────────────
 #
 # Botbooru serves standard tavern PNG cards (tEXt chara chunk) and exposes a
 # JSON browse API whose `q` matches both tags and character names. Unlike the
@@ -526,7 +538,6 @@ register_source(
 )
 
 
-# ── Wyvern (wyvern.chat) ──────────────────────────────────────────────
 #
 # Wyvern exposes an unauthenticated JSON explore API. The search endpoint
 # already returns full card definitions (description/personality/first_mes/…),

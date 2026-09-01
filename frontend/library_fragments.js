@@ -1,7 +1,5 @@
-// Mood fragments and interactive fragments: their sidebar lists, edit modals, and
-// CRUD + reorder. Split out of library.js; the public surface is re-exported
-// from library.js.
 import { api } from "./api.js";
+import { initDragReorder } from "./drag_reorder.js";
 import { closeModal, closeSubModal, confirmDelete, showModal, showSubModal } from "./modal.js";
 import { S } from "./state.js";
 import { $, boolFlag, esc, escAttr, escHandlerArg, toast } from "./utils.js";
@@ -9,7 +7,6 @@ import { validate } from "./validate.js";
 
 const _dragAndDropContainers = new WeakSet();
 
-// ── Mood Fragments
 export async function loadMoodFragments() {
   try {
     S.moodFragments = await api.get("/fragments");
@@ -22,7 +19,6 @@ export async function loadMoodFragments() {
 
 export function renderMoodFragments() {
   const cardHtml = _cardMoodSidepanelHtml();
-  // Add button sits with the global list, above the "From character" divider.
   const addBtn = `<button class="btn btn-block btn-sm" onclick="showMoodFragmentModal()" style="margin-top:6px">+ Add Mood Fragment</button>`;
   if ((!S.moodFragments || S.moodFragments.length === 0) && !cardHtml) {
     $("frag-list").innerHTML =
@@ -32,7 +28,6 @@ export function renderMoodFragments() {
 
   const html = (S.moodFragments || [])
     .map((f) => {
-      // Handle both boolean and numeric (0/1) enabled values from backend
       const enabled = boolFlag(f.enabled);
       const toggleId = `frag-toggle-${f.id}`;
       return `
@@ -54,8 +49,6 @@ export function renderMoodFragments() {
   $("frag-list").innerHTML = html + addBtn + cardHtml;
 }
 
-// Shared field markup for the global modal and the card-scoped sub-modal (same
-// element ids — the two are never open at once).
 function _moodFragFormHtml(d, isEdit) {
   return `
     <div class="field-row">
@@ -133,7 +126,6 @@ export async function deleteMoodFragment(id) {
 export async function toggleMoodFragmentEnabled(id, newEnabled) {
   try {
     await api.put(`/fragments/${id}`, { enabled: newEnabled });
-    // Update local state optimistically
     const frag = S.moodFragments.find((f) => f.id === id);
     if (frag) frag.enabled = newEnabled;
     renderMoodFragments();
@@ -143,7 +135,6 @@ export async function toggleMoodFragmentEnabled(id, newEnabled) {
   }
 }
 
-// ── Interactive Fragments (unchanged)
 export async function loadInteractiveFragments() {
   try {
     S.interactiveFragments = await api.get("/interactive-fragments");
@@ -159,14 +150,12 @@ export function renderInteractiveFragments() {
   if (!el) return;
   setupDragAndDrop(el);
   const cardHtml = _cardInteractiveSidepanelHtml();
-  // Add button sits with the global list, above the "From character" divider.
   const addBtn = `<button class="btn btn-block btn-sm" onclick="showInteractiveFragmentModal()" style="margin-top:6px">+ Add Interactive Fragment</button>`;
   if ((!S.interactiveFragments || S.interactiveFragments.length === 0) && !cardHtml) {
     el.innerHTML = `<div style="color:var(--text-muted);font-size:12px;padding:4px 0;">No interactive fragments</div>${addBtn}`;
     return;
   }
 
-  // Sort by sort_order then by id
   const sorted = [...(S.interactiveFragments || [])].sort((a, b) => {
     const orderA = a.sort_order || 0;
     const orderB = b.sort_order || 0;
@@ -181,8 +170,8 @@ export function renderInteractiveFragments() {
       const userBadge = _interactiveTypeBadge(f);
       const { disabled: featureDisabled, title: itemTitle } = _featureGate(f);
       return `
-    <div class="fragment-item${featureDisabled ? " frag-feature-disabled" : ""}" draggable="true" data-id="${escAttr(f.id)}" title="${escAttr(itemTitle)}" onclick="showInteractiveFragmentModal('${escHandlerArg(f.id)}')">
-      <div class="frag-drag-handle" onclick="event.stopPropagation()">⋮⋮</div>
+    <div class="fragment-item${featureDisabled ? " frag-feature-disabled" : ""}" data-id="${escAttr(f.id)}" title="${escAttr(itemTitle)}" onclick="showInteractiveFragmentModal('${escHandlerArg(f.id)}')">
+      <button type="button" class="frag-drag-handle" title="Drag, or use the arrow keys, to reorder" aria-label="Reorder ${escAttr(f.label)}" onclick="event.stopPropagation()">⋮⋮</button>
       <div style="flex:1; min-width:0;">
         <span class="frag-label">${esc(f.label)}</span>${userBadge}
       </div>
@@ -197,96 +186,39 @@ export function renderInteractiveFragments() {
     })
     .join("");
 
-  // Card items live in .frag-card-list (not .fragment-item), so the drag/reorder
-  // machinery below never sees them.
   el.innerHTML = html + addBtn + cardHtml;
 }
 
 function setupDragAndDrop(container) {
   if (_dragAndDropContainers.has(container)) return;
   _dragAndDropContainers.add(container);
-  let dragged = null;
-
-  container.addEventListener("dragstart", (e) => {
-    if (!e.target.classList.contains("fragment-item") && !e.target.closest(".fragment-item")) return;
-    const item = e.target.classList.contains("fragment-item") ? e.target : e.target.closest(".fragment-item");
-    dragged = item;
-    item.classList.add("dragging");
-    e.dataTransfer.setData("text/plain", item.dataset.id);
-    e.dataTransfer.effectAllowed = "move";
+  initDragReorder(container, {
+    itemSelector: ".fragment-item",
+    handleSelector: ".frag-drag-handle",
+    onReorder: updateFragmentOrder,
   });
-
-  container.addEventListener("dragover", (e) => {
-    e.preventDefault();
-    e.dataTransfer.dropEffect = "move";
-    const afterElement = getDragAfterElement(container, e.clientY);
-    const draggable = document.querySelector(".dragging");
-    if (draggable) {
-      if (afterElement == null) {
-        container.appendChild(draggable);
-      } else {
-        container.insertBefore(draggable, afterElement);
-      }
-    }
-  });
-
-  container.addEventListener("drop", (e) => {
-    e.preventDefault();
-    if (dragged) {
-      dragged.classList.remove("dragging");
-      dragged = null;
-      updateFragmentOrder(container);
-    }
-  });
-
-  container.addEventListener("dragend", (_e) => {
-    if (dragged) {
-      dragged.classList.remove("dragging");
-      dragged = null;
-    }
-  });
-
-  function getDragAfterElement(container, y) {
-    const draggableElements = [...container.querySelectorAll(".fragment-item:not(.dragging)")];
-    return draggableElements.reduce(
-      (closest, child) => {
-        const box = child.getBoundingClientRect();
-        const offset = y - box.top - box.height / 2;
-        if (offset < 0 && offset > closest.offset) {
-          return { offset: offset, element: child };
-        } else {
-          return closest;
-        }
-      },
-      { offset: Number.NEGATIVE_INFINITY },
-    ).element;
-  }
-
-  function updateFragmentOrder(container) {
-    const items = container.querySelectorAll(".fragment-item");
-    const updatedOrder = Array.from(items).map((item, index) => ({
-      id: item.dataset.id,
-      sort_order: index,
-    }));
-    // Update local state
-    updatedOrder.forEach(({ id, sort_order }) => {
-      const frag = S.interactiveFragments.find((f) => f.id === id);
-      if (frag) frag.sort_order = sort_order;
-    });
-    // Update each fragment individually
-    Promise.all(updatedOrder.map(({ id, sort_order }) => api.put(`/interactive-fragments/${id}`, { sort_order })))
-      .then(() => {
-        toast("Interactive fragments reordered");
-      })
-      .catch((e) => {
-        console.error("Reorder failed", e);
-        toast("Failed to save order", true);
-      });
-  }
 }
 
-// Example placeholders per field_type, shown across the modal's empty inputs
-// and refreshed when the Field Type dropdown changes.
+function updateFragmentOrder(container) {
+  const items = container.querySelectorAll(".fragment-item");
+  const updatedOrder = Array.from(items).map((item, index) => ({
+    id: item.dataset.id,
+    sort_order: index,
+  }));
+  updatedOrder.forEach(({ id, sort_order }) => {
+    const frag = S.interactiveFragments.find((f) => f.id === id);
+    if (frag) frag.sort_order = sort_order;
+  });
+  Promise.all(updatedOrder.map(({ id, sort_order }) => api.put(`/interactive-fragments/${id}`, { sort_order })))
+    .then(() => {
+      toast("Interactive fragments reordered");
+    })
+    .catch((e) => {
+      console.error("Reorder failed", e);
+      toast("Failed to save order", true);
+    });
+}
+
 const INTERACTIVE_FRAGMENT_EXAMPLES = {
   string: {
     id: "e.g. pacing",
@@ -349,13 +281,10 @@ export function updateInteractiveFragmentExample(fieldType) {
   };
   setHint("interactive-frag-inj-hint", ex.inj_hint);
   setHint("interactive-frag-desc-hint", ex.desc_hint);
-  // The recording-timing selector applies only to direction-note fragments.
   const timingRow = document.getElementById("interactive-frag-timing-row");
   if (timingRow) timingRow.style.display = fieldType === "direction_note" ? "" : "none";
 }
 
-// Shared field markup for the global modal and the card-scoped sub-modal (same
-// element ids — the two are never open at once).
 function _interactiveFragFormHtml(d, isEdit) {
   const ex = INTERACTIVE_FRAGMENT_EXAMPLES[d.field_type] || INTERACTIVE_FRAGMENT_EXAMPLES.string;
   return `
@@ -475,17 +404,6 @@ export async function toggleInteractiveFragmentEnabled(id, newEnabled) {
   }
 }
 
-// ── Card-embedded fragments (extensions.orb.fragments on a character card)
-//
-// Two surfaces share this section:
-// 1. Sidepanel: the active character's fragments render read-only below a
-//    divider in both fragment lists (S.cardMoodFragments / S.cardInteractiveFragments,
-//    stashed by chat_conversations.js on selection). Not draggable, no toggles —
-//    editing happens in the character modal.
-// 2. Character modal "Fragments" tab: a pending in-memory copy edited via the
-//    sub-modal layer and saved with the card PUT/POST (library.js reads it back
-//    through readCardFragments()).
-
 function _interactiveTypeBadge(f) {
   return f.field_type === "feedback"
     ? ` <span class="frag-type-badge" title="Feedback fragment">F</span>`
@@ -494,9 +412,6 @@ function _interactiveTypeBadge(f) {
       : "";
 }
 
-// Feedback and direction-note fragments are gated by their own feature switch.
-// Both fragment lists grey them out and explain why on hover, so the gate and
-// its user-facing copy live here once. `title` falls back to the description.
 function _featureGate(f) {
   const feedbackOff = f.field_type === "feedback" && !S.feedbackEnabled;
   const noteOff = f.field_type === "direction_note" && !S.directionNotesRecord;
@@ -527,7 +442,6 @@ function _cardInteractiveSidepanelHtml() {
   return `<div class="frag-divider">From character</div><div class="frag-card-list">${items}</div>`;
 }
 
-// Pending copy of the card being edited; null when no character modal is open.
 let _cardFragPending = null;
 
 export function initCardFragments(fragments) {
@@ -583,8 +497,6 @@ export function renderCardFragmentsTab() {
   }
 }
 
-// Save/delete against the pending copy only; nothing touches the API until the
-// character itself is saved. Sub-modal buttons are wired programmatically.
 function _wireCardFragModal(type, isEdit, fragId) {
   $("card-frag-cancel").addEventListener("click", closeSubModal);
   if (isEdit) {
@@ -615,8 +527,6 @@ function _wireCardFragModal(type, isEdit, fragId) {
   });
 }
 
-// The two card-fragment sub-modals differ only in their kind label, form body,
-// and blank record; the chrome (delete/cancel/save row) and wiring are shared.
 function _showCardFragModal(type, kind, fragId, blank, formHtml) {
   const f = fragId ? _cardFragPending[type].find((x) => x.id === fragId) : null;
   const isEdit = !!f;

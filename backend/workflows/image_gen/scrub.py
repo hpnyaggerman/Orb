@@ -1,25 +1,10 @@
-"""Deterministic text surgery on what the prompter model wrote.
-
-Pure string in, string out: nothing here calls a model, reads config beyond the
-format enum, or knows a backend exists. That is the point -- these rules exist
-because a *text encoder* misreads certain phrasings, so they are testable against
-a literal expected string rather than against a live composition.
-
-Three families:
-
-* **Chunk stripping** -- a comma chunk the encoder would draw wrongly is dropped
-  whole (a negation, the literal word "camera", a stray "pov").
-* **Viewer rewriting** -- first-person contact phrasing swapped for the booru tags
-  an encoder has actually seen. See `rewrite_viewer_contact`.
-* **Count anchoring** -- the booru count block ("1girl, solo") is owned
-  deterministically rather than left to whatever the model wrote.
-"""
+"""Clean and normalize composed image prompts."""
 
 from __future__ import annotations
 
 import re
 from collections.abc import Mapping, Sequence
-from typing import Any
+from typing import Any, NamedTuple
 
 from .config import DEFAULT_PROMPT_FORMAT, PROMPT_FORMATS
 from .pov import FIRST
@@ -235,34 +220,47 @@ def strip_prose_count_prefix(scene: str) -> str:
     return _PROSE_COUNT_PREFIX_RE.sub("", scene).lstrip(" ,.;:-")
 
 
-def inject_profile_appearance(
-    scene: str, appearance: str, profile_owner_name: str, prompt_format: str, *, face_visible: bool = True
-) -> str:
-    """Insert fixed traits only when their owner is visible, near the prompt head.
+class SubjectAppearance(NamedTuple):
+    """One subject's saved appearance sheet, as the injector needs it.
 
-    Tag prompts cannot bind attributes to a named subject, so they keep the raw
-    tags; hybrid and prose name the owner instead of leaving an anonymous block in
-    a multi-character scene. Face-only traits go when the face is not visible.
+    The pure projection of a `subjects.Subject`: a name, the fixed tags, and whether
+    the analyzer could see this person's face. Declared here rather than imported
+    because this module reads no config and calls no model, and the composer is what
+    turns a resolved subject and an analysis into one of these.
     """
-    fixed = strip_chunks(bounded(appearance), _COUNT_CHUNK_RE)
-    fixed = strip_chunks(fixed, _NEGATION_CHUNK_RE, whole=False)
-    if not face_visible:
-        fixed = strip_chunks(fixed, _FACE_CHUNK_RE, whole=False)
-    if not fixed:
-        return scene
-    owner = bounded(profile_owner_name, 200)
+
+    name: str
+    appearance: str
+    face_visible: bool = True
+
+
+def inject_profile_appearance(scene: str, subjects: Sequence[SubjectAppearance], prompt_format: str) -> str:
+    """Insert fixed appearance traits for visible subjects."""
     normalized_format = normalize_prompt_format(prompt_format)
-    if owner and normalized_format == "hybrid":
-        fixed = f"{owner}: {fixed}"
-    elif owner and normalized_format == "prose":
-        fixed = f"{owner} has these traits: {fixed}."
+    blocks: list[tuple[str, str]] = []
+    for subject in subjects:
+        fixed = strip_chunks(bounded(subject.appearance), _COUNT_CHUNK_RE)
+        fixed = strip_chunks(fixed, _NEGATION_CHUNK_RE, whole=False)
+        if not subject.face_visible:
+            fixed = strip_chunks(fixed, _FACE_CHUNK_RE, whole=False)
+        if fixed:
+            blocks.append((bounded(subject.name, 200), fixed))
+    if not blocks:
+        return scene
+
+    def render(name: str, fixed: str) -> str:
+        if not name or (normalized_format == "tags" and len(blocks) == 1):
+            return fixed
+        return f"{name} has these traits: {fixed}." if normalized_format == "prose" else f"{name}: {fixed}"
+
+    rendered = [render(name, fixed) for name, fixed in blocks]
     # Seated right after the count anchor, so identity stays near the high-attention
     # head rather than landing after the setting.
     count_lead, body = split_lead_count(scene)
     if normalized_format == "prose":
-        prose_body = " ".join(part for part in (fixed, body) if part)
+        prose_body = " ".join(part for part in (*rendered, body) if part)
         return ", ".join(part for part in (count_lead, prose_body) if part)
-    return join((count_lead, fixed, body))
+    return join((count_lead, *rendered, body))
 
 
 def strip_count_tags(text: str) -> str:
@@ -281,23 +279,28 @@ def clean_scene(scene: str, *, prompt_format: str, pov: str) -> str:
     *that* the scene is cleaned without owning a list of regexes -- and so the whole
     pass can be asserted against a literal string with no model in the loop.
     """
-    normalized_format = normalize_prompt_format(prompt_format)
-    if normalized_format == "prose":
-        # Defense in depth: the prose tail forbids count tags, but a model copies
-        # the old convention from context or habit.
-        scene = strip_prose_count_prefix(scene)
-    else:
-        # A count block ended with a period ("1boy, 1girl. Gon eats...") would hide
-        # the tags from the comma-based peeling and pinning below.
-        scene = re.sub(rf"\b({_COUNT_TOKEN})\.", r"\1,", scene, flags=re.IGNORECASE)
-    # Every mode: encoders draw "no longer wearing X" as X, a booru-trained composer
-    # writes "pov" unprompted, and "camera" puts a literal one in the frame. Comma
-    # splitting works on prose too -- it drops the clause and keeps the sentence.
+    if normalize_prompt_format(prompt_format) == "prose":
+        # Prose goes to a natural-language encoder, and every rewrite below answers a
+        # booru/CLIP failure that encoder does not have: it reads negation, it takes
+        # "camera" as the framing word every photo caption uses, and it parses
+        # grammar. Scrubbing it there only costs the model its wording -- and because
+        # a comma bounds nothing in prose, the comma-chunk cut took whole sentences
+        # back to the previous comma, or the entire scene when it had no commas.
+        # So prose keeps what the composer wrote, the call `rewrite_viewer_contact`
+        # already makes. Leaked booru count tags still go: those are the tail's own
+        # format rule broken, not a choice of words.
+        return strip_prose_count_prefix(scene)
+    # A count block ended with a period ("1boy, 1girl. Gon eats...") would hide
+    # the tags from the comma-based peeling and pinning below.
+    scene = re.sub(rf"\b({_COUNT_TOKEN})\.", r"\1,", scene, flags=re.IGNORECASE)
+    # Tags and hybrid are comma-delimited by contract, so a chunk is one tag or one
+    # bound clause and dropping it stays surgical. Their encoders draw "no longer
+    # wearing X" as X, a booru-trained composer writes "pov" unprompted, and
+    # "camera" puts a literal one in the frame.
     scene = strip_chunks(scene, _NEGATION_CHUNK_RE, whole=False)
     scene = strip_chunks(scene, _POV_CHUNK_RE)
     scene = strip_chunks(scene, _CAMERA_CHUNK_RE, whole=False)
-    # Only first-person has a viewer to touch, and only the tag formats have a tag
-    # vocabulary to swap in.
-    if pov == FIRST and normalized_format != "prose":
+    # Only first-person has a viewer to touch.
+    if pov == FIRST:
         scene = rewrite_viewer_contact(scene)
     return scene

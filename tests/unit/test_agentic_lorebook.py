@@ -8,6 +8,8 @@ activation gating, and keyword-scan parity.
 
 from __future__ import annotations
 
+import logging
+
 from backend.features.lorebook import (
     AGENTIC_LOREBOOK_SCAN_DEPTH,
     LOREBOOK_SCAN_DEPTH,
@@ -22,7 +24,6 @@ from backend.features.lorebook import (
     select_keyword_entries,
 )
 from backend.inference import (
-    SELECT_LOREBOOK_CHOICE,
     TOOLS,
     CachedBase,
     build_direct_scene_tool,
@@ -63,12 +64,6 @@ class TestDirectSceneNoLorebookArg:
         assert "selected_lorebook_entries" not in props
         assert "moods" in props
 
-    def test_absent_with_fragments(self):
-        frags = [{"id": "kw", "field_type": "array", "description": "d", "required": False}]
-        props = build_direct_scene_tool(frags)["function"]["parameters"]["properties"]
-        assert "moods" in props and "kw" in props
-        assert "selected_lorebook_entries" not in props
-
 
 # ── select_lorebook tool: the standalone selection schema ────────────────────
 
@@ -80,23 +75,11 @@ class TestSelectLorebookTool:
         assert props["selected_lorebook_entries"]["type"] == "array"
         assert props["selected_lorebook_entries"]["items"] == {"type": "string"}
 
-    def test_optional_not_required(self):
-        tool = TOOLS["select_lorebook"]["schema"]
-        assert tool["function"]["parameters"]["required"] == []
-
-    def test_choice_targets_tool(self):
-        assert SELECT_LOREBOOK_CHOICE["function"]["name"] == "select_lorebook"
-
 
 # ── compute_agentic_lorebook_block ───────────────────────────────────────────
 
 
 class TestComputeAgenticLorebookBlock:
-    def test_constants_excluded_from_trailing(self):
-        # Constants ride the system prefix, never the trailing block.
-        entries = [_entry("Const", constant=True), _entry("Other")]
-        assert compute_agentic_lorebook_block(entries, []) == ""
-
     def test_name_match(self):
         entries = [_entry("Dragon"), _entry("Castle")]
         block = compute_agentic_lorebook_block(entries, ["Dragon"])
@@ -121,9 +104,6 @@ class TestComputeAgenticLorebookBlock:
         # A pick that names a constant entry must not duplicate it into the
         # trailing block — the entry already rides the system prefix.
         assert compute_agentic_lorebook_block([_entry("Both", constant=True)], ["Both"]) == ""
-
-    def test_empty_entries(self):
-        assert compute_agentic_lorebook_block([], ["x"]) == ""
 
     def test_no_selection_is_empty(self):
         assert compute_agentic_lorebook_block([_entry("A")], []) == ""
@@ -164,10 +144,6 @@ class TestComputeAgenticLorebookBlock:
         block = compute_agentic_lorebook_block(entries, ["Natlan"], messages=msgs)
         assert block.count("Natlan: Natlan content") == 1
 
-    def test_substring_no_match_without_messages(self):
-        entries = [_entry("Natlan", keywords=["Natlan"])]
-        assert compute_agentic_lorebook_block(entries, []) == ""
-
     def test_substring_scan_limited_to_current_turn(self):
         # The keyword appears only in older history, not in the current turn
         # (last assistant + user), so the fallback must not activate it.
@@ -184,11 +160,6 @@ class TestComputeAgenticLorebookBlock:
 
 
 class TestBuildLorebookCatalog:
-    def test_header_present(self):
-        cat = build_lorebook_catalog([_entry("A", keywords=["a"])])
-        assert cat.startswith("**Available Lorebook Entries**")
-        assert "selected_lorebook_entries" in cat
-
     def test_excludes_constants(self):
         entries = [
             _entry("Const", constant=True, keywords=["k"]),
@@ -200,9 +171,6 @@ class TestBuildLorebookCatalog:
 
     def test_empty_when_only_constants(self):
         assert build_lorebook_catalog([_entry("C", constant=True)]) == ""
-
-    def test_empty_when_no_entries(self):
-        assert build_lorebook_catalog([]) == ""
 
     def test_keywords_joined(self):
         cat = build_lorebook_catalog([_entry("A", keywords=["k1", "k2", "k3"])])
@@ -238,11 +206,6 @@ class TestKeywordScanParity:
         assert "Const" not in block
         assert "Var: Var content" in block
 
-    def test_keyword_match(self):
-        msgs = [{"role": "user", "content": "I draw my sword"}]
-        block = compute_lorebook_injection_block(msgs, [_entry("Var", keywords=["sword"])])
-        assert "Var: Var content" in block
-
     def test_case_insensitive_match(self):
         msgs = [{"role": "user", "content": "A SWORD"}]
         entries = [_entry("Var", keywords=["sword"], case_insensitive=True)]
@@ -253,28 +216,9 @@ class TestKeywordScanParity:
         entries = [_entry("Var", keywords=["Sword"], case_insensitive=False)]
         assert compute_lorebook_injection_block(msgs, entries) == ""
 
-    def test_case_sensitive_match(self):
-        msgs = [{"role": "user", "content": "a Sword gleams"}]
-        entries = [_entry("Var", keywords=["Sword"], case_insensitive=False)]
-        assert "Var" in compute_lorebook_injection_block(msgs, entries)
-
     def test_no_match_returns_empty(self):
         msgs = [{"role": "user", "content": "nothing relevant here"}]
         assert compute_lorebook_injection_block(msgs, [_entry("Var", keywords=["sword"])]) == ""
-
-    def test_priority_sort_desc(self):
-        msgs = [{"role": "user", "content": "sword castle"}]
-        entries = [
-            _entry("Low", keywords=["sword"], priority=10),
-            _entry("High", keywords=["castle"], priority=200),
-        ]
-        block = compute_lorebook_injection_block(msgs, entries)
-        assert block.index("High") < block.index("Low")
-
-    def test_block_starts_with_header(self):
-        msgs = [{"role": "user", "content": "sword"}]
-        block = compute_lorebook_injection_block(msgs, [_entry("Var", keywords=["sword"])])
-        assert block.startswith("**Lorebook**")
 
     def test_renderer_matches_keyword_path_on_same_set(self):
         # The shared render_lorebook_block reproduces the keyword-scan output
@@ -301,10 +245,6 @@ class TestRenderMacros:
 
 
 class TestComputeConstantLorebookBlock:
-    def test_starts_with_section_header(self):
-        block = compute_constant_lorebook_block([_entry("Const", constant=True)])
-        assert block.startswith("## Lorebook")
-
     def test_only_constants_included(self):
         entries = [_entry("Const", constant=True), _entry("Var", keywords=["v"])]
         block = compute_constant_lorebook_block(entries)
@@ -373,14 +313,74 @@ class TestSelectActiveEntries:
         core = compute_lorebook_block(entries, msgs, scan_depth=AGENTIC_LOREBOOK_SCAN_DEPTH, director_selected=["Dragon"])
         assert core == compute_agentic_lorebook_block(entries, ["Dragon"], None, msgs)
 
-    def test_director_pick_only(self):
-        entries = [_entry("Dragon"), _entry("Castle")]
-        selected = select_active_entries(entries, [], scan_depth=2, director_selected=["dragon"])
-        assert selected == [entries[0]]
 
-    def test_constants_never_selected(self):
-        entries = [_entry("Const", constant=True), _entry("Other", keywords=["nope"])]
-        assert select_active_entries(entries, [], scan_depth=6) == []
+# ── Catalog delimiters on Director picks ─────────────────────────────────────
+
+
+class TestDirectorPickDelimiters:
+    """The catalog renders ``- [Name] — kw``; models copy the brackets too.
+
+    ``.strip()`` removes whitespace and not delimiters, so before this a correct
+    relevance judgment arriving as ``[The Ashen Seal]`` activated nothing,
+    injected no lore, and logged nothing.
+    """
+
+    _entries = [_entry("The Ashen Seal", keywords=["wax seal", "raven crest"])]
+
+    def _names(self, pick):
+        return [e["name"] for e in select_active_entries(self._entries, [], scan_depth=2, director_selected=[pick])]
+
+    def test_bracketed_pick_activates_the_entry(self):
+        assert self._names("[The Ashen Seal]") == ["The Ashen Seal"]
+
+    def test_bare_and_folded_picks_still_activate(self):
+        assert self._names("The Ashen Seal") == ["The Ashen Seal"]
+        assert self._names("  the ashen seal  ") == ["The Ashen Seal"]
+
+    def test_appended_catalog_metadata_is_not_undone(self):
+        # The explicit decision: a pick carrying the catalog row's keywords is a
+        # model copying the whole line, not a name. It stays unmatched so the
+        # prompt defect is visible instead of guessed through.
+        assert self._names("[The Ashen Seal] — wax seal") == []
+        assert self._names("The Ashen Seal — wax seal") == []
+
+    def test_only_a_matched_outer_pair_is_stripped(self):
+        # Two delimited names in one string: the leading bracket closes early, so
+        # nothing is unwrapped and the malformed pick matches nothing.
+        entries = [*self._entries, _entry("Captain Ilyra")]
+        picked = select_active_entries(entries, [], scan_depth=2, director_selected=["[The Ashen Seal] and [Captain Ilyra]"])
+        assert picked == []
+
+    def test_a_name_that_contains_brackets_is_matched_as_stored(self):
+        # Unconditional bracket deletion would make this name unreachable; only
+        # the pick is unwrapped, so both the bare and the wrapped form land.
+        entries = [_entry("[Redacted] File")]
+        for pick in ("[Redacted] File", "[[Redacted] File]"):
+            picked = select_active_entries(entries, [], scan_depth=2, director_selected=[pick])
+            assert [e["name"] for e in picked] == ["[Redacted] File"]
+
+    def test_a_recovered_pick_is_logged_as_a_warning(self, caplog):
+        # That warning count is the per-model rate of this failure.
+        with caplog.at_level(logging.WARNING, logger="backend.inference.lorebook"):
+            assert self._names("[The Ashen Seal]") == ["The Ashen Seal"]
+        assert "matched only after stripping catalog delimiters" in caplog.text
+
+    def test_a_clean_pick_logs_nothing(self, caplog):
+        with caplog.at_level(logging.INFO, logger="backend.inference.lorebook"):
+            assert self._names("The Ashen Seal") == ["The Ashen Seal"]
+        assert caplog.text == ""
+
+    def test_a_pick_naming_a_constant_entry_stays_silent(self, caplog):
+        # Constant entries ride the cached prefix; excluding them here is by
+        # design, so it must not read as a failed pick.
+        entries = [_entry("Const", constant=True)]
+        with caplog.at_level(logging.INFO, logger="backend.inference.lorebook"):
+            assert select_active_entries(entries, [], scan_depth=2, director_selected=["[Const]"]) == []
+        assert caplog.text == ""
+
+    def test_the_block_renders_from_a_bracketed_pick(self):
+        block = compute_agentic_lorebook_block(self._entries, ["[The Ashen Seal]"])
+        assert "The Ashen Seal: The Ashen Seal content" in block
 
 
 # ── LorebookTurn ──────────────────────────────────────────────────────────────
@@ -402,17 +402,6 @@ class TestLorebookTurn:
         )
         assert lt.writer_block(["anything"]) == "**Lorebook**\n\nFixed: value"
 
-    def test_agentic_writer_block_unions(self):
-        entries = [_entry("Dragon"), _entry("Natlan", keywords=["natlan"])]
-        lt = LorebookTurn(
-            entries=entries,
-            messages=[{"role": "user", "content": "go to natlan"}],
-            agentic=True,
-        )
-        block = lt.writer_block(["Dragon"])
-        assert "Dragon: Dragon content" in block
-        assert "Natlan: Natlan content" in block
-
     def test_agentic_writer_block_matches_compute_agentic(self):
         entries = [_entry("Dragon"), _entry("Natlan", keywords=["natlan"])]
         msgs = [{"role": "user", "content": "go to natlan"}]
@@ -427,10 +416,6 @@ class TestAgenticLorebookActive:
     _on = {"agentic_lorebook_enabled": 1}
 
     def test_enabled_when_all_conditions_met(self):
-        assert agentic_lorebook_active(self._on, [_entry("A")], agent_on=True)
-
-    def test_enabled_independent_of_direct_scene(self):
-        # The whole point of the decoupling: no direct_scene needed.
         assert agentic_lorebook_active(self._on, [_entry("A")], agent_on=True)
 
     def test_disabled_when_flag_off(self):

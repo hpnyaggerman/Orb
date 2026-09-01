@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, interactive-widget=resizes-content">
 <title>Orb</title>
 <link rel="stylesheet" href="/static/fonts.css">
-<link id="theme-link" rel="stylesheet" href="/static/themes/dark.css">
+<link id="theme-link" rel="stylesheet" href="/static/themes/camono.css">
 <link rel="stylesheet" href="/static/style.css">
 <link rel="stylesheet" href="/static/mobile.css">
 <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
@@ -46,6 +46,16 @@
           <button class="btn btn-block" style="margin-bottom:8px;padding:6px 0;font-size:12px;font-weight:600;" onclick="showCharacterBrowserModal()">🔍 Browse</button>
           <input type="file" id="import-file-input" accept=".png" style="display:none" onchange="handleImportFile(this)">
           <div id="char-list"></div>
+        </div>
+      </div>
+      <div class="sidebar-section chat-only">
+        <div class="sidebar-section-header" id="groups-section-toggle">Groups <span class="arrow">▼</span></div>
+        <div class="sidebar-section-body" id="groups-section">
+          <button type="button" class="btn btn-block btn-sm" id="new-group-btn" style="margin-bottom:8px">+ New group</button>
+          <div id="group-search-wrap" style="display:none;margin-bottom:8px">
+            <input id="group-search" class="worlds-search" type="text" placeholder="Search groups…" autocomplete="off">
+          </div>
+          <div id="group-chat-list"></div>
         </div>
       </div>
       <div class="sidebar-section doc-only">
@@ -93,22 +103,24 @@
         <button id="mobile-sidebar-toggle" onclick="toggleMobileSidebar()" title="Toggle sidebar">☰</button>
         <div class="chat-avatar" id="chat-avatar">📜</div>
         <div class="chat-title" id="chat-title-text">Select a character</div>
-        <button class="chat-title-edit" id="chat-title-edit-btn" onclick="startEditTitle()" title="Edit title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="13" height="13"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>
+        <button class="chat-title-edit" id="chat-title-edit-btn" onclick="startEditTitle()" title="Edit title"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="13" height="13"><path d="M12 20H5a1 1 0 0 1-1-1v-7"/><path d="m16.5 3.5 4 4L11 17l-4 1 1-4 9.5-9.5z"/></svg></button>
       </div>
       <div class="chat-actions">
-        <button class="btn btn-sm" id="user-profile-btn" onclick="showUserModal()" title="User profile">👤 User</button>
+        <button class="btn btn-sm" id="user-profile-btn" onclick="showUserModal()" title="User profile" aria-label="User profile">👤</button>
         <button class="btn btn-sm" id="tools-panel-btn" onclick="toggleToolsPanel()" title="Agentic Tools & Workflows">✨ Workflow</button>
-        <button class="btn btn-sm" id="inspector-toggle" onclick="toggleInspector()">🔍 Inspector</button>
         <button class="btn btn-sm hidden" id="direction-notes-panel-btn" onclick="toggleDirectionNotesPanel()" title="Direction Notes">📝 Notes</button>
+        <button class="btn btn-sm" id="inspector-toggle" data-chat-action="inspector" title="Inspector" aria-label="Inspector">🔍 Inspector</button>
         <button id="mobile-chat-actions-toggle" onclick="toggleMobileHeaderActions()" title="Quick actions">⋯</button>
         <div id="mobile-chat-actions-menu">
           <div class="burger-menu-item" id="mobile-user-profile-btn" onclick="closeMobileHeaderActions();showUserModal()">👤 User</div>
           <div class="burger-menu-item" onclick="closeMobileHeaderActions();toggleToolsPanel()">✨ Workflow</div>
-          <div class="burger-menu-item" onclick="closeMobileHeaderActions();toggleInspector()">🔍 Inspector</div>
+          <div class="burger-menu-item" data-chat-action="group-config" hidden>👥 Scene setup</div>
+          <div class="burger-menu-item" data-chat-action="inspector">🔍 Inspector</div>
           <div class="burger-menu-item hidden" id="mobile-direction-notes-btn" onclick="closeMobileHeaderActions();toggleDirectionNotesPanel()">📝 Notes</div>
         </div>
       </div>
     </div>
+    <div id="group-speaking-plan" class="group-speaking-plan" hidden></div>
         <div id="chat-messages"><div class="empty-state"><div class="icon">📜</div><div>Select a character to begin</div></div></div>
     <div id="generation-status" class="gen-status hidden">
       <div class="gen-bar"></div>
@@ -118,7 +130,8 @@
     </div>
     <div id="chat-input-area">
       <div id="burger-dropdown">
-        <div class="burger-menu-item" onclick="closeBurger();newConvForChar(S.activeCharId)"><span class="burger-icon">✚</span>New conversation</div>
+        <div class="burger-menu-item" onclick="closeBurger();newConversationHere()"><span class="burger-icon">✚</span>New conversation</div>
+        <div class="burger-menu-item" data-chat-action="convert-to-group" hidden><span class="burger-icon">👥</span>Convert to group</div>
         <div class="burger-menu-item" onclick="closeBurger();showConvHistoryModal()"><span class="burger-icon">📋</span>Conversations</div>
         <div class="burger-menu-item" onclick="closeBurger();showCompressModal()"><span class="burger-icon">📦</span>Compress History</div>
         <div class="burger-menu-item" onclick="closeBurger();createCheckpoint()"><span class="burger-icon">🔖</span>Create Checkpoint</div>
@@ -126,6 +139,7 @@
       </div>
       <input type="file" id="attach-image-input" accept="image/*" multiple style="display:none">
       <div id="attachment-preview" class="attachment-preview"></div>
+      <div id="group-cast-rail" class="group-cast-rail" hidden></div>
       <button id="chat-ghost-chip" type="button" aria-label="Insert suggestion" hidden></button>
       <div id="chat-input-wrap">
         <button id="burger-btn" onclick="toggleBurger()" title="Menu"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" width="16" height="16"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg></button>
@@ -142,13 +156,11 @@
     <div id="doc-header">
       <button id="doc-mobile-sidebar-toggle" onclick="event.stopPropagation();toggleMobileSidebar()" title="Toggle sidebar">☰</button>
       <div class="doc-title" id="doc-title-text">No document</div>
-      <button class="doc-title-edit" id="doc-title-edit-btn" onclick="renameActiveDocument()" title="Rename document"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="13" height="13"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg></button>
+      <button class="doc-title-edit" id="doc-title-edit-btn" onclick="renameActiveDocument()" title="Rename document"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="13" height="13"><path d="M12 20H5a1 1 0 0 1-1-1v-7"/><path d="m16.5 3.5 4 4L11 17l-4 1 1-4 9.5-9.5z"/></svg></button>
       <div class="doc-header-status">
         <span id="doc-token-count">~0 tokens</span>
         <span id="doc-save-state" class="doc-save-state"></span>
       </div>
-      <!-- Wired via addEventListener in document_audit.js (no new inline handlers).
-           Desktop shows the labelled pill; < 900px swaps to the ⋯ icon (document.css). -->
       <button class="btn btn-sm" id="doc-workflow-btn" title="Output Auditor &amp; Phrase Bank">✨ Workflow</button>
       <button id="doc-workflow-mobile-btn" title="Output Auditor &amp; Phrase Bank" aria-label="Workflow">⋯</button>
     </div>
@@ -219,7 +231,6 @@ Write a haiku about the sea.&lt;|im_end|&gt;
       </div>
     </div>
     <div id="tools-pane-secondary" class="hidden"><div id="tools-list-secondary"></div></div>
-    <!-- Doc-mode pane: shown/hidden by mode CSS (document.css), rendered by document_audit.js. -->
     <div id="tools-pane-doc"></div>
   </div></div>
   <div id="inspector"><div class="inspector-inner">

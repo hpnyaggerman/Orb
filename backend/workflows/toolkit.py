@@ -1,27 +1,4 @@
-"""Stable import surface for workflow authors.
-
-Workflows import from this module rather than reaching directly into
-``backend.inference.client``, ``backend.inference.prompt_builder``, etc. The set of
-re-exports is the workflow author's API: LLM client, tool-schema
-assembly, prompt assembly, macro resolution, read-only DB helpers for
-core state (including the character avatar and the single-attachment
-reader, for workflows that consume prior artifacts as input),
-workflow-scoped storage wrappers, the locks guarding
-read-modify-write on that storage, the forced-call helper,
-the tool-overlay helper, the ``local_ml`` scaffold (for workflows that
-run a small in-process classifier alongside their LLM calls), and the
-editor audit helpers (for workflows scoring their own outputs against
-the same audit logic the editor runs) in both renderings — ``format_report``
-for the sectioned text report and ``build_targets``/``format_numbered_report``
-for the id-addressable one the editor patches against.
-
-Workflows do not import orchestration symbols, the transactional DB
-helpers (``add_message``, etc.), director-state
-mutators, or pass internals. ``insert_workflow_attachment`` is exported
-as the only attachment writer -- the workflow byte cache wraps the raw
-row insert with budget + eviction, so all workflow byte writes flow
-through one chokepoint.
-"""
+"""Stable imports for workflow authors."""
 
 from __future__ import annotations
 
@@ -41,7 +18,7 @@ from ..core import (
     workflow_config_lock,
     workflow_state_lock,
 )
-from ..core.domain_types import AgentLane
+from ..core.domain_types import AgentLane, CastMember, TurnCast
 from ..database import (
     get_active_lorebook_entries,
     get_character_avatar,
@@ -54,10 +31,12 @@ from ..database import (
     get_mood_fragments,
     get_phrase_bank,
     get_settings,
+    get_speaker_names,
     get_user_attachments_for_message,
     get_user_persona,
     get_user_personas,
     get_workflow_attachment_by_id,
+    resolve_cast,
     resolve_char_context,
 )
 from ..inference import (
@@ -69,6 +48,7 @@ from ..inference import (
     enabled_schemas,
     format_message_with_attachments,
     local_ml,
+    macro_identity,
     parse_tool_calls,
     reasoning_cfg,
     separate_agent_lane_configured,
@@ -88,12 +68,14 @@ from .registry import (
 )
 
 __all__ = [
+    "CastMember",
     "EVICTED_MARKER",
     "FormatDriftReport",
     "LLMClient",
     "Macros",
     "STANDALONE_TOOLS",
     "TOOLS",
+    "TurnCast",
     "build_prefix",
     "enabled_schemas",
     "forced_tool_call",
@@ -110,6 +92,7 @@ __all__ = [
     "get_messages",
     "get_mood_fragments",
     "get_phrase_bank",
+    "get_scene_cast",
     "get_settings",
     "get_user_attachments_for_message",
     "get_user_personas",
@@ -137,6 +120,12 @@ __all__ = [
 ]
 
 
+async def get_scene_cast(conversation_id: str) -> TurnCast:
+    """Return the conversation's resolved cast."""
+    conv = await get_conversation(conversation_id)
+    return await resolve_cast(conv) if conv is not None else TurnCast(False, ())
+
+
 async def build_offturn_prefix(
     conversation_id: str,
     history,
@@ -144,25 +133,7 @@ async def build_offturn_prefix(
     *,
     lane: AgentLane = "writer",
 ) -> list[Any]:
-    """Rebuild the character/persona prefix for a standalone off-turn call.
-
-    Workflow code cannot import ``pipeline.context`` without violating the
-    one-way layer rule. This helper keeps the shared resolution at the workflow
-    toolkit boundary and uses the same lower-layer primitives as the pipeline.
-
-    ``lane="writer"`` reproduces the writer prefix. ``lane="agent"`` reproduces
-    that same prefix in single-model mode and substitutes the agent shared
-    system prompt in dual-model mode, exactly like
-    ``pipeline.context._build_prefixes``.
-
-    The output must stay **byte-identical** to the corresponding pipeline prefix
-    for the same conversation state: off-turn LLM calls ride the server's cached
-    KV for the whole conversation prefix, and a single diverging byte evicts it
-    — both for this call and again for the next chat turn. That parity is pinned
-    by ``tests/integration/workflows/test_offturn_prefix_parity.py``; any field
-    added to one builder must be added to both. Pre-pipeline workflow system
-    blocks are the one accepted gap: no PRE_PIPELINE hook currently emits any.
-    """
+    """Build the character and persona prefix for an off-turn call."""
     if lane not in ("writer", "agent"):
         raise ValueError(f"unknown off-turn model lane {lane!r}")
     conv = await get_conversation(conversation_id)
@@ -170,6 +141,12 @@ async def build_offturn_prefix(
         return []
     card_id = conv.get("character_card_id")
     card = await get_character_card(card_id) if card_id else None
+    # A group names no single character: the scene's title is {{char}}, the cast
+    # section stands in for the card, and each replayed reply is attributed to
+    # the member who wrote it. Resolved through the same reader the turn uses,
+    # against the *neutral* base (no speaker) — which is the base the Director
+    # runs on in every mode, Classic card swap included.
+    turn_cast = await resolve_cast(conv)
     system_prompt, char_persona, mes_example = await resolve_char_context(conv, settings, card=card)
     dual_agent = lane == "agent" and separate_agent_lane_configured(settings)
     if dual_agent:
@@ -183,12 +160,11 @@ async def build_offturn_prefix(
         conv.get("persona_lock_id") or (card.get("persona_lock_id") if card else None) or settings.get("active_persona_id")
     )
     persona = await get_user_persona(persona_id) if persona_id else None
+    macro_char, cast_names = macro_identity(conv, turn_cast)
     macros = Macros.from_settings(
-        settings,
-        conv.get("character_name", ""),
-        persona,
-        seed=conv.get("macro_seed") or conv.get("id", ""),
+        settings, macro_char, persona, seed=conv.get("macro_seed") or conv.get("id", ""), cast=cast_names
     )
+    speaker_names = await get_speaker_names(conversation_id) if turn_cast.grouped else {}
     user_description = persona.get("description", "") if persona else settings.get("user_description", "")
     return build_prefix(
         system_prompt,
@@ -200,4 +176,6 @@ async def build_offturn_prefix(
         macros,
         user_description,
         constant_lorebook_block=compute_constant_lorebook_block(await get_active_lorebook_entries(), macros),
+        cast=turn_cast,
+        speaker_names=speaker_names,
     )

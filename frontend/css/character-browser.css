@@ -1,6 +1,3 @@
-/* ═══════════════════════════════════════════
-   10. Character Browser Modal
-   ═══════════════════════════════════════════ */
 
 .char-browser-search-row {
   display: flex;
@@ -106,6 +103,8 @@
   border-radius: var(--radius);
   cursor: pointer;
   transition: background .15s;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 107px;
 }
 
 .char-browser-card:hover {
@@ -158,6 +157,8 @@
   border-radius: var(--radius);
   cursor: pointer;
   transition: background .15s;
+  content-visibility: auto;
+  contain-intrinsic-size: auto 56px;
 }
 
 .char-browser-list-item:hover {
@@ -212,4 +213,3 @@
   color: var(--text-muted);
   font-size: 13px;
 }
-

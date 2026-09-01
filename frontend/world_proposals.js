@@ -1,0 +1,175 @@
+import { esc, escAttr } from "./utils.js";
+
+export const STATUS_LABELS = {
+  pending: "Proposed world change",
+  stale: "Needs re-evaluation",
+  applied: "Applied to the world",
+  rejected: "Rejected",
+  superseded: "Superseded by re-evaluation",
+  reverted: "Undone",
+};
+
+const OP_VERBS = {
+  create: "Add",
+  replace: "Replace",
+  suppress: "Remove",
+  update: "Revise",
+  archive: "Retire",
+  delete: "Delete",
+};
+
+const IRREVERSIBLE_OPS = new Set(["delete"]);
+
+export const isOpen = (cs) => cs?.status === "pending" || cs?.status === "stale";
+export const isStale = (cs) => cs?.status === "stale";
+
+export const isUndoable = (cs) => (cs?.operations || []).some((op) => !IRREVERSIBLE_OPS.has(op?.op));
+
+export function openProposals(msg) {
+  return (msg?.world_changesets || []).filter(isOpen);
+}
+
+export function activationLabel(op) {
+  if (op?.op === "suppress" || op?.op === "archive") return "";
+  if (op?.activation === "constant") return "Always in context";
+  const kws = (op?.keywords || []).filter(Boolean);
+  return kws.length ? `On: ${kws.join(", ")}` : "Keyword-activated";
+}
+
+export function operationTitle(op) {
+  const verb = OP_VERBS[op?.op] || op?.op || "Change";
+  const subject = op?.op === "create" ? op?.name : op?.target_name || op?.name;
+  return subject ? `${verb} “${subject}”` : verb;
+}
+
+export function operationDiff(op) {
+  const before = op?.op === "create" ? "" : op?.target_content || "";
+  const after = op?.op === "suppress" || op?.op === "archive" ? "" : op?.content || "";
+  return { before, after };
+}
+
+function _diffHtml(op) {
+  const { before, after } = operationDiff(op);
+  const rows = [];
+  if (before) rows.push(`<div class="wc-before">${esc(before)}</div>`);
+  if (after) rows.push(`<div class="wc-after">${esc(after)}</div>`);
+  if (!rows.length) rows.push(`<div class="wc-before wc-empty">(nothing)</div>`);
+  return `<div class="wc-diff">${rows.join("")}</div>`;
+}
+
+export function operationHtml(op) {
+  const meta = [activationLabel(op)].filter(Boolean);
+  return `
+    <li class="wc-op wc-op-${escAttr(op?.op || "")}">
+      <div class="wc-op-title">${esc(operationTitle(op))}</div>
+      ${_diffHtml(op)}
+      <div class="wc-op-meta">${meta.map((m) => `<span>${esc(m)}</span>`).join("")}</div>
+      ${op?.rationale ? `<div class="wc-op-why">${esc(op.rationale)}</div>` : ""}
+    </li>`;
+}
+
+function _button(action, label, cls = "") {
+  return `<button type="button" class="btn btn-sm ${cls}" data-wc-action="${escAttr(action)}">${esc(label)}</button>`;
+}
+
+export function actionsHtml(cs) {
+  if (cs?.status === "pending") {
+    return [
+      _button("apply", "Apply", "btn-accent"),
+      _button("edit", "Edit"),
+      _button("reject", "Reject", "wc-danger"),
+    ].join("");
+  }
+  if (cs?.status === "stale") {
+    return [_button("re-evaluate", "Re-evaluate", "btn-accent"), _button("reject", "Dismiss", "wc-danger")].join("");
+  }
+  if (cs?.status === "applied") return isUndoable(cs) ? _button("undo", "Undo") : "";
+  return "";
+}
+
+export function proposalCardHtml(cs) {
+  if (!cs) return "";
+  const ops = cs.operations || [];
+  const status = cs.status || "pending";
+  const note = isStale(cs)
+    ? `<div class="wc-note">The world changed since this was proposed. Re-evaluate it against the world as it stands now.</div>`
+    : "";
+  const actions = actionsHtml(cs);
+  return `
+    <div class="wc-card wc-${escAttr(status)}" data-wc-id="${escAttr(cs.id)}" data-wc-world="${escAttr(cs.world_id)}">
+      <div class="wc-head">
+        <span class="wc-badge">${esc(STATUS_LABELS[status] || status)}</span>
+        ${cs.world_name ? `<span class="wc-world">${esc(cs.world_name)}</span>` : ""}
+        ${cs.summary ? `<span class="wc-summary">${esc(cs.summary)}</span>` : ""}
+      </div>
+      ${note}
+      <ul class="wc-ops">${ops.map(operationHtml).join("")}</ul>
+      ${actions ? `<div class="wc-actions">${actions}</div>` : ""}
+    </div>`;
+}
+
+export function messageProposalsHtml(msg) {
+  const open = openProposals(msg);
+  return open.length ? open.map(proposalCardHtml).join("") : "";
+}
+
+export function changesetRowHtml(cs) {
+  const ops = cs.operations || [];
+  const count = `${ops.length} change${ops.length === 1 ? "" : "s"}`;
+  const source = cs.source_character_label || cs.source_conversation_label || "";
+  const when = (cs.applied_at || cs.decided_at || cs.created_at || "").slice(0, 10);
+  const meta = [STATUS_LABELS[cs.status] || cs.status || "", count, source, when].filter(Boolean).join(" · ");
+  return `
+    <div class="wc-row wc-${escAttr(cs.status)}" data-wc-id="${escAttr(cs.id)}" data-wc-world="${escAttr(cs.world_id)}">
+      <div class="wc-row-main">
+        <span class="wc-row-summary">${esc(cs.summary || operationTitle(ops[0]) || "World change")}</span>
+        <span class="wc-row-meta">${esc(meta)}</span>
+      </div>
+      <div class="wc-row-actions">${actionsHtml(cs)}</div>
+    </div>`;
+}
+
+export function operationEditHtml(op, index) {
+  const isBodyless = op?.op === "suppress" || op?.op === "archive";
+  const keywords = (op?.keywords || []).join(", ");
+  return `
+    <div class="wc-edit-op" data-wc-index="${escAttr(index)}">
+      <label class="wc-edit-include">
+        <input type="checkbox" data-wc-field="include" checked>
+        <span>${esc(operationTitle(op))}</span>
+      </label>
+      ${
+        isBodyless
+          ? ""
+          : `
+      <input class="wc-edit-name" type="text" data-wc-field="name" value="${escAttr(op?.name || "")}" placeholder="Entry name">
+      <textarea class="wc-edit-content" data-wc-field="content" rows="3" placeholder="What is now true">${esc(op?.content || "")}</textarea>
+      <div class="wc-edit-activation">
+        <select data-wc-field="activation">
+          <option value="constant"${op?.activation === "constant" ? " selected" : ""}>Always in context</option>
+          <option value="keywords"${op?.activation === "constant" ? "" : " selected"}>Keyword-activated</option>
+        </select>
+        <input type="text" data-wc-field="keywords" value="${escAttr(keywords)}" placeholder="Keywords, comma separated">
+      </div>`
+      }
+    </div>`;
+}
+
+export function readOperationEdit(op, values) {
+  if (!values.include) return null;
+  if (op.op === "suppress" || op.op === "archive") return { ...op };
+  const activation = values.activation === "constant" ? "constant" : "keywords";
+  return {
+    ...op,
+    name: (values.name ?? op.name ?? "").trim(),
+    content: (values.content ?? op.content ?? "").trim(),
+    activation,
+    keywords:
+      activation === "constant"
+        ? []
+        : String(values.keywords ?? "")
+            .split(",")
+            .map((k) => k.trim())
+            .filter(Boolean),
+  };
+}

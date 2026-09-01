@@ -1,9 +1,4 @@
-"""Inference layer — LLM transport and prompt/tool assembly.
-
-Depends only on ``core``. Facade re-exports the public surface so callers
-write ``from .inference import X``. Private symbols are accessed via the
-submodule path directly.
-"""
+"""LLM transport and prompt/tool assembly."""
 
 from __future__ import annotations
 
@@ -26,8 +21,23 @@ from .endpoint_profiles import (
     profile_for,
 )
 from .errors import LLMCallError, provider_sentence, redact
+from .group_context import (
+    context_size_components,
+    macro_identity,
+    member_macros,
+    prefix_is_speaker_scoped,
+    render_cast_section,
+    roster_names,
+    tail_carries_identity,
+)
 from .kv_tracker import _KVCacheTracker
-from .lorebook import compute_constant_lorebook_block, compute_depth_lorebook_block
+from .lorebook import (
+    DYNAMIC_SECTION_TITLE,
+    compute_constant_lorebook_block,
+    compute_depth_lorebook_block,
+    is_dynamic,
+    select_effective_entries,
+)
 from .prompt_builder import (
     EDITOR_RENUMBER_NOTICE,
     build_direction_note_prompt,
@@ -38,6 +48,7 @@ from .prompt_builder import (
     build_lorebook_select_prompt,
     build_prefix,
     build_style_injection,
+    build_world_change_prompt,
     compute_style_injection_block,
     format_message_with_attachments,
     render_direction_notes_block,
@@ -50,6 +61,7 @@ from .tool_registry import (
     GIVE_FEEDBACK_CHOICE,
     POST_WRITER_TOOLS,
     PRE_WRITER_TOOLS,
+    PROPOSE_WORLD_CHANGES_CHOICE,
     RECORD_DIRECTION_NOTE_CHOICE,
     SELECT_LOREBOOK_CHOICE,
     STANDALONE_TOOLS,
@@ -86,11 +98,22 @@ __all__ = [
     # cached_call / kv_tracker
     "CachedBase",
     "_KVCacheTracker",
+    # group_context — the one owner of per-mode character-field visibility
+    "context_size_components",
+    "macro_identity",
+    "member_macros",
+    "prefix_is_speaker_scoped",
+    "render_cast_section",
+    "roster_names",
+    "tail_carries_identity",
     # text_completion
     "has_image_parts",
     # lorebook — full surface via .lorebook / features.lorebook facade
+    "DYNAMIC_SECTION_TITLE",
     "compute_constant_lorebook_block",
     "compute_depth_lorebook_block",
+    "is_dynamic",
+    "select_effective_entries",
     # prompt_builder
     "build_director_scene_step_prompt",
     "build_director_tool_prompt",
@@ -101,6 +124,7 @@ __all__ = [
     "build_direction_note_prompt",
     "build_prefix",
     "build_style_injection",
+    "build_world_change_prompt",
     "compute_style_injection_block",
     "format_message_with_attachments",
     "render_direction_notes_block",
@@ -111,6 +135,7 @@ __all__ = [
     "POST_WRITER_TOOLS",
     "PRE_WRITER_TOOLS",
     "RECORD_DIRECTION_NOTE_CHOICE",
+    "PROPOSE_WORLD_CHANGES_CHOICE",
     "SELECT_LOREBOOK_CHOICE",
     "STANDALONE_TOOLS",
     "TOOLS",

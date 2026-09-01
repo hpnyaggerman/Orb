@@ -1,8 +1,3 @@
-// Streaming + generation lifecycle: the generation-phase indicator, the SSE
-// reader/dispatcher, the post-stream reconcile (afterStream), and the user-
-// facing send / continue / regenerate / super-regenerate / magic-rewrite
-// entry points. Split out of chat.js; the public surface is re-exported from
-// chat.js.
 import { api } from "./api.js";
 import { onTurnStart } from "./audio_player.js";
 import { updateAttachmentPreview } from "./chat_composer.js";
@@ -36,10 +31,10 @@ import {
   optimisticDropDirectionNotesFrom,
   renderDirectionNotesPanel,
 } from "./direction_notes_panel.js";
+import { restNotice, unansweredHint } from "./group_cast.js";
+import { consumeSpeakerOverride, refreshSheetProposals, renderGroupCast } from "./group_setup.js";
 import { refreshCharacters } from "./library.js";
 import { isUtilityPanelOpen } from "./panels.js";
-// Imported directly rather than via settings.js to avoid an import cycle
-// (settings.js → chat.js → this module), as chat_conversations.js does.
 import { ensurePersonaPinned } from "./settings_personas.js";
 import { sseEvents, streamPost, unescapeSSE } from "./sse.js";
 import { effectiveWorkflowEnabled, S } from "./state.js";
@@ -58,15 +53,12 @@ import {
   toast,
 } from "./utils.js";
 
-// ── Streaming transport
-// The SSE parser and `streamPost` now live in sse.js (the app-wide single path);
-// this module keeps only the chat-specific stop call. `stopConversation` bypasses
-// the `api` helper deliberately: it is fire-and-forget.
+// Generation entry points share the SSE handling in this module.
+
 export function stopConversation(convId) {
   fetch(`/api/conversations/${convId}/stop`, { method: "POST" }).catch(() => {});
 }
 
-// ── Generation Phase
 const PHASE_ORDER = { pending: 0, directing: 0, generating: 1, refining: 2 };
 const PHASE_LABELS = {
   pending: "Waiting for response…",
@@ -75,15 +67,6 @@ const PHASE_LABELS = {
   refining: "Refining response…",
 };
 
-// The compact form of the same phase, for a failure card's meta line: the
-// frontend already knows which pass was running when the error arrived, so
-// attributing the failure costs zero backend plumbing.
-// Fallback only. The pipeline now names the pass that raised (backend
-// `failures.mark_stage`), and this map cannot: nothing moves the phase off
-// "directing" until the writer's first token, so every writer *rejection* — which
-// by definition arrives before any token — lands here as "director pass". Used
-// when the payload has no stage: a FastAPI error before the generator started, or
-// a connection lost client-side.
 const PHASE_STAGES = { pending: "", directing: "director pass", generating: "writer pass", refining: "editor pass" };
 
 function phaseStage() {
@@ -138,8 +121,6 @@ function finalizeStreamingDiv(lastMsg) {
   const div = body.closest(".message");
   if (!div?.isConnected || !lastMsg || lastMsg.role !== "assistant" || !lastMsg.id) return false;
 
-  // Target pinning is only for the in-flight replacement. Once committed,
-  // restore ordinary bottom-follow behavior and leave no synthetic tail space.
   div.classList.remove("stream-scroll-target");
   div.setAttribute("data-msg-id", lastMsg.id);
   body.removeAttribute("id");
@@ -177,14 +158,14 @@ function finalizeStreamingDiv(lastMsg) {
   return true;
 }
 
-// ── Streaming Helpers
 export function setStreaming(active) {
   S.isStreaming = active;
   $("send-btn").style.display = active ? "none" : "flex";
   $("stop-btn").style.display = active ? "flex" : "none";
   const cm = $("chat-messages");
   if (cm) cm.classList.toggle("streaming", active);
-  if (active) onTurnStart();
+  if (active && !S.groupCast) onTurnStart();
+  renderGroupCast();
 }
 
 export function stopGeneration() {
@@ -194,10 +175,10 @@ export function stopGeneration() {
   }
 }
 
-export function createStreamingDiv() {
+export function createStreamingDiv(name = null) {
   const div = document.createElement("div");
   div.className = "message assistant";
-  div.innerHTML = `<div class="msg-role">${esc(getCharName())}</div>
+  div.innerHTML = `<div class="msg-role">${esc(name || getCharName())}</div>
     <div class="msg-body" id="streaming-body">
       <span class="typing-indicator"><span></span><span></span><span></span></span>
     </div>
@@ -229,6 +210,9 @@ function patchPendingUserMessage(pendingMsg) {
 }
 
 export async function afterStream() {
+  const wasGroupExchange = S.currentExchangeId != null;
+  const groupExchangeId = S.currentExchangeId;
+  const inFlightSpeaker = S.currentSpeaker;
   const preservedContent = S.streamingContent;
   const pendingUserMsg = S.pendingUserMsg || null;
   const wasAborted = S.wasAborted;
@@ -239,9 +223,6 @@ export async function afterStream() {
   S.wasAborted = false;
   S.hideStreamingBox = false; // Ensure streaming box is visible after streaming ends
   setGenerationPhase(null);
-  // The phase_status handler clears a channel's label only on a terminal "done"
-  // state; a workflow that stops without one (error or dropped stream) would
-  // leave stale pill text. Clear on stream close as a backstop.
   clearWorkflowPhase();
 
   if (!S.activeConvId) {
@@ -260,8 +241,6 @@ export async function afterStream() {
   try {
     setMessages(await api.get(convUrl(S.activeConvId, "messages")));
     S.directorState = await api.get(convUrl(S.activeConvId, "director"));
-    // Update the conversation's updated_at timestamp so refreshCharacters() can
-    // correctly place the active character at the top of the recent list.
     if (S.activeConvId) {
       const conv = S.conversations?.find((c) => c.id === S.activeConvId);
       if (conv) conv.updated_at = new Date().toISOString();
@@ -271,9 +250,6 @@ export async function afterStream() {
   }
 
   if (pendingUserMsg) {
-    // Identify by id once the message is persisted; fall back to content for the
-    // rare case where the turn errored before the user message was saved.
-    // Matching by content alone would mis-fire when an edit changed it mid-turn.
     const present = pendingUserMsg.id
       ? S.messages.some((m) => m.id === pendingUserMsg.id)
       : S.messages.some((m) => m.role === "user" && m.content === pendingUserMsg.content);
@@ -283,18 +259,10 @@ export async function afterStream() {
     }
   }
 
-  // Edits saved mid-stream were queued because the /edit route blocks on the
-  // stream lock for the whole turn. The lock is free now, so persist them and
-  // keep the local copies in sync (the refetch above reverted them to the
-  // server's pre-edit content). The id-less pending user message is queued
-  // separately (pendingUserMsgEdit) since it has no id to key on yet; it carries
-  // a real id by this point (user_message_created lands before the stream ends).
   if (S.pendingUserMsgEdit != null) {
     const target = pendingUserMsg?.id
       ? S.messages.find((m) => m.id === pendingUserMsg.id)
       : S.messages.findLast((m) => m.role === "user" && m.id);
-    // A later id-keyed edit of the same message (queued via saveEdit once the id
-    // arrived) supersedes this earlier id-less one, so don't clobber it.
     if (target?.id && !(target.id in S.queuedEdits)) S.queuedEdits[target.id] = S.pendingUserMsgEdit;
   }
   S.pendingUserMsgEdit = null;
@@ -308,9 +276,31 @@ export async function afterStream() {
   }
   S.queuedEdits = {};
 
-  if (preservedContent?.trim()) {
+  if (wasGroupExchange && inFlightSpeaker && preservedContent?.trim()) {
+    const persisted = S.messages.some(
+      (message) =>
+        message.role === "assistant" &&
+        message.exchange_id === groupExchangeId &&
+        message.speaker_member_id === inFlightSpeaker.member_id,
+    );
+    if (!persisted) {
+      const parent = S.messages[S.messages.length - 1];
+      S.messages.push({
+        role: "assistant",
+        content: preservedContent,
+        id: null,
+        parent_id: parent?.id || null,
+        speaker_member_id: inFlightSpeaker.member_id,
+        exchange_id: groupExchangeId,
+        branch_count: 1,
+        branch_index: 0,
+        prev_branch_id: null,
+        next_branch_id: null,
+      });
+    }
+  } else if (!wasGroupExchange && preservedContent?.trim()) {
     const lastMsg = S.messages[S.messages.length - 1];
-    if (!lastMsg || lastMsg.role !== "assistant") {
+    if (lastMsg?.role !== "assistant") {
       S.messages.push({
         role: "assistant",
         content: preservedContent,
@@ -326,58 +316,52 @@ export async function afterStream() {
   setStreaming(false);
   $("send-btn").disabled = false;
 
-  // Anchor the pending diff to the specific message ID it was generated for,
-  // so branch navigation doesn't show stale diffs on the wrong message.
   if (S.pendingRefineDiff) {
     const lastAssistant = [...S.messages].reverse().find((m) => m.role === "assistant" && m.id);
     S.pendingRefineDiff.msgId = lastAssistant?.id ?? null;
   }
 
-  // Finalize the streaming div in-place — no DOM destruction, no flash
   const lastMsg = S.messages[S.messages.length - 1];
-  const finalized = finalizeStreamingDiv(lastMsg);
+  const finalized = !wasGroupExchange && !S.worldProposalArrived && finalizeStreamingDiv(lastMsg);
+  S.worldProposalArrived = false;
   S.streamingBodyEl = null;
 
   if (finalized) {
-    // Streaming div already updated in-place — no full re-render needed.
-    // Only patch the pending user message if one exists (sendMessage path).
     if (pendingUserMsg) patchPendingUserMessage(pendingUserMsg);
     patchParentUserMessage(lastMsg);
     updateContextCounter();
-    // The cutoff hid the target and everything after it during streaming; after the
-    // refetch the DOM can hold fewer messages than state. Re-render if any are missing.
     const ct = $("chat-messages");
     if (ct.querySelectorAll(".message[data-msg-id]").length < S.messages.length) {
       renderMessages();
     } else {
-      // This fast path skips renderMessages, and with it the failure card's
-      // paint. Ask for it directly rather than repainting the whole list.
       renderTurnError(ct);
     }
   } else {
     renderMessages();
   }
+  S.currentExchangeId = null;
+  S.currentSpeaker = null;
+  S.speakingPlan = null;
+  if (wasGroupExchange && S.completedExchangeMessageIds.length) consumeSpeakerOverride();
+  S.completedExchangeMessageIds = [];
+  renderGroupCast();
+  if (wasGroupExchange && S.groupCast?.sheet_updates) refreshSheetProposals().then(renderGroupCast);
   clearInspectedMessage();
-  // The active branch moved (new reply or a regenerated sibling), so the notes
-  // panel's path-scoped set is stale; refetch it if the user has it open. Clear the
-  // regen cut first so the refetch reflects the now-committed server state unfiltered.
   clearDirectionNotesRegenCut();
   if (isUtilityPanelOpen("direction-notes-panel")) renderDirectionNotesPanel();
   scrollToBottom(true);
   refreshCharacters();
 }
 
-export async function processSSEStream(resp, container, msgDiv, signal) {
+export async function processSSEStream(resp, container, holder, signal) {
   let fullResponse = "",
     rewrittenResponse = null,
     firstToken = true,
     dispatchErrorToasted = false;
 
-  // Clear any diff from the previous turn
   S.pendingRefineDiff = null;
   S.editorDraftBaseline = null;
 
-  // Reset reasoning state for this generation turn
   S.reasoningDirector = "";
   S.reasoningWriter = "";
   S.reasoningEditor = "";
@@ -388,14 +372,65 @@ export async function processSSEStream(resp, container, msgDiv, signal) {
   S.reasoningPassSelected = 0; // tracks what the user is viewing
   S.reasoningUserOverride = false; // true when user has manually clicked a dot
 
-  // sse.js owns the transport (frames, keepalives, chunk-boundary splits); this
-  // loop owns the chat event vocabulary. The token/rewrite callbacks close over
-  // the current frame's `data`, so they are minted per event.
+  const resetSpeakerTurnState = () => {
+    fullResponse = "";
+    rewrittenResponse = null;
+    firstToken = true;
+    S.streamingContent = null;
+    S.pendingRefineDiff = null;
+    S.editorDraftBaseline = null;
+    S.reasoningDirector = "";
+    S.reasoningWriter = "";
+    S.reasoningEditor = "";
+    S.lastFeedback = null;
+    S.lastDirectionNotes = null;
+    S.reasoningByPass = {};
+    S.reasoningPassActive = 0;
+    S.reasoningPassSelected = 0;
+    S.reasoningUserOverride = false;
+  };
+
   for await (const { event, data } of sseEvents(resp.body, { signal })) {
+    if (event === "speaking_plan") {
+      try {
+        const parsed = JSON.parse(data);
+        S.currentExchangeId = parsed.exchange_id;
+        S.speakingPlan = Array.isArray(parsed.plan) ? parsed.plan : [];
+        if (!S.speakingPlan.length) toast(restNotice());
+        renderGroupCast();
+      } catch (_) {}
+      continue;
+    }
+    if (event === "speaker_start") {
+      try {
+        const parsed = JSON.parse(data);
+        S.currentExchangeId = parsed.exchange_id;
+        S.currentSpeaker = parsed;
+        resetSpeakerTurnState();
+        holder.el = createStreamingDiv(parsed.name);
+        if (!S.hideUntilBaked) container.appendChild(holder.el);
+        onTurnStart();
+        renderGroupCast();
+        scrollToBottom();
+      } catch (_) {}
+      continue;
+    }
+    if (event === "speaker_done") {
+      try {
+        const parsed = JSON.parse(data);
+        if (parsed.message_id) S.completedExchangeMessageIds.push(parsed.message_id);
+        finalizeStreamingDiv({ ...parsed, id: parsed.message_id, role: "assistant" });
+        S.streamingBodyEl = null;
+        holder.el = null;
+        S.currentSpeaker = null;
+        renderGroupCast();
+      } catch (_) {}
+      continue;
+    }
     const onToken = () => {
       if (firstToken) {
         firstToken = false;
-        if (!msgDiv.isConnected && !S.hideUntilBaked) container.appendChild(msgDiv);
+        if (holder.el && !holder.el.isConnected && !S.hideUntilBaked) container.appendChild(holder.el);
         if (S.streamingBodyEl) S.streamingBodyEl.innerHTML = "";
       }
       fullResponse += unescapeSSE(data);
@@ -414,11 +449,8 @@ export async function processSSEStream(resp, container, msgDiv, signal) {
         scrollToBottom();
       }
     };
-    // A throwing handler must not kill the read loop: the fetch would stay open
-    // but unread, leaving the backend generating headless. Contain it, log the
-    // culprit event + stack, and keep reading.
     try {
-      handleSSEEvent(event, data, container, msgDiv, onToken, onRewrite);
+      handleSSEEvent(event, data, container, holder.el, onToken, onRewrite);
     } catch (e) {
       console.error(`SSE handler for "${event}" threw:`, e);
       if (!dispatchErrorToasted) {
@@ -427,14 +459,9 @@ export async function processSSEStream(resp, container, msgDiv, signal) {
       }
     }
   }
-  // reader.cancel() resolves read() with done:true rather than throwing, so
-  // re-throw here so callers can set S.wasAborted and wait for the backend.
   if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
 }
 
-// Shared draft-bubble swap for draft_update/writer_rewrite: diffs against the
-// writer's original text (stashed on first use — S.streamingContent still holds
-// it then), so successive editor updates don't chain diffs off each other.
 function swapStreamingDraft(text, onRewrite) {
   if (S.editorDraftBaseline === null) S.editorDraftBaseline = S.streamingContent || "";
   const original = resolvePlaceholders(S.editorDraftBaseline);
@@ -442,9 +469,6 @@ function swapStreamingDraft(text, onRewrite) {
   onRewrite(text);
 }
 
-// The human half of an error body that is *not* a describe_failure payload — a
-// FastAPI dependency 4xx/5xx answering before the SSE generator ever starts.
-// Same well-known keys the backend's provider_sentence walks, in the same order.
 function foreignSentence(o) {
   const first = (v) => {
     if (typeof v === "string") return v;
@@ -455,11 +479,6 @@ function foreignSentence(o) {
   return first(o.detail) || first(o.error?.message) || first(o.error) || first(o.message) || "";
 }
 
-// The `error`/`warning` data channel carries either a JSON object (the pipeline's
-// describe_failure payload) or a bare string from a legacy emitter. Only the
-// string branch is un-escaped: json.dumps already encoded the newlines *inside*
-// the JSON, so running unescapeSSE over it would corrupt the payload — the exact
-// trap sse.js documents for the document `probs` channel.
 function parseFailure(data) {
   const raw = String(data ?? "");
   try {
@@ -468,7 +487,6 @@ function parseFailure(data) {
       if (typeof parsed.headline === "string" && parsed.headline) {
         return { sentence: "", kind: "internal", ...parsed };
       }
-      // A foreign body: keep all of it for Details, quote the readable part.
       return { headline: "", sentence: foreignSentence(parsed), kind: "internal", body: raw };
     }
   } catch (_) {}
@@ -497,17 +515,11 @@ function handleSSEEvent(event, data, _container, msgDiv, onToken, onRewrite) {
       onToken();
       break;
     case "writer_done":
-      // Authoritative writer→editor boundary from the backend. Flip to "refining"
-      // only when an editor/feedback pass actually follows; otherwise stay on
-      // "generating" until afterStream clears the phase. Replaces the old
-      // token-gap timer, which misfired when slow endpoints stalled mid-stream.
       try {
         if (JSON.parse(data).editor_will_run) setGenerationPhase("refining");
       } catch (_) {}
       break;
     case "draft_update":
-      // Intermediate editor paint (per iteration, or per forced patch call in
-      // text mode). Cosmetic: writer_rewrite/afterStream stay authoritative.
       try {
         const draft = JSON.parse(data).draft;
         if (draft !== S.streamingContent) swapStreamingDraft(draft, onRewrite);
@@ -527,28 +539,18 @@ function handleSSEEvent(event, data, _container, msgDiv, onToken, onRewrite) {
         const delta = d.delta;
         const builtinIdx = REASONING_PASSES.findIndex((p) => p.key === passKey);
         if (builtinIdx >= 0) {
-          // Built-in pass: append delta to the named state and update the Main reasoning box.
           const stateKey = `reasoning${passKey.charAt(0).toUpperCase()}${passKey.slice(1)}`;
           S[stateKey] = (S[stateKey] || "") + delta;
           const rebuilt = _advanceReasoningPass(builtinIdx);
           const viewingThisPass = S.reasoningPassSelected === builtinIdx;
           const box = document.getElementById("reasoning-box");
           if (box && viewingThisPass) {
-            // Skip the append when _advanceReasoningPass already rebuilt the section
-            // from the (now-current) state; appending again would duplicate this delta.
-            // Text node append (not `textContent += ...`) avoids the DOM re-serialisation
-            // that produced the visible scrollbar wobble on long streams.
             if (!rebuilt) appendReasoningDelta(box, delta);
           }
-          // When the box is absent (Inspector closed, or user is on the Secondary tab)
-          // state accumulates silently; renderInspector will paint the full text the
-          // next time it runs.
           break;
         }
         const pipeline = S.workflowPipelines.find((p) => p.passes.some((pp) => pp.id === passKey));
         if (pipeline) {
-          // Pre-write read: the dot/line lit-state changes only on this empty ->
-          // non-empty transition, so relight once rather than on every delta.
           const firstDelta = !S.reasoningByPass[passKey];
           S.reasoningByPass[passKey] = (S.reasoningByPass[passKey] || "") + delta;
           if (S.inspectorTab === "secondary") {
@@ -565,9 +567,6 @@ function handleSSEEvent(event, data, _container, msgDiv, onToken, onRewrite) {
       break;
     }
     case "feedback": {
-      // Post-writer, user-facing note. Display-only (no click-to-insert in v1):
-      // stored on the turn and surfaced in the inspector's Feedback block, which
-      // re-renders here live and again from the director-log on message revisit.
       try {
         const d = JSON.parse(data);
         S.lastFeedback = { values: d.values || {} };
@@ -576,8 +575,6 @@ function handleSSEEvent(event, data, _container, msgDiv, onToken, onRewrite) {
       break;
     }
     case "direction_notes": {
-      // Director-authored notes recorded this turn; display-only, surfaced in the
-      // inspector's Direction Notes block (live here, and from the director-log on revisit).
       try {
         const d = JSON.parse(data);
         S.lastDirectionNotes = { notes: d.notes || [] };
@@ -613,7 +610,6 @@ function handleSSEEvent(event, data, _container, msgDiv, onToken, onRewrite) {
         const d = JSON.parse(data);
         const realId = d.id;
         if (!realId) break;
-        // Find the pending user message (most recent user message without an id)
         const pendingIdx = S.messages.findLastIndex((m) => m.role === "user" && !m.id);
         const prevContent = pendingIdx >= 0 ? S.messages[pendingIdx].content : null;
         if (pendingIdx >= 0) {
@@ -622,17 +618,12 @@ function handleSSEEvent(event, data, _container, msgDiv, onToken, onRewrite) {
         if (S.pendingUserMsg) {
           S.pendingUserMsg.id = realId;
         }
-        // The backend resolves inline macros ({{roll}}/{{random}}) before
-        // persisting, so the stored text can differ from what was typed. Sync
-        // the local copies so content-keyed matching (patchPendingUserMessage,
-        // afterStream) holds. An edit in flight supersedes the server text.
         const editing = S.editingPendingUserMsg || S.pendingUserMsgEdit != null;
         const resolved = typeof d.content === "string" && !editing ? d.content : null;
         if (resolved !== null) {
           if (pendingIdx >= 0) S.messages[pendingIdx].content = resolved;
           if (S.pendingUserMsg) S.pendingUserMsg.content = resolved;
         }
-        // If the user is currently editing the pending message, transition to normal edit mode
         if (S.editingPendingUserMsg) {
           S.editingPendingUserMsg = false;
           S.editingMsgId = realId;
@@ -643,54 +634,43 @@ function handleSSEEvent(event, data, _container, msgDiv, onToken, onRewrite) {
             ta.selectionStart = ta.selectionEnd = ta.value.length;
           }
         } else {
-          // Patch the DOM element's data-msg-id and toolbar
           const div = document.querySelector('.message.user[data-msg-id="null"]');
           if (div) {
             div.setAttribute("data-msg-id", realId);
             const tb = div.querySelector(".msg-toolbar");
             if (tb) tb.innerHTML = buildMsgToolbar({ id: realId, role: "user" });
-            // Repaint only when macro resolution actually changed the text.
             if (resolved !== null && resolved !== prevContent) {
               const body = div.querySelector(".msg-body");
               if (body) body.innerHTML = formatProse(resolvePlaceholders(resolved));
             }
           }
         }
-        // A queued edit (S.pendingUserMsgEdit) is intentionally NOT POSTed here:
-        // mid-stream the /edit route blocks on the stream lock, so afterStream()
-        // persists it once the lock frees. The local copy already shows the edit.
       } catch (_) {}
       break;
     }
     case "error":
-      // Terminal. Into state, not a toast: a failed turn has to leave a trace
-      // the user can still read (and copy) a minute later. The card is painted
-      // by renderTurnError() from renderMessages(), which afterStream() runs.
       {
         const f = parseFailure(data);
         S.turnError = {
           ...f,
           headline: f.headline || "Generation failed.",
           convId: S.activeConvId,
-          // The backend knows which pass raised; the phase map only guesses.
           stage: f.stage || phaseStage(),
           at: Date.now(),
         };
       }
       break;
     case "warning":
-      // Non-terminal: a workflow hook failed but the turn continues, so this is
-      // a sticky toast rather than the card (which means "this turn failed").
       {
         const w = parseFailure(data);
         notifyError(w.headline || "A workflow step failed.", { sentence: w.sentence });
       }
       break;
+    case "world_change_proposed": {
+      S.worldProposalArrived = true;
+      break;
+    }
     case "workflow_attachments_rejected": {
-      // Stash for the post-stream renderMessages paint. Do NOT call
-      // renderMessages here -- S.messages doesn't yet contain the new
-      // asst_id (it lands via afterStream's setMessages refetch),
-      // and renderMessages mid-stream would clobber the streaming bubble.
       try {
         const parsed = JSON.parse(data);
         const msgIdNum = Number(parsed.message_id);
@@ -705,8 +685,6 @@ function handleSSEEvent(event, data, _container, msgDiv, onToken, onRewrite) {
     }
     default: {
       const entry = S.workflowEventHandlers[event];
-      // Skip a disabled workflow's events. The backend fan-out gate already
-      // suppresses them at the source; this covers the flip-mid-stream window.
       if (entry && typeof entry.handler === "function" && effectiveWorkflowEnabled(entry.workflowId)) {
         let parsed = data;
         try {
@@ -727,23 +705,16 @@ export function agentPayload() {
   return { enable_agent: S.agentEnabled };
 }
 
-// The ONE chat generation lifecycle. Every send/continue/regenerate/super-
-// regenerate/fork-edit/magic-rewrite path streams through this: it flips the UI
-// into streaming, optionally sets the render cutoff, runs an optional caller
-// hook to splice an optimistic message, mounts the streaming bubble, reads the
-// SSE stream, and reconciles via afterStream. `opts`:
-//   • cutoffMsgId   — hide this message and its descendants while streaming
-//                     (regenerate family); the refetch in afterStream restores.
-//   • beforeRender  — sync hook run just before the first paint, for callers
-//                     that splice an optimistic user message + set pendingUserMsg.
-//   • anchorStream  — pin the replacement streaming bubble to its target until
-//                     its content grows beyond the viewport.
-//   • afterDone     — async hook run after afterStream (persona pin, fork repaint).
+export function turnPayload() {
+  return { ...agentPayload(), speaker_member_id: S.pinnedSpeakerId || null };
+}
+
 export async function runStreamRequest(
   path,
   body,
   { cutoffMsgId = null, beforeRender = null, anchorStream = false, afterDone = null } = {},
 ) {
+  S.consumedSpeakerId = body?.speaker_member_id || null;
   setStreaming(true);
   setGenerationPhase("pending");
   $("send-btn").disabled = true;
@@ -759,16 +730,19 @@ export async function runStreamRequest(
 
   renderMessages();
   const ct = $("chat-messages");
-  const msgDiv = createStreamingDiv();
-  if (!S.hideUntilBaked) ct.appendChild(msgDiv);
-  if (cutoffMsgId != null || anchorStream) pinStreamingMessage(msgDiv);
-  else scrollToBottom();
+  const holder = { el: null };
+  if (S.groupCast) {
+    S.currentExchangeId = "pending";
+    S.completedExchangeMessageIds = [];
+  } else {
+    holder.el = createStreamingDiv();
+    if (!S.hideUntilBaked) ct.appendChild(holder.el);
+    if (cutoffMsgId != null || anchorStream) pinStreamingMessage(holder.el);
+    else scrollToBottom();
+  }
   S.abortController = new AbortController();
   try {
     const resp = await streamPost(path, body, S.abortController.signal);
-    // A 500 raised before the generator starts returns a JSON body with no
-    // blank line in it, so sseEvents yields zero frames and the loop exits
-    // clean — the one path that used to fail with no signal whatsoever.
     if (!resp.ok) {
       const raw = await resp.text().catch(() => "");
       const f = parseFailure(raw);
@@ -781,15 +755,12 @@ export async function runStreamRequest(
       };
       if (!S.turnError.headline) S.turnError.headline = `Orb returned HTTP ${resp.status}.`;
     } else {
-      await processSSEStream(resp, ct, msgDiv, S.abortController.signal);
+      await processSSEStream(resp, ct, holder, S.abortController.signal);
     }
   } catch (e) {
     if (e.name === "AbortError") {
       S.wasAborted = true;
     } else {
-      // Client-side stream failure: the backend may still be generating into
-      // an unread connection. Abort it (fetch + POST /stop) so it doesn't run
-      // headless; its fallback persistence keeps whatever streamed so far.
       console.error("Stream failed client-side:", e);
       S.turnError = {
         headline: "Lost connection to Orb.",
@@ -813,20 +784,28 @@ export async function continueFromUser() {
     toast("Last message is not a user message", true);
     return;
   }
-  await runStreamRequest(convUrl(S.activeConvId, "continue"), agentPayload());
+  await runStreamRequest(convUrl(S.activeConvId, "continue"), turnPayload());
 }
 
-// ── Send Message
+export async function speakAsMember(memberId) {
+  if (!S.activeConvId || !memberId || !canStartGeneration()) return;
+  await runStreamRequest(convUrl(S.activeConvId, "speak"), { speaker_member_id: memberId });
+}
+
+document.addEventListener("group-speak-request", (event) => speakAsMember(event.detail || S.pinnedSpeakerId));
+
 export async function sendMessage() {
   if (!S.activeConvId || !canStartGeneration()) return;
 
   const inp = $("chat-input");
   let content = inp.value.trim();
 
-  // Guard against double user turns: if the last message is already from the user,
-  // ask the backend to generate a response for it without creating a new message.
   const lastMsg = S.messages[S.messages.length - 1];
   if (lastMsg?.role === "user" && lastMsg.id) {
+    if (content) {
+      toast(unansweredHint());
+      return;
+    }
     inp.value = "";
     inp.style.height = "auto";
     await continueFromUser();
@@ -835,7 +814,6 @@ export async function sendMessage() {
 
   if (!content) return;
 
-  // Resolve {{user}} and {{char}} placeholders before sending
   content = resolvePlaceholders(content);
   inp.value = "";
   inp.style.height = "auto";
@@ -851,28 +829,22 @@ export async function sendMessage() {
     branch_index: 0,
     prev_branch_id: null,
     next_branch_id: null,
-    // Key matches the renderer's read (`m.user_attachments` in renderMessages)
-    // so the optimistic bubble shows the image during the SSE stream window,
-    // not just after afterStream() re-fetches the server-shaped message.
     user_attachments: attachments,
   };
 
   await runStreamRequest(
     convUrl(S.activeConvId, "send"),
-    { content, attachments, ...agentPayload() },
+    { content, attachments, ...turnPayload() },
     {
       beforeRender() {
         S.messages.push(userMsg);
         S.pendingUserMsg = userMsg;
       },
-      // Any send in an unpinned chat pins the effective persona to it (no-op
-      // once pinned), so legacy and freshly-unpinned chats regain an author.
       afterDone: ensurePersonaPinned,
     },
   );
 }
 
-// ── Regenerate
 export async function regenerate(msgId) {
   if (!S.activeConvId || !canStartGeneration()) return;
   optimisticDropDirectionNotesFrom(msgId);
@@ -881,7 +853,6 @@ export async function regenerate(msgId) {
   });
 }
 
-// ── Super Regenerate
 export async function superRegenerate(msgId) {
   if (!S.activeConvId || !canStartGeneration()) return;
   optimisticDropDirectionNotesFrom(msgId);
@@ -890,7 +861,6 @@ export async function superRegenerate(msgId) {
   });
 }
 
-// ── Magic Rewrite
 export function toggleMagicInput(msgId) {
   S.magicInputMsgId = S.magicInputMsgId === msgId ? null : msgId;
   renderMessages();
@@ -904,8 +874,6 @@ export function toggleMagicInput(msgId) {
   const onMouseDown = (e) => {
     const wrap = document.getElementById(`magic-wrap-${msgId}`);
     if (wrap?.contains(e.target)) return;
-    // If the magic button itself was clicked, its handler will manage the toggle.
-    // Select by semantic class rather than coupling behavior to serialized JS.
     if (e.target.closest(".msg-btn-magic")) {
       document.removeEventListener("mousedown", onMouseDown);
       return;

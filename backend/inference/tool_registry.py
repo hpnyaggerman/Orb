@@ -1,16 +1,13 @@
-"""
-tool_registry.py — Built-in tool schemas and the tool registry.
-"""
+"""Define and assemble built-in tool schemas."""
 
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-# ── Agent tool definitions (OpenAI function-calling format)
+# Agent tool definitions.
 
-# Fixed parameters always present in direct_scene regardless of interactive fragments.
-# Only moods is fixed; all other parameters come from interactive fragments.
+# Fixed parameters always present in direct_scene.
 _DIRECT_SCENE_FIXED_PROPERTIES = {
     "moods": {
         "type": "array",
@@ -21,10 +18,7 @@ _DIRECT_SCENE_FIXED_PROPERTIES = {
 
 _DIRECT_SCENE_FIXED_REQUIRED: list[str] = []
 
-# The Agentic Lorebook selection parameter. It is the sole parameter of the
-# standalone `select_lorebook` tool (see below); the schema declares only the
-# *parameter* — the catalog of selectable values rides the select step's OOC
-# trailing. Kept out of `required` so the Director may select none.
+# The catalog is supplied in the selection step's trailing context.
 _ACTIVE_LOREBOOK_PROPERTY = {
     "selected_lorebook_entries": {
         "type": "array",
@@ -107,27 +101,133 @@ SELECT_LOREBOOK_TOOL = {
 SELECT_LOREBOOK_CHOICE = {"type": "function", "function": {"name": "select_lorebook"}}
 
 
+_PROPOSE_WORLD_CHANGES_DESCRIPTION = (
+    "Propose entries to add or change in the lorebooks, from what just happened. Nothing is "
+    "written until the user reviews and accepts the proposal, so propose only what is worth "
+    "their attention. Leave the operations list empty when there is nothing to record."
+)
+
+# The Dynamic Worlds proposal tool. Like `select_lorebook`, a fixed schema
+# registered statically and enabled per-turn by a feature gate, never by the
+# user's tool toggles. It chooses only between `constant` and `keywords`
+# activation -- every other lorebook field keeps a safe default the user can
+# edit afterwards through the normal reviewed path, which keeps this schema (and
+# therefore the shared per-turn tool blob) small and stable.
+#
+# Every field is one more thing a model can get wrong, so this asks only for
+# what the model alone knows: `op` offers three verbs rather than the five the
+# table stores (`validate_proposal` derives the stored one from the target row),
+# and `rationale` comes first so a model emitting properties in schema order
+# writes the justification before the change it justifies rather than after.
+#
+# Property order is load-bearing the other way round at the top level:
+# `operations` precedes `summary`. The call is forced, so a model that writes a
+# summary first has already declared a proposal exists, and an empty operations
+# list then contradicts the sentence it just wrote -- it fills one in. Enumerate
+# first, describe second, and proposing nothing stays available all the way
+# through the call.
+PROPOSE_WORLD_CHANGES_TOOL = {
+    "type": "function",
+    "function": {
+        "name": "propose_world_changes",
+        "description": _PROPOSE_WORLD_CHANGES_DESCRIPTION,
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "operations": {
+                    "type": "array",
+                    "description": "One entry per proposed change. Empty when nothing durable happened.",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "rationale": {
+                                "type": "string",
+                                "description": "Why this belongs in the lorebook rather than only in the chat history.",
+                            },
+                            "op": {
+                                "type": "string",
+                                "enum": ["create", "revise", "retract"],
+                                "description": (
+                                    "create: something no entry covers yet. revise: the entry named below is "
+                                    "now wrong, supply what it should say instead. retract: the entry named below "
+                                    "no longer holds and nothing takes its place."
+                                ),
+                            },
+                            "target_entry_id": {
+                                "type": "integer",
+                                "description": (
+                                    "The id of the entry being revised or retracted, exactly as listed in the "
+                                    "catalog. Omit for create."
+                                ),
+                            },
+                            "target_world": {
+                                "type": "string",
+                                "description": (
+                                    "For create only: the stable world_id shown in the destination lorebook's "
+                                    "catalog heading. Required when the catalog lists more than one lorebook. "
+                                    "Omit for every other op -- those go wherever the entry they name already is."
+                                ),
+                            },
+                            "name": {
+                                "type": "string",
+                                "description": (
+                                    "Short title for the entry, e.g. the person, place or fact it covers. Omit for retract."
+                                ),
+                            },
+                            "content": {
+                                "type": "string",
+                                "description": "The note itself, stated plainly in one or two sentences. Omit for retract.",
+                            },
+                            "activation": {
+                                "type": "string",
+                                "enum": ["constant", "keywords"],
+                                "description": (
+                                    "constant: something that must be known on every turn. "
+                                    "keywords: about one person, place or thing, shown when it comes up."
+                                ),
+                            },
+                            "keywords": {
+                                "type": "array",
+                                "items": {"type": "string"},
+                                "description": "Words that should bring this entry back. Required for keywords activation.",
+                            },
+                        },
+                        "required": ["rationale", "op"],
+                    },
+                },
+                "summary": {
+                    "type": "string",
+                    "description": "One short sentence describing the operations listed above, for the review card.",
+                },
+            },
+            "required": [],
+        },
+    },
+}
+
+PROPOSE_WORLD_CHANGES_CHOICE = {"type": "function", "function": {"name": "propose_world_changes"}}
+
+
 _GIVE_FEEDBACK_DESCRIPTION = (
     "Step out of character and give the user an out-of-character note about the reply that was "
     "just written. This note is shown to the user, not used to write the story."
 )
 
 
-def build_feedback_tool(feedback_fragments: Sequence[Mapping[str, Any]]) -> dict:
-    """Build the ``give_feedback`` tool schema from the enabled feedback fragments.
+def _build_fragment_tool(name: str, description: str, fragments: Sequence[Mapping[str, Any]]) -> dict:
+    """Build a tool schema whose parameters are exactly one string per fragment.
 
-    Each ``field_type="feedback"`` fragment contributes one string parameter
-    (keyed by fragment id); there are no fixed parameters. Returns an OpenAI
-    function-calling format dict.
+    Shared by the fragment-driven tools: each fragment contributes one string
+    parameter keyed by its id, and there are no fixed parameters. Returns an
+    OpenAI function-calling format dict.
 
-    The schema rides the shared per-turn tools blob (via ``schema_overrides``)
-    so the post-writer feedback step can force ``tool_choice=give_feedback``
-    without a cache miss.
+    These schemas ride the shared per-turn tools blob (via ``schema_overrides``)
+    so their step can force ``tool_choice`` on the tool without a cache miss.
     """
     properties: dict = {}
     required: list[str] = []
 
-    for df in feedback_fragments:
+    for df in fragments:
         fid = df["id"]
         properties[fid] = {"type": "string", "description": df["description"]}
         if df.get("required"):
@@ -136,8 +236,8 @@ def build_feedback_tool(feedback_fragments: Sequence[Mapping[str, Any]]) -> dict
     return {
         "type": "function",
         "function": {
-            "name": "give_feedback",
-            "description": _GIVE_FEEDBACK_DESCRIPTION,
+            "name": name,
+            "description": description,
             "parameters": {
                 "type": "object",
                 "properties": properties,
@@ -145,6 +245,11 @@ def build_feedback_tool(feedback_fragments: Sequence[Mapping[str, Any]]) -> dict
             },
         },
     }
+
+
+def build_feedback_tool(feedback_fragments: Sequence[Mapping[str, Any]]) -> dict:
+    """Build the ``give_feedback`` tool schema from the enabled feedback fragments."""
+    return _build_fragment_tool("give_feedback", _GIVE_FEEDBACK_DESCRIPTION, feedback_fragments)
 
 
 GIVE_FEEDBACK_CHOICE = {"type": "function", "function": {"name": "give_feedback"}}
@@ -159,37 +264,8 @@ _RECORD_DIRECTION_NOTE_DESCRIPTION = (
 
 
 def build_direction_note_tool(direction_note_fragments: Sequence[Mapping[str, Any]]) -> dict:
-    """Build the ``record_direction_note`` tool schema from the enabled direction-note fragments.
-
-    Each ``field_type="direction_note"`` fragment contributes one string parameter
-    (keyed by fragment id); there are no fixed parameters. Returns an OpenAI
-    function-calling format dict.
-
-    The schema rides the shared per-turn tools blob (via ``schema_overrides``) so
-    the direction-note step can force ``tool_choice=record_direction_note`` without
-    a cache miss.
-    """
-    properties: dict = {}
-    required: list[str] = []
-
-    for df in direction_note_fragments:
-        fid = df["id"]
-        properties[fid] = {"type": "string", "description": df["description"]}
-        if df.get("required"):
-            required.append(fid)
-
-    return {
-        "type": "function",
-        "function": {
-            "name": "record_direction_note",
-            "description": _RECORD_DIRECTION_NOTE_DESCRIPTION,
-            "parameters": {
-                "type": "object",
-                "properties": properties,
-                "required": required,
-            },
-        },
-    }
+    """Build the ``record_direction_note`` tool schema from the enabled direction-note fragments."""
+    return _build_fragment_tool("record_direction_note", _RECORD_DIRECTION_NOTE_DESCRIPTION, direction_note_fragments)
 
 
 RECORD_DIRECTION_NOTE_CHOICE = {"type": "function", "function": {"name": "record_direction_note"}}
@@ -290,6 +366,14 @@ TOOLS: dict[str, dict] = {
         "choice": SELECT_LOREBOOK_CHOICE,
         "schema": SELECT_LOREBOOK_TOOL,
     },
+    # Internal, flag-gated (never user-toggleable). Enabled for the turn when the
+    # conversation's linked World has Dynamic Worlds on (see _build_writer_tools_blob);
+    # its fixed schema rides the shared blob so the post-turn proposal step reuses
+    # the cached base. The catalog of existing entries rides that step's OOC trailing.
+    "propose_world_changes": {
+        "choice": PROPOSE_WORLD_CHANGES_CHOICE,
+        "schema": PROPOSE_WORLD_CHANGES_TOOL,
+    },
 }
 
 # Built-in tool names declared as a literal and asserted equal to TOOLS keys at
@@ -301,6 +385,7 @@ BUILTIN_TOOL_NAMES: frozenset[str] = frozenset(
         "editor_apply_patch",
         "editor_rewrite",
         "give_feedback",
+        "propose_world_changes",
         "record_direction_note",
         "select_lorebook",
     }
@@ -313,10 +398,18 @@ assert BUILTIN_TOOL_NAMES == frozenset(TOOLS.keys()), "BUILTIN_TOOL_NAMES drift 
 # the internal forced-step tools that ride the shared per-turn blob (Invariant 3)
 # but must NOT be offered to or triggered by the director loop — give_feedback
 # (post-writer feedback step), record_direction_note (its own step, pre- or
-# post-writer), and select_lorebook (the pre-writer agentic-lorebook select step).
+# post-writer), select_lorebook (the pre-writer agentic-lorebook select step), and
+# propose_world_changes (the post-turn Dynamic Worlds proposal step).
 # So "POST" here means "not a director-loop tool," not a literal pipeline phase.
 PRE_WRITER_TOOLS = {"direct_scene"}
-POST_WRITER_TOOLS = {"editor_apply_patch", "editor_rewrite", "give_feedback", "record_direction_note", "select_lorebook"}
+POST_WRITER_TOOLS = {
+    "editor_apply_patch",
+    "editor_rewrite",
+    "give_feedback",
+    "propose_world_changes",
+    "record_direction_note",
+    "select_lorebook",
+}
 
 assert PRE_WRITER_TOOLS.isdisjoint(POST_WRITER_TOOLS), "phase sets overlap"
 assert PRE_WRITER_TOOLS | POST_WRITER_TOOLS == BUILTIN_TOOL_NAMES, "phase sets must partition built-ins"

@@ -18,7 +18,13 @@ from ..toolkit import (
     set_workflow_character_state,
 )
 from . import pov as pov_mod
-from .composer import assemble_prompts, compose_scene
+from . import subjects as subjects_mod
+from .composer import (
+    addressable_subjects,
+    analyze_scene,
+    assemble_prompts,
+    compose_scene,
+)
 from .config import (
     MAX_REFERENCE_IMAGE_B64,
     MIME_EXTENSIONS,
@@ -37,7 +43,15 @@ from .engine import (
     recorded_edge,
     resolve_and_generate,
 )
-from .references import refetch_references, resolve_references
+from .engine.contracts import ResolvedReference
+from .references import (
+    plan_slots,
+    previous_image,
+    refetch_references,
+    replay_slots,
+    resolve_references,
+)
+from .subjects import Subject
 
 logger = logging.getLogger(__name__)
 SEED_MODULUS = 2**64
@@ -218,6 +232,74 @@ def _consumption(
     return payload
 
 
+def _referenced_subjects(subjects: Sequence[Subject], references: Sequence[ResolvedReference]) -> list[tuple[int, str]]:
+    """Return the subjects represented by sent images."""
+    by_card = {subject.card_id: subject.name for subject in subjects if subject.card_id and subject.name}
+    return [
+        (position, name)
+        for position, reference in enumerate(references, 1)
+        if reference.origin.startswith("character:")
+        for name in (by_card.get(reference.origin.partition(":")[2]),)
+        if name
+    ]
+
+
+def _referenced_cards(sent: Sequence[Mapping[str, Any]]) -> set[str]:
+    """Return the cards represented by sent likenesses."""
+    return {
+        card
+        for entry in sent
+        for origin in (entry.get("origin"),)
+        if isinstance(origin, str) and origin.startswith("character:")
+        for card in (origin.partition(":")[2],)
+        if card
+    }
+
+
+def _names_phrase(names: Sequence[str]) -> str:
+    """A readable list of names, bounded -- a twelve-hander must not print twelve
+    names into one disclosure line."""
+    if len(names) > 3:
+        return f"{', '.join(names[:3])} and {len(names) - 3} others"
+    if len(names) > 1:
+        return f"{', '.join(names[:-1])} and {names[-1]}"
+    return names[0] if names else ""
+
+
+def _uncovered_note(
+    addressable: Sequence[Subject],
+    sent: Sequence[Mapping[str, Any]],
+    declared: int,
+    capacity: int,
+) -> str:
+    """Describe subjects that exceed the available reference slots."""
+    covered = _referenced_cards(sent)
+    in_frame = [subject for subject in addressable if subject.card_id and subject.name]
+    uncovered = [subject.name for subject in in_frame if subject.card_id not in covered]
+    if not uncovered or len(uncovered) == len(in_frame):
+        return ""
+    lead = f"{_names_phrase(uncovered)} {'was' if len(uncovered) == 1 else 'were'} described in the prompt rather than pictured"
+    if declared < capacity:
+        return f"{lead}: this style fills {declared} of its {capacity} reference slots"
+    return f"{lead}: this render carries {capacity} reference image{'' if capacity == 1 else 's'}"
+
+
+def _unfilled_note(unfilled: int, filled: int) -> str:
+    """What an optional slot that resolved to nothing is disclosed as.
+
+    Count-aware because a target may declare several: "drawn from the prompt alone" is
+    only true when *nothing* resolved, and saying it with one of two slots filled tells
+    the user the opposite of what happened.
+    """
+    if not filled:
+        return "no reference image was available, so this was drawn from the prompt alone"
+    plural = unfilled > 1
+    return (
+        f"{unfilled} reference {'images' if plural else 'image'} could not be resolved, "
+        f"so {'they were' if plural else 'it was'} not sent"
+    )
+
+
 def _recorded_references(params: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     """The reference records on a stored image, as a list this hook can count."""
     recorded = params.get("references")
@@ -255,19 +337,52 @@ async def _generate_fresh(
     selected_style = resolve_style(config, style_id)
     adapter = get_adapter(config, selected_style)
     target = adapter.resolve_target(None)
-    character = getattr(ctx, "character", None)
-    profile_owner_name = str(character.get("name") or "") if isinstance(character, Mapping) else ""
-    appearance = str(profile.get("appearance_prompt") or "")
-    references = await resolve_references(
-        target.reference_slots,
+    # The order is load-bearing, and each step depends on the one above it:
+    #
+    #   camera   -> how many subjects there are at all (first-person keeps one)
+    #   subjects -> who this render is a picture of, primary first
+    #   analysis -> which of them is actually in frame
+    #   slots    -> whose likeness leaves the machine, one image per person
+    #   composer -> what the prompt says about the pictures that went with it
+    #
+    # The analyzer sits *above* the slots rather than inside the compose call so that a
+    # member who spoke in the round but walked out of the shot never has their face
+    # uploaded: an edit model handed a likeness the prompt never mentions draws that
+    # person back in. `addressable_subjects` is the join, and it costs no extra call.
+    pov, pov_source = await pov_mod.resolve(mode=config["pov_mode"], history=history)
+    logger.info("[image_gen] camera: %s (from %s)", pov, pov_source)
+    subjects = await subjects_mod.resolve(
+        conversation_id=ctx.conversation_id,
         history=history,
         anchor_id=int(message["id"]),
         character_id=getattr(ctx, "character_id", None),
+        character=getattr(ctx, "character", None),
         profile=profile,
     )
-    unfilled = len(target.reference_slots) - len(references)
-    pov, pov_source = await pov_mod.resolve(mode=config["pov_mode"], history=history)
-    logger.info("[image_gen] camera: %s (from %s)", pov, pov_source)
+    analysis = (
+        await analyze_scene(
+            client=ctx.agent_client,
+            model_name=ctx.agent_model_name,
+            prefix=prefix,
+            settings=ctx.settings,
+            pov=pov,
+            reasoning_on=bool(config.get("prompter_reasoning")),
+            subjects=subjects,
+            supports_negative=target.supports_negative_prompt,
+        )
+        if config.get("scene_analysis")
+        else None
+    )
+    # Hoisted rather than inlined: this is the list the render is actually *of*, so both
+    # the slots and the disclosure below read the same answer rather than the wider
+    # candidate list. The chat image is found once, because the plan depends on whether
+    # there is one -- `previous_or_character` asks for one slot when the chat has an
+    # image and one per character when it does not.
+    addressable = addressable_subjects(subjects, analysis)
+    previous = previous_image(history, int(message["id"]))
+    slots = plan_slots(target, addressable, previous=previous)
+    references = await resolve_references(slots, subjects=addressable, previous=previous)
+    unfilled = len(slots) - len(references)
     scene, avoid, composer_mode = await compose_scene(
         client=ctx.agent_client,
         model_name=ctx.agent_model_name,
@@ -276,12 +391,12 @@ async def _generate_fresh(
         prompt_format=selected_style["prompt_format"],
         pov=pov,
         reasoning_on=bool(config.get("prompter_reasoning")),
-        scene_analysis=bool(config.get("scene_analysis")),
-        appearance=appearance,
-        profile_owner_name=profile_owner_name,
+        analysis=analysis,
+        subjects=subjects,
         extra_instructions=str(selected_style.get("extra_instructions") or ""),
         supports_negative=target.supports_negative_prompt,
         has_references=bool(references),
+        referenced_subjects=_referenced_subjects(subjects, references),
         style_prompt=str(selected_style.get("prompt") or ""),
         style_negative_prompt=str(selected_style.get("negative_prompt") or ""),
         profile_negative_prompt=str(profile.get("negative_prompt") or ""),
@@ -313,7 +428,12 @@ async def _generate_fresh(
     )
     consumption = _consumption(style, prompt, negative, result, md, source_label=adapter.label)
     if unfilled > 0:
-        consumption.setdefault("notes", []).append("no reference image was available, so this was drawn from the prompt alone")
+        consumption.setdefault("notes", []).append(_unfilled_note(unfilled, len(references)))
+    # `md["references"]` rather than `references`: the ladder above may have dropped some
+    # of what was resolved, and this note is about what the image model was given.
+    uncovered = _uncovered_note(addressable, md["references"], len(slots), target.reference_capacity)
+    if uncovered:
+        consumption.setdefault("notes", []).append(uncovered)
     return _attachment(seed, result, md, consumption)
 
 
@@ -470,11 +590,12 @@ async def reroll_gen(ctx, params, seed):
     if not target.supports_seed and ctx.replay:
         notes.append("this provider takes no seed: a fresh render of the same prompt, billed as one, not the original image")
     recorded_references = _recorded_references(params)
-    if recorded_references and not target.reference_slots:
+    replay_targets = replay_slots(target, recorded_references)
+    if recorded_references and not replay_targets:
         references = ()
         notes.append(f"this style does not take reference images, so the original's reference was not sent{mismatch}")
     else:
-        references = await refetch_references(recorded_references, slots=target.reference_slots)
+        references = await refetch_references(recorded_references, slots=replay_targets)
         dropped = len(recorded_references) - len(references)
         if dropped > 0:
             notes.append(f"this style takes fewer reference images, so {dropped} of them were not sent")

@@ -1,6 +1,3 @@
-// Conversation lifecycle: load / select / create / delete, the conversation
-// history modal, history compression, and inline title editing. Split out of
-// chat.js; the public surface is re-exported from chat.js.
 import { api } from "./api.js";
 import { onConvSwitch, stopAll as stopAllAudio } from "./audio_player.js";
 import { renderMessages, resetRenderWindow, setMessages } from "./chat_core.js";
@@ -9,18 +6,16 @@ import { clearInspectedMessage, inspectMessage } from "./chat_messages.js";
 import { stopConversation } from "./chat_stream.js";
 import { resetWorkflowViewportState } from "./chat_workflow.js";
 import { renderDirectionNotesPanel } from "./direction_notes_panel.js";
+import { groupFamily, groupRootId } from "./group_cast.js";
+import { loadGroupCast, renderGroupCast, renderGroupList } from "./group_setup.js";
 import { refreshCharacters, renderCharacters } from "./library.js";
-// Imported from library_fragments.js directly (like settings.js does): going
-// through library.js would widen the library.js → chat.js import cycle.
 import { renderInteractiveFragments, renderMoodFragments } from "./library_fragments.js";
-import { activateAndPrioritizeWorld, deactivateWorld } from "./lorebooks.js";
+import { reflectConversationWorldActivation } from "./lorebooks.js";
 import { closeModal, showConfirmModal, showModal } from "./modal.js";
 import { isUtilityPanelOpen } from "./panels.js";
-// Imported from settings_personas.js directly: going through settings.js would
-// close an import cycle (settings.js → chat.js → this module).
 import { updateUserBtn } from "./settings_personas.js";
 import { sseEvents, streamPost, unescapeSSE } from "./sse.js";
-import { charactersView, S } from "./state.js";
+import { S } from "./state.js";
 import {
   $,
   avatarCell,
@@ -36,30 +31,62 @@ import {
 import { validate } from "./validate.js";
 import { clearTextEffect } from "./workflow_text_effects.js";
 
-// ── Conversations
 export async function loadConversations() {
   S.conversations = await api.get("/conversations");
+  renderGroupList();
 }
 
-// Stash (or clear, with null) the active character's card-embedded fragments
-// for the sidepanel/inspector. Mirrors the backend merge rule: enabled only,
-// and a card fragment whose id collides with a global one is skipped.
-export function stashCardFragments(card) {
-  const frags = card?.extensions?.orb?.fragments;
-  const keep = (list, globals) =>
-    (Array.isArray(list) ? list : []).filter(
-      (f) => f?.id && f.enabled !== false && !globals.some((g) => g.id === f.id),
-    );
-  S.cardMoodFragments = keep(frags?.mood, S.moodFragments);
-  S.cardInteractiveFragments = keep(frags?.interactive, S.interactiveFragments);
+document.addEventListener("group-created", async (event) => {
+  await loadConversations();
+  await selectConversation(event.detail);
+});
+document.addEventListener("group-selected", (event) => selectConversation(event.detail));
+document.addEventListener("group-delete-request", (event) => _deleteGroupFamily(event.detail));
+document.addEventListener("group-cast-updated", () => refreshSceneCardFragments());
+
+export function stashCardFragments(cards) {
+  const list = (Array.isArray(cards) ? cards : [cards]).filter(Boolean);
+  const merge = (pick, globals) => {
+    const claimed = new Set(globals.map((g) => g.id));
+    const out = [];
+    for (const card of list) {
+      const frags = pick(card?.extensions?.orb?.fragments);
+      for (const f of Array.isArray(frags) ? frags : []) {
+        if (!f?.id || f.enabled === false || claimed.has(f.id)) continue;
+        claimed.add(f.id);
+        out.push(f);
+      }
+    }
+    return out;
+  };
+  S.cardMoodFragments = merge((frags) => frags?.mood, S.moodFragments);
+  S.cardInteractiveFragments = merge((frags) => frags?.interactive, S.interactiveFragments);
   renderMoodFragments();
   renderInteractiveFragments();
+}
+
+function sceneCardIds(conv) {
+  if (conv?.kind === "group") {
+    return [...new Set((S.groupCast?.members || []).map((member) => member.character_card_id).filter(Boolean))];
+  }
+  return conv?.character_card_id ? [conv.character_card_id] : [];
+}
+
+export async function refreshSceneCardFragments() {
+  const conv = S.conversations.find((c) => c.id === S.activeConvId);
+  const cards = await Promise.all(
+    sceneCardIds(conv).map((cardId) => api.get(`/characters/${cardId}`).catch(() => null)),
+  );
+  stashCardFragments(cards);
 }
 
 export function resetChatUI() {
   stopAllAudio();
   S.activeCharId = null;
   S.activeConvId = null;
+  S.groupCast = null;
+  S.pinnedSpeakerId = null;
+  S.consumedSpeakerId = null;
   stashCardFragments(null);
   S.messages = [];
   S.lastDirectorData = null;
@@ -68,8 +95,10 @@ export function resetChatUI() {
   S.inspectedDirectorData = null;
   $("chat-title-text").textContent = "Select a character";
   $("chat-avatar").textContent = CHAT_AVATAR_ICON;
+  $("chat-avatar").style.cursor = "";
   $("chat-input").disabled = true;
   $("send-btn").disabled = true;
+  renderGroupCast();
   renderMessages();
   renderInspector();
   updateUserBtn(); // no active character → drop any locked-to-character icon
@@ -83,23 +112,15 @@ export async function selectChar(id, source = "recent") {
   if (S.activeCharId === id || S._selectCharLock) return;
   S._selectCharLock = true;
   try {
-    const oldWorldId = charactersView().find((c) => c.id === S.activeCharId)?.world_id || null;
-    const newWorldId = charactersView().find((c) => c.id === id)?.world_id || null;
     S.activeCharId = id;
     renderCharacters();
-    if (oldWorldId && oldWorldId !== newWorldId) {
-      await deactivateWorld(oldWorldId);
-    }
     const existing = S.conversations.find((c) => c.character_card_id === id);
     if (existing) {
-      // If selecting from library modal, bump the conversation's access time so
-      // it sorts to the top — without lying about updated_at (content change).
       if (source === "library") {
         try {
           await api.post(`/conversations/${existing.id}/touch`);
           existing.last_accessed_at = new Date().toISOString();
         } catch (e) {
-          // silently fail, not critical
           console.warn("Failed to touch conversation:", e);
         }
       }
@@ -113,7 +134,6 @@ export async function selectChar(id, source = "recent") {
         toast(e.message, true);
       }
     }
-    // Refresh the recent characters panel to reflect updated timestamps
     refreshCharacters();
   } finally {
     S._selectCharLock = false;
@@ -126,16 +146,34 @@ export async function newConvForChar(id) {
     return;
   }
   try {
-    const oldWorldId = charactersView().find((c) => c.id === S.activeCharId)?.world_id || null;
-    const newWorldId = charactersView().find((c) => c.id === id)?.world_id || null;
     const conv = await api.post("/conversations", { character_card_id: id });
     await loadConversations();
     S.activeCharId = id;
     renderCharacters();
-    if (oldWorldId && oldWorldId !== newWorldId) {
-      await deactivateWorld(oldWorldId);
-    }
     await selectConversation(conv.id);
+  } catch (e) {
+    toast(e.message, true);
+  }
+}
+
+export async function newConversationHere() {
+  const conv = S.conversations.find((c) => c.id === S.activeConvId);
+  if (conv?.kind !== "group") {
+    if (!S.activeCharId) {
+      toast("Select a character first", true);
+      return;
+    }
+    await newConvForChar(S.activeCharId);
+    return;
+  }
+  if (S.isStreaming) {
+    toast("Stop generation before starting a new conversation", true);
+    return;
+  }
+  try {
+    const fresh = await api.post(convUrl(conv.id, "group-conversation"));
+    await loadConversations();
+    await selectConversation(fresh.id);
   } catch (e) {
     toast(e.message, true);
   }
@@ -146,26 +184,28 @@ export async function selectConversation(id) {
     toast("Stop generation before switching conversations", true);
     return;
   }
-  const oldWorldId = charactersView().find((c) => c.id === S.activeCharId)?.world_id || null;
   S.activeConvId = id;
   S.lastDirectorData = null;
   S.reasoningDirector = "";
   S.reasoningWriter = "";
   S.reasoningEditor = "";
-  S.reasoningByPass = {}; // inspectMessage rehydrates the fields above but not this buffer, so it must be reset here
+  S.reasoningByPass = {};
   S.reasoningPassActive = 0;
   S.reasoningPassSelected = 0;
   const conv = S.conversations.find((c) => c.id === id);
-  if (conv?.character_card_id && S.activeCharId !== conv.character_card_id) {
-    S.activeCharId = conv.character_card_id;
-    renderCharacters();
-  }
-  // The user button shows the persona in force here (pin → default); opening a
-  // pinned conversation never mutates the global default.
+  await loadGroupCast(conv);
+  const prevCharId = S.activeCharId;
+  if (conv?.kind === "group") S.activeCharId = null;
+  else if (conv?.character_card_id) S.activeCharId = conv.character_card_id;
+  if (S.activeCharId !== prevCharId) renderCharacters();
+  renderGroupList();
   updateUserBtn();
   $("chat-title-text").textContent = conv ? conv.title || conv.character_name : "";
   const av = $("chat-avatar");
-  if (conv?.character_card_id) {
+  av.style.cursor = conv?.kind === "group" ? "pointer" : "";
+  if (conv?.kind === "group") {
+    av.textContent = "👥";
+  } else if (conv?.character_card_id) {
     av.innerHTML = avatarCell(`${avatarUrl(conv.character_card_id)}?t=${Date.now()}`, {
       icon: CHAT_AVATAR_ICON,
       attrs: 'onclick="showAvatarPopup()" style="cursor:pointer"',
@@ -173,60 +213,42 @@ export async function selectConversation(id) {
   } else {
     av.textContent = CHAT_AVATAR_ICON;
   }
-  const hasExpr = (S.characters || []).find((c) => c.id === conv?.character_card_id)?.has_expressions;
-  av.classList.toggle("has-expr-halo", !!hasExpr);
+  const expressive = (cardId) => Boolean((S.characters || []).find((c) => c.id === cardId)?.has_expressions);
+  const hasExpr = conv?.kind === "group" ? sceneCardIds(conv).some(expressive) : expressive(conv?.character_card_id);
+  av.classList.toggle("avatar-halo", hasExpr);
   $("chat-input").disabled = false;
   $("send-btn").disabled = false;
 
-  // If the character has a linked lorebook, activate it and move it to the top
-  if (conv?.character_card_id) {
-    const char = charactersView().find((c) => c.id === conv.character_card_id);
-    if (char?.world_id) {
-      await activateAndPrioritizeWorld(char.world_id);
-    }
+  if (conv) {
+    const activation = await api.post(convUrl(id, "activate"));
+    reflectConversationWorldActivation(activation.world_ids);
   }
 
-  const newWorldId = charactersView().find((c) => c.id === S.activeCharId)?.world_id || null;
-  if (oldWorldId && oldWorldId !== newWorldId) {
-    await deactivateWorld(oldWorldId);
-  }
-
-  // Fetch messages, director state, and the full card (for its embedded
-  // fragments — the list projection omits extensions) in parallel.
-  const [msgs, directorState, card] = await Promise.all([
+  const cardIds = sceneCardIds(conv);
+  const [msgs, directorState, ...cards] = await Promise.all([
     api.get(convUrl(id, "messages")),
     api.get(convUrl(id, "director")),
-    conv?.character_card_id ? api.get(`/characters/${conv.character_card_id}`).catch(() => null) : null,
+    ...cardIds.map((cardId) => api.get(`/characters/${cardId}`).catch(() => null)),
   ]);
   setMessages(msgs);
   S.directorState = directorState;
-  stashCardFragments(card);
-  // Render only the trailing window first; older messages backfill on scroll-up
-  // and during idle time, so switch latency no longer scales with history length.
+  stashCardFragments(cards);
   resetRenderWindow();
   S.editingMsgId = null;
   S.magicInputMsgId = null;
-  // Reset viewport-tracking state before re-rendering so each conv-open
-  // starts a fresh "what has been reported" session.
   resetWorkflowViewportState();
   clearTextEffect();
   onConvSwitch();
-  // Fresh conversation: re-enable autoscroll (the prior conv may have disabled it
-  // by scrolling up) and snap to the bottom on the first synchronous paint so the
-  // chat opens at the latest message with no visible top-to-bottom scroll.
   setChatFollowing(true);
   renderMessages(true);
   scrollToBottom();
-  // Fetch the director-log for the inspector after first paint — it's a separate
-  // round-trip and must not gate the visible switch.
+  if (conv?.kind === "group" && !S.messages.length) $("chat-input").focus();
   const lastAsst = [...S.messages].reverse().find((m) => m.role === "assistant" && m.id);
   if (lastAsst) {
     inspectMessage(lastAsst.id);
   } else {
     clearInspectedMessage();
   }
-  // The notes panel shows the conversation's accumulated notes, so refresh it on a
-  // switch (it only otherwise refreshes on open, after a stream, and on revisit).
   if (isUtilityPanelOpen("direction-notes-panel")) renderDirectionNotesPanel();
 }
 
@@ -246,10 +268,19 @@ function confirmDeleteConversation(id, msgCount, afterDelete) {
       try {
         await api.del(`/conversations/${id}`);
         if (S.activeConvId === id) {
+          const wasGroup = S.conversations.find((item) => item.id === id)?.kind === "group";
           S.activeConvId = null;
           S.messages = [];
           $("chat-input").disabled = true;
           $("send-btn").disabled = true;
+          if (wasGroup) {
+            S.groupCast = null;
+            S.pinnedSpeakerId = null;
+            S.consumedSpeakerId = null;
+            $("chat-title-text").textContent = "Select a character";
+            $("chat-avatar").textContent = CHAT_AVATAR_ICON;
+            renderGroupCast();
+          }
           renderMessages();
         }
         await afterDelete();
@@ -260,39 +291,71 @@ function confirmDeleteConversation(id, msgCount, afterDelete) {
   );
 }
 
-async function _deleteConversation(id) {
-  const conv = S.conversations.find((c) => c.id === id);
-  confirmDeleteConversation(
-    id,
-    conv?.message_count ?? (S.activeConvId === id ? S.messages.length : null),
-    loadConversations,
+async function _deleteGroupFamily(rootId) {
+  const family = groupFamily(S.conversations, rootId);
+  if (!family.length) return;
+  const root = family.find((conv) => conv.id === rootId) || family[0];
+  const messages = family.reduce((total, conv) => total + (conv.message_count ?? 0), 0);
+  const scale =
+    family.length > 1
+      ? `${family.length} conversations · ${messages} message${messages !== 1 ? "s" : ""}`
+      : `${messages} message${messages !== 1 ? "s" : ""} in this conversation`;
+  showConfirmModal(
+    {
+      title: "Delete Group",
+      message: `Delete "${root.title}" and everything in it?`,
+      confirmText: "Delete",
+      extraHtml: `<p style="color:var(--text-muted);font-size:0.88em;margin-top:8px">${esc(scale)}</p>`,
+    },
+    async () => {
+      try {
+        await api.del(convUrl(root.id, "group"));
+        if (family.some((conv) => conv.id === S.activeConvId)) resetChatUI();
+        await loadConversations();
+      } catch (e) {
+        toast(e.message, true);
+      }
+    },
   );
 }
 
-export async function deleteConversationFromModal(id) {
+export async function deleteConversationFromModal(id, rootId = "") {
   const conv = S.conversations.find((c) => c.id === id);
-  confirmDeleteConversation(id, conv?.message_count ?? null, showConvHistoryModal);
+  confirmDeleteConversation(id, conv?.message_count ?? null, () =>
+    showConvHistoryModal(rootId ? { groupRootId: rootId } : null),
+  );
 }
 
-export async function showConvHistoryModal() {
-  if (!S.activeCharId) {
+function convHistoryScope() {
+  const conv = S.conversations.find((c) => c.id === S.activeConvId);
+  if (conv?.kind === "group") return { groupRootId: groupRootId(conv) };
+  return S.activeCharId ? { charId: S.activeCharId } : null;
+}
+
+export async function showConvHistoryModal(scope = null) {
+  const target = scope || convHistoryScope();
+  if (!target) {
     toast("Select a character first", true);
     return;
   }
   await loadConversations();
-  const convs = S.conversations.filter((c) => c.character_card_id === S.activeCharId);
+  const convs = target.groupRootId
+    ? groupFamily(S.conversations, target.groupRootId)
+    : S.conversations.filter((c) => c.character_card_id === target.charId);
   if (!convs.length) {
     toast("No conversations yet", true);
     return;
   }
-  const char = S.characters.find((c) => c.id === S.activeCharId);
-  const charName = char ? char.name : "Character";
+  const scopeName = target.groupRootId
+    ? convs.find((c) => c.id === target.groupRootId)?.title || convs[0].title || "Group"
+    : S.characters.find((c) => c.id === target.charId)?.name || "Character";
+  const rootAttr = target.groupRootId || "";
   const items = convs
     .map((c) => {
       const isActive = c.id === S.activeConvId;
       const preview = esc((c.last_message_preview || "").substring(0, 80));
       const title = esc(c.title || c.character_name || "Untitled");
-      const ts = c.updated_at || c.created_at; // burger menu shows last *updated*, not last accessed
+      const ts = c.updated_at || c.created_at;
       const count = c.message_count ?? 0;
       const pinnedPersona = c.persona_lock_id
         ? (S.personas || []).find((p) => p.id === c.persona_lock_id)?.name || null
@@ -303,7 +366,7 @@ export async function showConvHistoryModal() {
       <div class="conv-history-meta">
         <span class="conv-history-title">${title}</span>
         <span class="conv-history-date">${formatRelativeDate(ts)}</span>
-        <button class="conv-history-delete" title="Delete conversation" onclick="event.stopPropagation();deleteConversationFromModal('${c.id}')">&#x2715;</button>
+        <button class="conv-history-delete" title="Delete conversation" onclick="event.stopPropagation();deleteConversationFromModal('${c.id}','${rootAttr}')">&#x2715;</button>
       </div>
       ${
         preview
@@ -315,15 +378,11 @@ export async function showConvHistoryModal() {
     })
     .join("");
   showModal(`
-    <h2>Conversations — ${esc(charName)}</h2>
+    <h2>Conversations — ${esc(scopeName)}</h2>
     <div class="modal-list">${items}</div>
     <div class="modal-actions"><button class="btn" onclick="closeModal()">Close</button></div>`);
 }
 
-// Create Checkpoint: duplicate the current conversation's active path into a new
-// conversation. User uploads, director state, and inspector logs are carried;
-// alternate branches and workflow-generated artifacts are not. The user stays in
-// the current chat (the copy is a snapshot to branch from later).
 export async function createCheckpoint() {
   if (!S.activeConvId) {
     toast("No active conversation", true);
@@ -342,8 +401,6 @@ export async function createCheckpoint() {
     toast(`Failed to create checkpoint: ${e.message}`, true);
   }
 }
-
-// History Compression
 
 let _compressKeepCount = 4;
 let _compressAbort = null;
@@ -438,8 +495,6 @@ export async function generateCompressionSummary() {
   let summaryText = "";
 
   try {
-    // Streams an SSE token summary over the app-wide sse.js path. The summarize
-    // route emits only `token` (text, newline-escaped) and `error` events.
     const resp = await streamPost(
       `/conversations/${S.activeConvId}/summarize`,
       { keep_count: _compressKeepCount, custom_instructions: customInstructions },
@@ -502,7 +557,6 @@ export async function applyCompression() {
   }
 }
 
-// ── Title Edit
 let _titleEditBackup = "";
 
 export function startEditTitle() {

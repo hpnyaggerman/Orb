@@ -50,6 +50,7 @@ CREATE TABLE IF NOT EXISTS settings (
     workflows_globally_enabled INTEGER NOT NULL DEFAULT 1,
     workflow_enabled TEXT NOT NULL DEFAULT '{}',
     local_ml_enabled TEXT NOT NULL DEFAULT '{}',
+    local_ml_config TEXT NOT NULL DEFAULT '{}',
     attachment_cache_budget_bytes INTEGER NOT NULL DEFAULT 524288000,
     attachment_access_counter INTEGER NOT NULL DEFAULT 0,
     generated_chars INTEGER DEFAULT NULL
@@ -77,8 +78,21 @@ CREATE TABLE IF NOT EXISTS conversations (
     active_leaf_id INTEGER REFERENCES messages(id) ON DELETE SET NULL,
     workflow_state TEXT DEFAULT NULL,
     persona_lock_id INTEGER REFERENCES user_personas(id) ON DELETE SET NULL,
-    macro_seed TEXT NOT NULL DEFAULT ''
+    macro_seed TEXT NOT NULL DEFAULT '',
+    kind TEXT NOT NULL DEFAULT 'solo' CHECK (kind IN ('solo', 'group')),
+    group_turn_mode TEXT NOT NULL DEFAULT 'director' CHECK (group_turn_mode IN ('manual', 'round_robin', 'director')),
+    group_max_speakers INTEGER NOT NULL DEFAULT 3 CHECK (group_max_speakers BETWEEN 1 AND 8),
+    group_context_mode TEXT NOT NULL DEFAULT 'private' CHECK (group_context_mode IN ('private', 'shared', 'swap')),
+    group_sheet_updates INTEGER NOT NULL DEFAULT 0 CHECK (group_sheet_updates IN (0, 1)),
+    -- Which group this conversation belongs to: the id of the conversation the
+    -- family descends from. NULL means "I am that root", so a plain group needs
+    -- no write here and only forks carry a value. ON DELETE SET NULL is the
+    -- floor, not the plan -- delete_conversation() promotes a surviving child
+    -- to root first, so a family outlives the conversation it started as.
+    group_root_id TEXT DEFAULT NULL REFERENCES conversations(id) ON DELETE SET NULL
 );
+
+CREATE INDEX IF NOT EXISTS idx_conversations_group_root ON conversations(group_root_id);
 
 CREATE TABLE IF NOT EXISTS character_cards (
     id TEXT PRIMARY KEY,
@@ -114,17 +128,43 @@ CREATE TABLE IF NOT EXISTS character_expressions (
     PRIMARY KEY (character_card_id, label)
 );
 
+CREATE TABLE IF NOT EXISTS group_members (
+    id TEXT PRIMARY KEY,
+    conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    speaker_key TEXT NOT NULL,
+    character_card_id TEXT DEFAULT NULL,
+    display_name TEXT NOT NULL,
+    public_profile_override TEXT DEFAULT NULL,
+    card_sheet_override TEXT DEFAULT NULL,
+    member_kind TEXT NOT NULL DEFAULT 'character' CHECK (member_kind IN ('character', 'narrator')),
+    sort_order INTEGER NOT NULL DEFAULT 0,
+    muted INTEGER NOT NULL DEFAULT 0 CHECK (muted IN (0, 1)),
+    active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1)),
+    workflow_state TEXT DEFAULT NULL,
+    UNIQUE(conversation_id, speaker_key)
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_group_member_active_card
+ON group_members(conversation_id, character_card_id)
+WHERE active = 1 AND character_card_id IS NOT NULL;
+
 CREATE TABLE IF NOT EXISTS messages (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
     role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
     content TEXT NOT NULL,
+    writer_draft TEXT DEFAULT NULL,
     turn_index INTEGER NOT NULL,
     parent_id INTEGER REFERENCES messages(id) ON DELETE CASCADE,
     progressive_fields TEXT NOT NULL DEFAULT '{}',
     created_at TEXT NOT NULL,
-    workflow_state TEXT DEFAULT NULL
+    workflow_state TEXT DEFAULT NULL,
+    speaker_member_id TEXT DEFAULT NULL REFERENCES group_members(id) ON DELETE SET NULL,
+    exchange_id TEXT DEFAULT NULL
 );
+
+CREATE INDEX IF NOT EXISTS idx_messages_exchange ON messages(conversation_id, exchange_id);
+CREATE INDEX IF NOT EXISTS idx_messages_speaker ON messages(speaker_member_id);
 
 CREATE TABLE IF NOT EXISTS director_state (
     conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
@@ -238,6 +278,8 @@ CREATE TABLE IF NOT EXISTS worlds (
     id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
     enabled BOOLEAN NOT NULL DEFAULT 1,
+    dynamic_enabled INTEGER NOT NULL DEFAULT 0,
+    content_revision INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -257,9 +299,59 @@ CREATE TABLE IF NOT EXISTS lorebook_entries (
     priority INTEGER NOT NULL DEFAULT 100,
     enabled BOOLEAN NOT NULL DEFAULT 1,
     sort_order INTEGER NOT NULL DEFAULT 0,
+    entry_layer TEXT NOT NULL DEFAULT 'authored' CHECK (entry_layer IN ('authored', 'dynamic')),
+    entry_revision INTEGER NOT NULL DEFAULT 0,
+    overlay_action TEXT NOT NULL DEFAULT '' CHECK (overlay_action IN ('', 'add', 'replace', 'suppress')),
+    supersedes_entry_id INTEGER DEFAULT NULL REFERENCES lorebook_entries(id) ON DELETE SET NULL,
+    archived INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+CREATE INDEX IF NOT EXISTS idx_lorebook_overlay ON lorebook_entries(world_id, entry_layer, archived);
+
+CREATE TABLE IF NOT EXISTS world_changesets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    world_id TEXT NOT NULL REFERENCES worlds(id) ON DELETE CASCADE,
+    status TEXT NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'applied', 'rejected', 'stale', 'superseded', 'reverted')),
+    base_revision INTEGER NOT NULL DEFAULT 0,
+    applied_revision INTEGER DEFAULT NULL,
+    source_user_message_id INTEGER DEFAULT NULL REFERENCES messages(id) ON DELETE SET NULL,
+    source_assistant_message_id INTEGER DEFAULT NULL REFERENCES messages(id) ON DELETE SET NULL,
+    source_conversation_id TEXT DEFAULT NULL REFERENCES conversations(id) ON DELETE SET NULL,
+    source_character_label TEXT NOT NULL DEFAULT '',
+    source_conversation_label TEXT NOT NULL DEFAULT '',
+    origin TEXT NOT NULL DEFAULT 'agent'
+        CHECK (origin IN ('agent', 'undo', 'reset', 're_evaluate', 'manual')),
+    summary TEXT NOT NULL DEFAULT '',
+    operations TEXT NOT NULL DEFAULT '[]',
+    before_entries TEXT NOT NULL DEFAULT '[]',
+    after_entries TEXT NOT NULL DEFAULT '[]',
+    reverts_changeset_id INTEGER DEFAULT NULL REFERENCES world_changesets(id) ON DELETE SET NULL,
+    supersedes_changeset_id INTEGER DEFAULT NULL REFERENCES world_changesets(id) ON DELETE SET NULL,
+    created_at TEXT NOT NULL,
+    decided_at TEXT DEFAULT NULL,
+    applied_at TEXT DEFAULT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_changeset_world_status ON world_changesets(world_id, status);
+CREATE INDEX IF NOT EXISTS idx_changeset_source_asst ON world_changesets(source_assistant_message_id);
+
+CREATE TABLE IF NOT EXISTS member_sheet_proposals (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+    member_id TEXT NOT NULL REFERENCES group_members(id) ON DELETE CASCADE,
+    exchange_id TEXT NOT NULL DEFAULT '',
+    base_sheet TEXT NOT NULL DEFAULT '',
+    proposed_sheet TEXT NOT NULL,
+    summary TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'applied', 'rejected', 'stale')),
+    created_at TEXT NOT NULL,
+    decided_at TEXT DEFAULT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_sheet_proposal_conv_status ON member_sheet_proposals(conversation_id, status);
 
 CREATE TABLE IF NOT EXISTS direction_notes (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

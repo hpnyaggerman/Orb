@@ -1,6 +1,3 @@
-/* ═══════════════════════════════════════════
-   3. Chat Area
-   ═══════════════════════════════════════════ */
 #chat-header {
   display: flex;
   align-items: center;
@@ -94,15 +91,11 @@
   display: flex;
   flex-direction: column;
   overflow-y: auto;
-  /* Orb owns restoration/follow behavior. Native anchoring races innerHTML
-     replacement and explicit target scrolls, moving the viewport a second time. */
   overflow-anchor: none;
   padding: 24px 20px 16px;
   scroll-behavior: smooth;
 }
 
-/* Keep a short conversation attached to the composer. Once the messages exceed
-   the viewport the auto margin resolves to zero and normal scrolling takes over. */
 #chat-messages > .message:first-child {
   margin-top: auto;
 }
@@ -112,9 +105,6 @@
 }
 
 #chat-messages.audio-reserve-animating {
-  /* Smoothly collapse the audio bar's reserved bottom space on close
-     (audio_transport.js): as padding-bottom shrinks, the view rides down to the
-     new bottom. Added only for the close animation -- open sets padding instantly. */
   transition: padding-bottom 0.25s ease;
 }
 
@@ -122,7 +112,6 @@
 #chat-messages::-webkit-scrollbar-track { background: transparent; }
 #chat-messages::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 
-/* ── Messages ── */
 .message {
   flex-shrink: 0;
   margin-bottom: 0px;
@@ -133,12 +122,11 @@
   position: relative;
   content-visibility: auto;
   contain-intrinsic-size: auto 300px;
+  /* content-visibility implies paint containment, which clips the bubble's own
+     drop shadow at the right edge. Widen the clip so themed shadows survive. */
+  overflow-clip-margin: 8px;
 }
 
-/* renderMessages() replaces every message node, so content-visibility has no
-   remembered size for the new nodes yet. Keep the replacement fully measurable
-   until scroll restoration is complete; otherwise long off-screen messages use
-   the 300px intrinsic fallback and the viewport restores to the wrong message. */
 #chat-messages.measuring-render .message {
   content-visibility: visible;
 }
@@ -186,7 +174,6 @@
 
 .message .msg-body p { margin-bottom: .6em; }
 .message .msg-body p:last-child { margin-bottom: 0; }
-/* half-line spacer for double linebreaks: .5 x line-height (1.65) = 1:1.5 gap */
 .message .msg-body .pbreak { display: block; height: .825em; }
 .message .msg-body em { font-style: italic; color: var(--text-secondary); }
 .message .msg-body strong { font-weight: 600; }
@@ -203,8 +190,6 @@
   margin: .5em 0;
   overflow-x: auto;
 }
-/* The wrapper owns the vertical margin so the toolbar can anchor to the pre's
-   top-right corner without the pre's own margin offsetting it. */
 .message .msg-body .code-block pre { margin: 0; }
 .message .msg-body pre code {
   font-family: ui-monospace, 'Cascadia Code', 'Fira Code', monospace;
@@ -212,13 +197,11 @@
   white-space: pre;
   color: var(--text-primary);
 }
-/* Word-wrap toggle: opt-in soft wrapping for long lines. */
 .message .msg-body .code-block.wrap pre code {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
 
-/* Code-block toolbar: word-wrap + copy, pinned top-right, revealed on hover. */
 .message .msg-body .code-block-bar {
   position: absolute;
   top: 6px;
@@ -231,7 +214,6 @@
 }
 .message .msg-body .code-block:hover .code-block-bar,
 .message .msg-body .code-block:focus-within .code-block-bar { opacity: 1; }
-/* Touch devices have no hover; keep the controls discoverable but subdued. */
 @media (hover: none) {
   .message .msg-body .code-block-bar { opacity: .65; }
 }
@@ -267,7 +249,6 @@
   padding: .1em .4em;
 }
 
-/* Workflow text units: clickable affordance + transient effects */
 .message .msg-body .seg.seg-clickable { cursor: pointer; }
 .message .msg-body .seg.seg-multi {
   text-decoration: underline dotted var(--accent-dim);
@@ -288,8 +269,6 @@
   50% { background: var(--accent-glow); }
 }
 
-/* Slop scorer: tint flagged sentences (alpha scaled by confidence via --slop-a),
-   a small superscript % after each, and a summary chip under the toolbar. */
 .message .msg-body .seg.slop-flag {
   background: color-mix(in srgb, var(--red, #c45d5d) var(--slop-a, 30%), transparent);
   border-radius: 2px;
@@ -365,7 +344,48 @@
 }
 .wf-claim-item:hover { background: var(--accent-glow); color: var(--accent); }
 
-/* Editor diff highlights */
+.message .msg-rewriting {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.message .msg-rewriting .dot {
+  width: 5px;
+  height: 5px;
+  background: var(--accent);
+  border-radius: 50%;
+  animation: pulse 1.5s infinite;
+}
+
+.message.prose-rewriting .msg-role { flex-wrap: wrap; }
+
+.message.prose-rewriting .msg-body {
+  position: relative;
+  border-color: var(--accent-dim);
+}
+
+.message.prose-rewriting .msg-body::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: linear-gradient(to right, var(--accent) 0, var(--accent) 2px, transparent 2px);
+  pointer-events: none;
+  animation: pulse 1.5s infinite;
+}
+
+.message.prose-rewriting .msg-toolbar { opacity: 1; }
+
+@media (prefers-reduced-motion: reduce) {
+  .message .msg-rewriting .dot,
+  .message.prose-rewriting .msg-body::before {
+    animation: none;
+  }
+}
+
 .diff-change {
   background: var(--accent-glow);
   border-bottom: 1.5px solid var(--accent-dim);
@@ -383,7 +403,6 @@
   text-decoration-color: var(--red);
 }
 
-/* Message toolbar */
 .msg-toolbar {
   display: flex;
   align-items: center;
@@ -414,6 +433,9 @@
   background: var(--bg-hover);
 }
 
+.msg-toolbar button:disabled { opacity: .45; cursor: default; }
+.msg-toolbar button:disabled:hover { color: var(--text-muted); background: none; }
+
 .msg-toolbar .msg-btn-del { color: var(--red); opacity: .6; }
 .msg-toolbar .msg-btn-del:hover { color: var(--red); opacity: 1; background: var(--bg-hover); }
 
@@ -440,7 +462,6 @@
 .magic-input:focus { border-color: var(--accent); }
 .magic-apply { flex: none; }
 
-/* Swipe navigation */
 .swipe-nav {
   display: inline-flex;
   align-items: center;
@@ -480,7 +501,6 @@
   text-align: center;
 }
 
-/* Inline edit mode */
 .msg-edit-area textarea {
   font-family: var(--font-prose);
   font-size: var(--font-prose-size);
@@ -506,7 +526,6 @@
   justify-content: flex-end;
 }
 
-/* Typing indicator */
 .typing-indicator {
   display: inline-flex;
   gap: 4px;
@@ -532,8 +551,6 @@
   30%           { opacity: 1; }
 }
 
-/* Director badge */
-/* Class .director-badge not referenced in JS/HTML, but ID #active-director-badge is used. Keep for now. */
 .director-badge {
   display: inline-flex;
   align-items: center;
@@ -562,7 +579,6 @@
   50%      { opacity: 1; }
 }
 
-/* ── Chat Input ── */
 #chat-input-area {
   padding: 12px 20px;
   border-top: 1px solid var(--border);
@@ -612,7 +628,6 @@
 
 #burger-dropdown.open { display: block; }
 
-/* ── Attachment Preview ── */
 .attachment-preview {
   display: flex;
   flex-wrap: wrap;
@@ -663,13 +678,6 @@
   cursor: zoom-in;
 }
 
-/* Render at the image's natural size, but never wider than the message column
-   has when the inspector is expanded. width:auto (not 100%) keeps the rendered
-   width at min(naturalWidth, cap), so small images are never upscaled past 100%
-   of their original size (which would blur them). The cap is a fixed width
-   derived from the viewport minus the sidebar + inspector panels, so
-   collapsing/expanding the sidepanel doesn't resize the image; min(100%, …)
-   keeps it within the message box. */
 .msg-image {
   display: block;
   width: auto;
@@ -689,8 +697,6 @@
   word-break: break-all;
 }
 
-/* On mobile the side panels are overlays, so the chat column spans the full
-   width — cap the image to the message box instead of the panel-based calc. */
 @media (max-width: 900px) {
   .msg-image { max-width: 100%; }
 }
@@ -804,9 +810,6 @@
 
 #chat-input:focus { border-color: var(--accent-dim); }
 
-/* Ghost-text overlay: a mirror sized exactly like the textarea. The draft is
-   re-rendered transparent so the gray suggestion lands right after the caret.
-   Only shown when the caret is at the end of the draft (see chat_composer.js). */
 #chat-ghost {
   position: absolute;
   inset: 0;
@@ -825,9 +828,6 @@
 
 #chat-ghost .ghost-suggestion { color: var(--text-secondary); opacity: .55; }
 
-/* Tap-to-accept chip for the ghost suggestion: mobile keyboards have no Tab,
-   so on coarse-pointer devices the suggestion also floats above the input bar
-   as a tappable pill (predictive-keyboard pattern). Desktop stays Tab-only. */
 #chat-ghost-chip { display: none; }
 
 @media (pointer: coarse) {
@@ -882,7 +882,6 @@
 
 #stop-btn:hover { background: #b04a4a; }
 
-/* Conversation history items (burger dropdown) */
 .conv-history-item {
   padding: 10px 14px;
   border-bottom: 1px solid var(--border);
@@ -958,7 +957,6 @@
   color: var(--border);
 }
 
-/* Empty state */
 .empty-state {
   display: flex;
   flex-direction: column;
@@ -1007,8 +1005,6 @@
   margin-top: 4px;
 }
 
-/* Favorite character is the hero of the grid: it spans the full row and leads
-   with the portrait, so the eye lands on a face rather than a number. */
 .stat-card-favorite {
   grid-column: 1 / -1;
   text-align: left;

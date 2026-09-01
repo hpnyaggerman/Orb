@@ -9,20 +9,26 @@ export function isLoopbackUrl(apiUrl) {
   return host === "127.0.0.1" || host === "localhost" || host === "::1" || host === "0:0:0:0:0:0:0:1";
 }
 
+// Bump this only when a render can upload more image data.
+const IMAGE_DISCLOSURE_VERSION = "-images-v2";
+
+const SENDS_IMAGES =
+  "A reference image is turned on, so images from your conversations are uploaded there too — " +
+  "the character reference photo or card art for the character each picture is of, or the previous " +
+  "image in the chat. ";
+
 export function privacyDisclosure({ source, apiUrl, providerId, providerLabel, sendsImages }) {
+  const scope = sendsImages ? IMAGE_DISCLOSURE_VERSION : "";
   if (source === "cloud") {
     const who = providerLabel || providerId || "this provider";
-    const key = `orb:image-gen-privacy-cloud${sendsImages ? "-images" : ""}:${providerId || "unknown"}`;
+    const key = `orb:image-gen-privacy-cloud${scope}:${providerId || "unknown"}`;
     return {
       key,
       message:
         `Your scene prompts will be sent to ${who}, a third-party commercial API. ` +
         `Each image is billed to your account there, and ${who} may retain what you send under its own ` +
         "retention policy. " +
-        (sendsImages
-          ? "Reference images are turned on, so images from your conversations and your character reference " +
-            "photo are uploaded there too. "
-          : "") +
+        (sendsImages ? SENDS_IMAGES : "") +
         "Save this connection?",
     };
   }
@@ -34,14 +40,11 @@ export function privacyDisclosure({ source, apiUrl, providerId, providerLabel, s
     return null;
   }
   return {
-    key: `orb:image-gen-privacy${sendsImages ? "-images" : ""}:${origin}`,
+    key: `orb:image-gen-privacy${scope}:${origin}`,
     message:
       "This ComfyUI server is not on this machine. Your scene prompts leave Orb, other clients may read queued " +
       "prompts, and generated files remain on that server. " +
-      (sendsImages
-        ? "A workflow you assigned uses reference images, so images from your conversations and your character " +
-          "reference image are uploaded there too. "
-        : "") +
+      (sendsImages ? SENDS_IMAGES : "") +
       "Save this connection?",
   };
 }
@@ -86,7 +89,8 @@ function stylesOn(config = {}, id) {
   return styles.filter((style) => styleConnectionId(style, config) === id);
 }
 
-export function connectionList(config = {}, providers = [], pending = new Set()) {
+export function connectionList(config = {}, providers = [], pending = []) {
+  const pendingIds = new Set(pending);
   const entries = config.cloud?.providers || {};
   const list = [
     {
@@ -101,7 +105,7 @@ export function connectionList(config = {}, providers = [], pending = new Set())
   ];
   for (const [id, entry] of Object.entries(entries)) {
     const linked = stylesOn(config, id);
-    if (!hasContent(entry) && !linked.length && !pending.has(id)) continue;
+    if (!hasContent(entry) && !linked.length && !pendingIds.has(id)) continue;
     list.push({
       id,
       source: "cloud",
@@ -136,36 +140,24 @@ export function findConnection(connections, id) {
 
 export const MAX_REFERENCE_SLOTS = 4;
 
-// The image slots one imported graph declares, as normalization stored them. A graph
-// that loads no image has no `references` key at all.
 export function graphReferenceSlots(graphs, workflowId) {
   const declared = (graphs || []).find((g) => g.id === workflowId)?.slots?.references;
   return Array.isArray(declared) ? declared.slice(0, MAX_REFERENCE_SLOTS) : [];
 }
 
-// What a style will actually send, which is never simply what it stores: a style keeps
-// both backends' answers across a relink, so `["", "character"]` under a cloud provider
-// is one slot and it is off. Anything reading the stored list to decide what leaves the
-// machine asks the user to approve an upload the panel shows as Off and no adapter makes.
-export function effectiveReferenceSources(style, { graphs = [], source = "" } = {}) {
-  const stored = Array.isArray(style?.reference_sources) ? style.reference_sources : [];
-  return stored.slice(0, source === "cloud" ? 1 : graphReferenceSlots(graphs, style?.workflow).length);
+export function maxCloudReferences(preset) {
+  const declared = Number(preset?.max_references);
+  return Number.isFinite(declared) && declared >= 1 ? Math.min(declared, MAX_REFERENCE_SLOTS) : 1;
 }
 
-// ── resolution ───────────────────────────────────────────────────────────────
-// The fallback menu, offered to a cloud provider that publishes no size vocabulary
-// of its own. Its two 16:9-ish rows are why it is not shared with ComfyUI: 1820 is
-// not a multiple of 8, and a latent is the request divided by eight.
+export function sendsReference(style, { graphs = [], source = "", preset = null } = {}) {
+  if (!style?.reference_source) return false;
+  return source === "cloud" ? providerTakesReferences(preset) : graphReferenceSlots(graphs, style?.workflow).length > 0;
+}
+
 export const CLOUD_SIZES = ["1024x1024", "1024x1536", "1536x1024", "1024x1820", "1820x1024"];
-// Multiples of 64, the grid the checkpoints Orb can drive are trained on -- SD 1.5
-// at 512, SDXL at 1024 and its native portrait/landscape pair. A ComfyUI style is
-// not limited to these: the backend takes any edge from 64 to 4096, which is why an
-// off-menu size already stored is kept rather than snapped to one of these.
 export const COMFY_SIZES = ["512x512", "768x768", "1024x1024", "832x1216", "1216x832", "1024x1536", "1536x1024"];
 
-// Every edge on the provider's own pixel grid. `width_height` is the only mode that
-// has one, and it is a hard contract rather than a rounding preference -- Together
-// 400s on a non-multiple of 16.
 function fitsGrid(preset, value) {
   const step = preset.dimension_step || 1;
   const low = preset.min_dimension || step;
@@ -176,13 +168,6 @@ function fitsGrid(preset, value) {
     .every((edge) => edge >= low && (!high || edge <= high) && edge % step === 0);
 }
 
-/** Whether this exact pair reaches the renderer intact.
- *
- * A menu provider snaps to its own list and a `width_height` one to its grid, both
- * server-side and both disclosed only after the render is paid for. ComfyUI, an
- * `aspect_ratio` provider (where nothing but the ratio is ever sent) and a `size`
- * provider that declares no menu all take what they are given.
- */
 export function sizeIsExact(preset, comfy, value) {
   if (comfy) return true;
   const declared = preset?.sizes || [];
@@ -191,15 +176,6 @@ export function sizeIsExact(preset, comfy, value) {
   return true;
 }
 
-/** What the resolution picker may offer for this target.
- *
- * A provider that names its own sizes gets exactly those: offering it anything else
- * is offering a row that renders as something its label does not say -- which is the
- * whole failure `size_for`'s disclosure exists to report afterwards, by which point
- * the bill has landed. The declared list is used verbatim rather than intersected
- * with `CLOUD_SIZES`, so a provider whose menu shares nothing with Orb's is still
- * fully offered instead of reduced to nothing.
- */
 export function sizeChoices(preset, comfy) {
   if (comfy) return COMFY_SIZES;
   const declared = Array.isArray(preset?.sizes) ? preset.sizes : [];
@@ -208,12 +184,8 @@ export function sizeChoices(preset, comfy) {
   return CLOUD_SIZES;
 }
 
-export function modelTakesReferences(preset, model) {
-  if (!preset?.supports_references) return false;
-  const allowed = Array.isArray(preset.reference_models) ? preset.reference_models : [];
-  if (!allowed.length) return true;
-  const chosen = String(model || preset.default_model || "").toLowerCase();
-  return allowed.some((marker) => chosen.includes(marker));
+export function providerTakesReferences(preset) {
+  return Boolean(preset?.supports_references);
 }
 
 export function pendingDisclosures(config = {}, connections = []) {
@@ -227,14 +199,12 @@ export function pendingDisclosures(config = {}, connections = []) {
       apiUrl: external.api_url || "",
       providerId: connection.id,
       providerLabel: connection.label,
-      // One rule for both backends now that a style owns its reference sources. The
-      // ComfyUI half used to ask whether *any* imported graph mapped a slot, which
-      // over-asked for a server no style pointed a reference at and — worse — went on
-      // asking after every style had turned them off. Effective, not stored: what the
-      // adapter will send is the question, and a style carries answers for slots its
-      // current target does not have.
       sendsImages: linked.some((style) =>
-        effectiveReferenceSources(style, { graphs: external.user_graphs, source: connection.source }).some(Boolean),
+        sendsReference(style, {
+          graphs: external.user_graphs,
+          source: connection.source,
+          preset: connection.preset,
+        }),
       ),
     });
     if (notice) notices.push(notice);

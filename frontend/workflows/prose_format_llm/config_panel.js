@@ -62,8 +62,8 @@ function modalShell() {
 async function loadGlobal() {
   let cfg = {};
   try {
-    const res = await api.get("/workflows/" + WORKFLOW_ID + "/config");
-    cfg = (res && res.config) || {};
+    const res = await api.get(`/workflows/${WORKFLOW_ID}/config`);
+    cfg = res?.config || {};
   } catch (e) {
     console.warn("prose_format_llm: config load failed", e);
   }
@@ -91,7 +91,7 @@ async function saveGlobal() {
     stream_reasoning: !!document.getElementById("pf-cfg-stream")?.checked,
   };
   try {
-    await api.put("/workflows/" + WORKFLOW_ID + "/config", { config });
+    await api.put(`/workflows/${WORKFLOW_ID}/config`, { config });
   } catch (e) {
     console.warn("prose_format_llm: config save failed", e);
   }
@@ -106,7 +106,7 @@ async function populateSpec() {
   }
   try {
     applyState(await postAction({ action: "get" }));
-  } catch (e) {
+  } catch {
     // The trigger route is 404 when the workflow is toggled off.
     host.innerHTML = `<div class="pf-note">Enable this workflow to view or edit its prose format.</div>`;
   }
@@ -117,8 +117,8 @@ function postAction(body) {
 }
 
 function applyState(res) {
-  const schema = (res && res.schema) || {};
-  const values = (res && res.values) || {};
+  const schema = res?.schema || {};
+  const values = res?.values || {};
   const names = Object.keys(schema);
   for (const k of Object.keys(values)) if (!names.includes(k)) names.push(k);
   spec = names.map((n) => ({ name: n, description: schema[n] || "", value: values[n] || "" }));
@@ -203,7 +203,7 @@ async function saveSpec() {
   try {
     applyState(await postAction({ action: "save", schema, values }));
     setStatus("Saved");
-  } catch (e) {
+  } catch {
     setStatus("Save failed");
   }
 }
@@ -217,7 +217,7 @@ async function analyze() {
     await postAction({ action: "save", schema, values });
     applyState(await postAction({ action: "analyze" }));
     setStatus("Analyzed");
-  } catch (e) {
+  } catch {
     setStatus("Analyze failed");
   }
 }
@@ -226,7 +226,7 @@ async function reset() {
   try {
     applyState(await postAction({ action: "reset" }));
     setStatus("Reset to defaults");
-  } catch (e) {
+  } catch {
     setStatus("Reset failed");
   }
 }

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, TypedDict
 
 from ...errors import WorkflowUserFacingError
@@ -52,17 +52,7 @@ class ImageBackendCapabilities(TypedDict):
 
 @dataclass(frozen=True)
 class RenderTarget:
-    """What will actually execute one render -- the dynamic tier.
-
-    `ImageBackendCapabilities` above is the static tier ("can this backend
-    ever?"); this is "what will this one do?", a per-graph question for ComfyUI.
-    There is no `supports_references` -- it collapses into "`reference_slots` is
-    non-empty".
-
-    `notes` carries user-facing disclosure for a replay that could not be honoured
-    exactly: substituting silently is the thing to avoid, and refusing outright is
-    not the alternative.
-    """
+    """Dynamic settings for one image render."""
 
     source: str
     target_id: str
@@ -76,23 +66,13 @@ class RenderTarget:
     notes: tuple[str, ...] = ()
     quality: str = ""
     reference_source: str = ""
+    reference_capacity: int = 0
+    reference_template: Mapping[str, Any] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
 class ResolvedReference:
-    """One reference image, already fetched, for one mapped `LoadImage` widget.
-
-    `origin` names where the bytes came from in a form a later replay can re-fetch
-    by (``"attachment:<id>"``, ``"character:<card id>"``). `digest` identifies the
-    bytes *as sent*, so two slots resolving to one image upload once.
-
-    `source_digest` identifies them *as fetched*, before the destination's mime/size
-    policy touched them, and is the only one comparable across renders: a replay
-    re-keyed onto another backend's slot converts differently and would fail a
-    `digest` comparison for a reason that has nothing to do with the picture. It is
-    what lets replay notice an origin's content changed underneath it -- a rehydrate
-    on a seedless provider rewrites a row's bytes in place, under the same id.
-    """
+    """A fetched image for one mapped LoadImage widget."""
 
     slot: tuple[str, str]
     source: str
@@ -139,10 +119,6 @@ class ImageResult:
 
 
 class ImageGenerationError(WorkflowUserFacingError):
-    """One caller-facing failure funnel for every render error, on any backend.
+    """Caller-facing error for image generation."""
 
-    User-facing by inheritance, which is what stops a provider's own explanation
-    from being replaced with "see server logs" on the regenerate, reroll and
-    rehydrate routes -- the streaming path already relayed it, so the same failed
-    render used to read two different ways depending on which button was pressed.
-    """
+    kind: str = ""

@@ -6,7 +6,7 @@ import copy
 from collections.abc import Mapping, Sequence
 from typing import Any, ClassVar
 
-from ...config import DEFAULT_CLOUD_EDGE, REFERENCE_MIMES, style_reference_sources
+from ...config import DEFAULT_CLOUD_EDGE, REFERENCE_MIMES, style_reference_source
 from ..comfy_client import ComfyClient
 from ..contracts import (
     ImageBackendCapabilities,
@@ -27,7 +27,7 @@ from ..graph import (
     resolve_graph,
     validate_graph_structure,
 )
-from .base import ImageAdapter, replayed_target
+from .base import ImageAdapter, replayed_reference_source, replayed_target
 
 COMFY_REFERENCE_MAX_BYTES = 8 * 1024 * 1024
 
@@ -97,19 +97,8 @@ class ExternalComfyAdapter(ImageAdapter):
         """
         return next((item["slots"] for item in self._graphs() if item["id"] == graph_id), {})
 
-    def _reference_slots(self, slots: Mapping[str, Any], sources: Sequence[str]) -> tuple[Mapping[str, Any], ...]:
-        """The slots `sources` has switched on, each carrying the policy ComfyUI imposes.
-
-        The graph declares which of its inputs load an image; the style says where each
-        one draws from, so the same workflow can run under one style that feeds it the
-        previous image and another that renders it from the prompt alone.
-
-        `mimes` is load-bearing: the upload names the file by extension off the mime,
-        so anything outside the three Orb declares lands on the server as a `.png`
-        that is not one. `required` is True of the slots that survive this pairing --
-        something asked for an image there, and rendering it unfilled would submit the
-        exporter's own filename and draw whatever that machine had.
-        """
+    def _reference_slots(self, slots: Mapping[str, Any], source: str) -> tuple[Mapping[str, Any], ...]:
+        """Return graph image inputs enabled by the reference source."""
         return tuple(
             {
                 **copy.deepcopy(entry),
@@ -118,7 +107,7 @@ class ExternalComfyAdapter(ImageAdapter):
                 "max_bytes": COMFY_REFERENCE_MAX_BYTES,
                 "required": True,
             }
-            for entry, source in enabled_references(slots, sources)
+            for entry in enabled_references(slots, source)
         )
 
     def resolve_target(self, replay: Mapping[str, Any] | None) -> RenderTarget:
@@ -141,12 +130,12 @@ class ExternalComfyAdapter(ImageAdapter):
         )
         slots = self._graph_slots(graph_id)
         # The style is the live answer; a replay is about a render that already happened,
-        # and the sources have been the style's to edit since. `or` rather than a branch:
-        # a record that re-keys onto nothing (the graph was replaced, or the image
+        # and the source has been the style's to edit since. So the style goes in as the
+        # fallback: a record that names nothing (the graph was replaced, or the image
         # predates the record) is no answer, and the style is the better guess.
-        sources = style_reference_sources(style)
+        source = style_reference_source(style)
         if replay:
-            sources = _recorded_sources(slots, replay) or sources
+            source = replayed_reference_source(replay, source, slots=reference_slots(slots))
         sized = "width" in slots and "height" in slots
         if not sized and (width, height) != (DEFAULT_CLOUD_EDGE, DEFAULT_CLOUD_EDGE):
             notes.append("this workflow has no resolution inputs mapped; it decides its own output size")
@@ -159,8 +148,15 @@ class ExternalComfyAdapter(ImageAdapter):
             supports_dimensions=sized,
             width=width if sized else None,
             height=height if sized else None,
-            reference_slots=self._reference_slots(slots, sources),
+            reference_slots=self._reference_slots(slots, source),
             notes=tuple(notes),
+            reference_source=source,
+            # The graph's own declaration, not the style's: how many inputs load an
+            # image is structural and found at import, while whether a style points
+            # them anywhere is editable. A style with its reference off still reports
+            # the graph's count, which is what tells a disclosure "there is no further
+            # room" apart from "the style turned it off".
+            reference_capacity=len(reference_slots(slots)),
         )
 
     def _client(self) -> ComfyClient:
@@ -178,16 +174,17 @@ class ExternalComfyAdapter(ImageAdapter):
         client = self._client()
         stats = await client.system_stats()
         info = await client.object_info(allow_cached=allow_cached)
-        # The sources ride along because they decide which image widgets Orb overwrites,
-        # and so which of them still have to name a file this server already has. Two
-        # styles on one workflow that answer that differently are two selections -- and
+        # The source rides along because it decides whether Orb overwrites this graph's
+        # image widgets, and so whether they still have to name a file this server
+        # already has. Two styles on one workflow that answer differently are two
+        # selections -- and
         # the first style to reach one names it, because a config-wide check that says
         # only "Node 11 needs image 'x.jpeg'" leaves the user no way to tell which style
         # to go and fix.
-        selections: dict[tuple[str, str, tuple[str, ...]], str] = {}
+        selections: dict[tuple[str, str, str], str] = {}
         for style in config["styles"]:
             if style["workflow"]:
-                key = (style["workflow"], style["checkpoint"], tuple(style_reference_sources(style)))
+                key = (style["workflow"], style["checkpoint"], style_reference_source(style))
                 selections.setdefault(key, style["label"] or style["id"])
         models: list[str] | None = None
 
@@ -197,7 +194,7 @@ class ExternalComfyAdapter(ImageAdapter):
                 models = await client.models("checkpoints")
             return models
 
-        for (graph_id, checkpoint, sources), label in selections.items():
+        for (graph_id, checkpoint, source), label in selections.items():
             try:
                 graph, slots = resolve_graph(config, graph_id)
                 if "checkpoint" in slots:
@@ -209,7 +206,7 @@ class ExternalComfyAdapter(ImageAdapter):
                         seed=0,
                         checkpoint=checkpoint,
                     )
-                filled = [entry for entry, _ in enabled_references(slots, sources)]
+                filled = enabled_references(slots, source)
                 validate_graph_structure(graph, slots, info, filled=filled)
             except ImageGenerationError as exc:
                 raise ImageGenerationError(f"Style {label!r}: {exc}") from exc
@@ -304,35 +301,6 @@ class ExternalComfyAdapter(ImageAdapter):
                 "notes": list(notes),
             },
         )
-
-
-def _slot_key(slot: Any) -> tuple[str, str] | None:
-    return (str(slot[0]), str(slot[1])) if isinstance(slot, (list, tuple)) and len(slot) == 2 else None
-
-
-def _recorded_sources(slots: Mapping[str, Any], replay: Mapping[str, Any]) -> list[str]:
-    """The per-slot sources the stored render used, re-keyed onto this graph's slots.
-
-    Rehydrate reproduces the stored render target. The sources moved onto the style,
-    where they can be edited after the fact, so replaying them off the style would
-    quietly reproduce a *different* picture -- the one failure a rehydrate is not
-    allowed to have. The record names the node input each reference filled, and that
-    re-keys onto the declared list directly.
-
-    `[]` when nothing recorded lands on a declared slot, which is a record about some
-    other graph; the caller falls back to the style rather than rendering blind.
-    """
-    entries = replay.get("references")
-    recorded: dict[tuple[str, str], str] = {}
-    for entry in entries if isinstance(entries, (list, tuple)) else ():
-        key = _slot_key(entry.get("slot")) if isinstance(entry, Mapping) else None
-        if key is not None:
-            recorded[key] = str(entry.get("source") or "")
-    sources: list[str] = []
-    for entry in reference_slots(slots):
-        key = _slot_key(entry.get("slot"))
-        sources.append(recorded.get(key, "") if key is not None else "")
-    return sources if any(sources) else []
 
 
 def _safe_system_summary(stats: Mapping[str, Any]) -> dict:

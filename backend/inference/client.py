@@ -39,28 +39,7 @@ class AbortToken:
 
 
 def reasoning_cfg(on: bool, prefill: str = "") -> dict:
-    """Reasoning params dict to spread into a ``client.complete()`` call.
-
-    Covers all known API styles in one place (OpenAI-style, llama.cpp,
-    Anthropic thinking).
-
-    *prefill* is the text-mode reasoning prefill: words put in the model's mouth
-    inside the thought channel. It rides this dict (rather than a free kwarg) so
-    that a prefill cannot exist on a reasoning-off call — the ``on`` branch is
-    the only one that carries it. ``reasoning_prefill`` is Orb-internal: both
-    transports strip it, it is never sent to a provider.
-
-    ``chat_template_kwargs`` carries two aliases for the same toggle because
-    templates disagree on the name: Qwen3/Gemma read ``enable_thinking``; Kimi K2
-    reads a boolean ``thinking``. Each template reads only the name it knows and
-    ignores the other, so sending both is safe and makes the toggle actually take
-    on all of them (a template that silently ignores the flag would keep thinking).
-
-    The on-dict deliberately carries no effort level: how hard to think is the
-    per-model ``reasoning_effort`` setting, injected by the client in
-    :func:`apply_reasoning_effort` -- absent there too, the provider default
-    governs.
-    """
+    """Return per-call reasoning parameters for model."""
     return (
         {
             "reasoning": {"enabled": True},
@@ -315,6 +294,34 @@ class LLMClient:
     def _url(self) -> str:
         return f"{self.base_url}/chat/completions"
 
+    async def list_models(self) -> list[str]:
+        """Return model ids advertised by an OpenAI-compatible ``GET /models``.
+
+        Discovery uses the same bearer authentication and endpoint proxy as
+        generation, but a short finite timeout: unlike a completion, this is a
+        small non-streaming settings request and should fail back to Orb's
+        editable model-name field promptly.
+        """
+        url = f"{self.base_url}/models"
+        async with httpx.AsyncClient(timeout=20.0, proxy=self.proxy, follow_redirects=True) as client:
+            response = await client.get(url, headers=self._headers())
+        response.raise_for_status()
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise ValueError("Endpoint returned a non-JSON models response") from exc
+
+        data = payload.get("data") if isinstance(payload, dict) else None
+        if not isinstance(data, list):
+            raise ValueError("Endpoint models response does not contain a data list")
+
+        model_ids: set[str] = set()
+        for item in data:
+            model_id = item.get("id") if isinstance(item, dict) else None
+            if isinstance(model_id, str) and model_id.strip():
+                model_ids.add(model_id.strip())
+        return sorted(model_ids, key=str.casefold)
+
     def _server_root(self) -> str:
         """Server root for llama.cpp native endpoints (/completion, /apply-template,
         /props), which sit beside the OpenAI-compat ``/v1`` surface. Strips a
@@ -370,30 +377,7 @@ class LLMClient:
         tool_choice: dict | str | None = None,
         **params,
     ) -> AsyncIterator[dict]:
-        """Stream a completion. Yields deltas then a final assembled message.
-
-        Transport is chosen by ``completion_mode``: text mode routes through
-        :meth:`_complete_text` (llama.cpp native), except calls carrying image
-        parts, which fall back to chat (no text-mode multimodal path yet).
-
-        ``tools_in_prompt=False`` (param) declares that the conversation's
-        prompt must not carry the tool schemas: text mode already never renders
-        them; chat mode then forces via ``response_format`` and omits ``tools``
-        from the body. For a forced call this is decoding-only on both
-        transports — prompt bytes and KV cache untouched.
-
-        Endpoints whose profile sets ``structured_tool_calls`` drop the pair on
-        every call, flag or no flag: forced calls ride ``response_format``, and
-        ``tools``/``tool_choice`` never enter the body, so that endpoint's
-        server-rendered prompts carry no schemas at all (see ``_complete_chat``).
-
-        Yields:
-            ``{"type": "reasoning", "delta": str}`` — zero or more reasoning chunks
-            ``{"type": "content",   "delta": str}`` — zero or more content chunks
-            ``{"type": "done", "message": dict, "usage": dict | None}``
-                — assembled message (content and/or tool_calls) and the
-                  provider usage object (``None`` when the server omits it).
-        """
+        """Stream one completion and yield deltas followed by the assembled message."""
         # Transport choice and chat-only param scrubbing happen once, outside the
         # retry loop; each attempt re-opens a fresh stream from the same inputs.
         if self._uses_text_transport(messages):
@@ -467,6 +451,28 @@ class LLMClient:
         except TimeoutError:
             return True  # full delay elapsed, no abort
 
+    def _audit_structured_reply(self, model: str, content: str, finish_reason: str | None) -> bool:
+        """Record that a structured reply did not honor its requested schema."""
+        if not content or finish_reason == "length" or self.abort_token.is_aborted:
+            return False
+        try:
+            decoded = json.loads(content)
+        except json.JSONDecodeError:
+            decoded = None
+        # Every schema this path can carry describes an object -- a tool's
+        # `function.parameters`, or a caller override narrowing it -- so a
+        # decoded scalar or array is as much proof as a decode failure.
+        if not isinstance(decoded, dict):
+            endpoint_profiles.note_structured_output_ignored(self.base_url, model)
+            logger.warning(
+                "LLM structured output: %s answered a strict json_schema with a non-object; "
+                "demoting to tools+tool_choice for the rest of the session: %s",
+                model,
+                _preview(content),
+            )
+            return True
+        return False
+
     async def _complete_chat(
         self,
         messages: Sequence[Mapping[str, Any]],
@@ -492,79 +498,91 @@ class LLMClient:
         # narrows the schema exactly as it narrows the text-mode grammar.
         tools_in_prompt = params.pop("tools_in_prompt", True)
         schema_override = params.pop("json_schema", None)
-        structured, sends_schemas = self._chat_tool_policy(model, tools_in_prompt=tools_in_prompt)
-        forced_name: str | None = None
-        if isinstance(tool_choice, dict) and (not tools_in_prompt or structured):
-            name = (tool_choice.get("function") or {}).get("name")
-            schema = schema_override or text_completion.forced_schema(tools, tool_choice)
-            if name and schema:
-                forced_name = name
-                params["response_format"] = {
-                    "type": "json_schema",
-                    "json_schema": {"name": name, "strict": True, "schema": strictify_schema(schema)},
-                }
-                tool_choice = None
-        # Both triggers withhold the tool blob -- and ``tool_choice`` with it --
-        # from the body; on a structured-output endpoint that holds for EVERY
-        # pass, not just the forced ones. Two reasons:
-        #
-        # Correctness -- a model that can still see ``tools`` may answer with a
-        # native tool call instead, and that path bypasses the schema entirely.
-        # DeepSeek rewrites the argument keys when it does (0/39 came back
-        # intact under ``tools`` + strict schema, 22/22 without ``tools``), so
-        # the caller's lookup by the name it sent silently finds nothing.
-        #
-        # Caching -- the server renders ``tools`` into the prompt, so dropping
-        # it only on forced passes would leave the writer with a different
-        # prefix from the director and editor and thrash the shared KV base
-        # they sit on (Invariant 3, docs/architecture/kv-cache.md). Dropping it
-        # for every pass keeps one stable prefix, and a smaller one. For
-        # ``tools_in_prompt=False`` callers the same drop is simply the flag's
-        # contract: their prefix never had schemas to begin with.
-        #
-        # ``tools`` still arrives here: it is the source of the response_format
-        # schema built above. If that derivation fails the call goes out with
-        # neither tools nor tool_choice and degrades to the parse_tool_calls
-        # recovery chain, which is the same posture as any unforced pass.
-        if not sends_schemas:
-            tools = None
-            tool_choice = None
 
-        body = {
-            "model": model,
-            "messages": messages,
-            "stream": True,
-            **params,
-        }
-        if tools:
-            body["tools"] = tools
-        if tool_choice:
-            body["tool_choice"] = tool_choice
-        # Requests usage in the terminal SSE chunk; servers that don't support it silently ignore this field.
-        body.setdefault("stream_options", {"include_usage": True})
+        def _plan() -> tuple[dict, str | None, bool]:
+            """Resolve the current tool policy into ``(body, forced_name, structured)``.
 
-        apply_reasoning_effort(body, self.reasoning_effort, self.reasoning_effort_param, self.reasoning_effort_value)
+            A closure rather than straight-line code because the policy it reads
+            can change *between* the two issues below: a reply that disproves
+            structured output demotes the pair mid-call, and the retry has to be
+            shaped by the new answer, not the one that already failed.
+            """
+            structured, sends_schemas = self._chat_tool_policy(model, tools_in_prompt=tools_in_prompt)
+            call_tools, call_choice = tools, tool_choice
+            forced_name: str | None = None
+            extra = dict(params)
+            if isinstance(call_choice, dict) and (not tools_in_prompt or structured):
+                name = (call_choice.get("function") or {}).get("name")
+                schema = schema_override or text_completion.forced_schema(call_tools, call_choice)
+                if name and schema:
+                    forced_name = name
+                    extra["response_format"] = {
+                        "type": "json_schema",
+                        "json_schema": {"name": name, "strict": True, "schema": strictify_schema(schema)},
+                    }
+                    call_choice = None
+            # Both triggers withhold the tool blob -- and ``tool_choice`` with it --
+            # from the body; on a structured-output endpoint that holds for EVERY
+            # pass, not just the forced ones. Two reasons:
+            #
+            # Correctness -- a model that can still see ``tools`` may answer with a
+            # native tool call instead, and that path bypasses the schema entirely.
+            # DeepSeek rewrites the argument keys when it does (0/39 came back
+            # intact under ``tools`` + strict schema, 22/22 without ``tools``), so
+            # the caller's lookup by the name it sent silently finds nothing.
+            #
+            # Caching -- the server renders ``tools`` into the prompt, so dropping
+            # it only on forced passes would leave the writer with a different
+            # prefix from the director and editor and thrash the shared KV base
+            # they sit on (Invariant 3, docs/architecture/kv-cache.md). Dropping it
+            # for every pass keeps one stable prefix, and a smaller one. For
+            # ``tools_in_prompt=False`` callers the same drop is simply the flag's
+            # contract: their prefix never had schemas to begin with.
+            #
+            # ``tools`` still arrives here: it is the source of the response_format
+            # schema built above. If that derivation fails the call goes out with
+            # neither tools nor tool_choice and degrades to the parse_tool_calls
+            # recovery chain, which is the same posture as any unforced pass.
+            if not sends_schemas:
+                call_tools = None
+                call_choice = None
 
-        # Same ordering as apply_reasoning_effort above, for the reason its
-        # docstring gives. Chat-only by design: the text transport builds its
-        # params from an allowlist.
-        if self.extra_body:
-            body.update(self.extra_body)
-            logger.info("LLM extra body fields: %s", sorted(self.extra_body))
+            body = {
+                "model": model,
+                "messages": messages,
+                "stream": True,
+                **extra,
+            }
+            if call_tools:
+                body["tools"] = call_tools
+            if call_choice:
+                body["tool_choice"] = call_choice
+            # Requests usage in the terminal SSE chunk; servers that don't support it silently ignore this field.
+            body.setdefault("stream_options", {"include_usage": True})
 
-        # Provider-specific body translation (profiles + session-learned
-        # workarounds) lives entirely in endpoint_profiles; the client just
-        # applies whatever it returns.
-        for action in endpoint_profiles.prepare_request_body(self.base_url, model, body):
-            logger.info("LLM profile: %s", action)
+            apply_reasoning_effort(body, self.reasoning_effort, self.reasoning_effort_param, self.reasoning_effort_value)
 
-        logger.info(
-            "LLM complete: model=%s, tools=%s, tool_choice=%s",
-            model,
-            json.dumps([t["function"]["name"] for t in tools]) if tools else "None",
-            tool_choice,
-        )
-        logger.debug(messages)
+            # Same ordering as apply_reasoning_effort above, for the reason its
+            # docstring gives. Chat-only by design: the text transport builds its
+            # params from an allowlist.
+            if self.extra_body:
+                body.update(self.extra_body)
+                logger.info("LLM extra body fields: %s", sorted(self.extra_body))
+
+            # Provider-specific body translation (profiles + session-learned
+            # workarounds) lives entirely in endpoint_profiles; the client just
+            # applies whatever it returns.
+            for action in endpoint_profiles.prepare_request_body(self.base_url, model, body):
+                logger.info("LLM profile: %s", action)
+
+            logger.info(
+                "LLM complete: model=%s, tools=%s, tool_choice=%s",
+                model,
+                json.dumps([t["function"]["name"] for t in call_tools]) if call_tools else "None",
+                call_choice,
+            )
+            logger.debug(messages)
+            return body, forced_name, structured
 
         content_parts: list[str] = []
         reasoning_parts: list[str] = []
@@ -572,110 +590,152 @@ class LLMClient:
         finish_reason: str | None = None
         usage: dict | None = None
 
-        # At most one retry, solely to self-heal a provider quirk that
-        # endpoint_profiles.recover_from_error() recognises (e.g. an OpenRouter
-        # model rejecting tool_choice). The error lands before any SSE event,
-        # so the retry is clean.
-        for attempt in range(2):
-            # No read timeout on streaming calls: the server sends zero bytes
-            # while prefilling a large prompt (or queueing behind another
-            # request), and a long silence is normal there — a flat read
-            # timeout intermittently killed long turns. Abort/stop and the
-            # disconnect watcher remain the recovery paths.
-            async with httpx.AsyncClient(timeout=httpx.Timeout(self.timeout, read=None), proxy=self.proxy) as client:
-                async with client.stream("POST", self._url(), json=body, headers=self._headers()) as resp:
-                    if resp.status_code >= 400:
-                        # Concern 1: surface the error body.
-                        err_text = await _read_error_body(resp, self._url())
+        async def _issue(body: dict, forced_name: str | None) -> AsyncIterator[dict]:
+            """Stream one request into the accumulators, replacing anything already there.
 
-                        # Concern 2: ask the provider layer whether this is a
-                        # recognised quirk worth one retry. It mutates body in
-                        # place and returns a log line, or None to propagate.
-                        if attempt == 0:
-                            fix = endpoint_profiles.recover_from_error(self.base_url, model, body, resp.status_code, err_text)
-                            if fix is not None:
-                                logger.warning("LLM recovery: %s", fix)
-                                continue  # leave async-with cleanly, then retry
+            Yielding is the reason this is a generator and not a coroutine: the
+            content/reasoning deltas belong to the caller as they arrive. A
+            second issue re-yields its own reasoning, so a retried call shows
+            two thinking runs in the pass's box -- the honest picture of what
+            was spent, and bounded to once per model per process.
+            """
+            nonlocal finish_reason, usage
+            content_parts.clear()
+            reasoning_parts.clear()
+            tool_calls_acc.clear()
+            finish_reason = None
+            usage = None
 
-                        # Concern 3: keep the body. raise_for_status() would
-                        # replace the provider's own sentence with httpx's canned
-                        # status line, and it is the only part the user can act on.
-                        raise llm_call_error(
-                            response=resp,
-                            body=err_text,
-                            url=self._url(),
-                            model=model,
-                            api_key=self.api_key,
-                        )
-                    async for payload in self._iter_sse_payloads(resp):
-                        try:
-                            chunk = json.loads(payload)
-                        except json.JSONDecodeError:
-                            continue
+            # At most one retry, solely to self-heal a provider quirk that
+            # endpoint_profiles.recover_from_error() recognises (e.g. an OpenRouter
+            # model rejecting tool_choice). The error lands before any SSE event,
+            # so the retry is clean.
+            for attempt in range(2):
+                # No read timeout on streaming calls: the server sends zero bytes
+                # while prefilling a large prompt (or queueing behind another
+                # request), and a long silence is normal there — a flat read
+                # timeout intermittently killed long turns. Abort/stop and the
+                # disconnect watcher remain the recovery paths.
+                async with httpx.AsyncClient(timeout=httpx.Timeout(self.timeout, read=None), proxy=self.proxy) as client:
+                    async with client.stream("POST", self._url(), json=body, headers=self._headers()) as resp:
+                        if resp.status_code >= 400:
+                            # Concern 1: surface the error body.
+                            err_text = await _read_error_body(resp, self._url())
 
-                        # Usage may appear in a terminal chunk (choices=[]) or on the final content chunk; last-write-wins since totals are monotonic.
-                        u = chunk.get("usage")
-                        if isinstance(u, dict):
-                            usage = u
+                            # Concern 2: ask the provider layer whether this is a
+                            # recognised quirk worth one retry. It mutates body in
+                            # place and returns a log line, or None to propagate.
+                            if attempt == 0:
+                                fix = endpoint_profiles.recover_from_error(
+                                    self.base_url, model, body, resp.status_code, err_text
+                                )
+                                if fix is not None:
+                                    logger.warning("LLM recovery: %s", fix)
+                                    continue  # leave async-with cleanly, then retry
 
-                        choices = chunk.get("choices") or []
-                        if not choices:
-                            # Pure usage/metadata chunk — nothing else to do.
-                            continue
+                            # Concern 3: keep the body. raise_for_status() would
+                            # replace the provider's own sentence with httpx's canned
+                            # status line, and it is the only part the user can act on.
+                            raise llm_call_error(
+                                response=resp,
+                                body=err_text,
+                                url=self._url(),
+                                model=model,
+                                api_key=self.api_key,
+                            )
+                        async for payload in self._iter_sse_payloads(resp):
+                            try:
+                                chunk = json.loads(payload)
+                            except json.JSONDecodeError:
+                                continue
 
-                        try:
-                            choice = choices[0]
-                            delta = choice.get("delta", {})
+                            # Usage may appear in a terminal chunk (choices=[]) or on the final content chunk; last-write-wins since totals are monotonic.
+                            u = chunk.get("usage")
+                            if isinstance(u, dict):
+                                usage = u
 
-                            # Reasoning delta (field name varies by server)
-                            rc = delta.get("reasoning_content") or delta.get("reasoning")
-                            if rc:
-                                reasoning_parts.append(rc)
-                                yield {"type": "reasoning", "delta": rc}
+                            choices = chunk.get("choices") or []
+                            if not choices:
+                                # Pure usage/metadata chunk — nothing else to do.
+                                continue
 
-                            # Content delta. A structured forced call buffers
-                            # instead of yielding: the content is the tool's
-                            # arguments JSON, and chat mode never surfaces
-                            # argument streams as content (they arrive as
-                            # tool_calls deltas, which the pipeline hides).
-                            c = delta.get("content")
-                            if c:
-                                content_parts.append(c)
-                                if forced_name is None:
-                                    yield {"type": "content", "delta": c}
+                            try:
+                                choice = choices[0]
+                                delta = choice.get("delta", {})
 
-                            # Per-token alternatives (Document mode steering) —
-                            # present only when the caller passed logprobs and the
-                            # provider honoured them; otherwise a no-op.
-                            for rec in _parse_chat_logprobs(choice):
-                                yield {"type": "token_probs", **rec}
+                                # Reasoning delta (field name varies by server)
+                                rc = delta.get("reasoning_content") or delta.get("reasoning")
+                                if rc:
+                                    reasoning_parts.append(rc)
+                                    yield {"type": "reasoning", "delta": rc}
 
-                            # Tool call argument deltas — accumulate by index
-                            for tc_delta in delta.get("tool_calls") or []:
-                                idx = tc_delta.get("index", 0)
-                                if idx not in tool_calls_acc:
-                                    tool_calls_acc[idx] = {
-                                        "id": "",
-                                        "type": "function",
-                                        "function": {"name": "", "arguments": ""},
-                                    }
-                                entry = tool_calls_acc[idx]
-                                if tc_delta.get("id"):
-                                    entry["id"] = tc_delta["id"]
-                                fn = tc_delta.get("function", {})
-                                if fn.get("name"):
-                                    entry["function"]["name"] += fn["name"]
-                                if fn.get("arguments"):
-                                    entry["function"]["arguments"] += fn["arguments"]
+                                # Content delta. A structured forced call buffers
+                                # instead of yielding: the content is the tool's
+                                # arguments JSON, and chat mode never surfaces
+                                # argument streams as content (they arrive as
+                                # tool_calls deltas, which the pipeline hides).
+                                c = delta.get("content")
+                                if c:
+                                    content_parts.append(c)
+                                    if forced_name is None:
+                                        yield {"type": "content", "delta": c}
 
-                            if choice.get("finish_reason"):
-                                finish_reason = choice["finish_reason"]
+                                # Per-token alternatives (Document mode steering) —
+                                # present only when the caller passed logprobs and the
+                                # provider honoured them; otherwise a no-op.
+                                for rec in _parse_chat_logprobs(choice):
+                                    yield {"type": "token_probs", **rec}
 
-                        except (KeyError, IndexError):
-                            continue
-            # Streamed to completion (or aborted) without a retry-triggering
-            # error -- done, no second attempt.
-            break
+                                # Tool call argument deltas — accumulate by index
+                                for tc_delta in delta.get("tool_calls") or []:
+                                    idx = tc_delta.get("index", 0)
+                                    if idx not in tool_calls_acc:
+                                        tool_calls_acc[idx] = {
+                                            "id": "",
+                                            "type": "function",
+                                            "function": {"name": "", "arguments": ""},
+                                        }
+                                    entry = tool_calls_acc[idx]
+                                    if tc_delta.get("id"):
+                                        entry["id"] = tc_delta["id"]
+                                    fn = tc_delta.get("function", {})
+                                    if fn.get("name"):
+                                        entry["function"]["name"] += fn["name"]
+                                    if fn.get("arguments"):
+                                        entry["function"]["arguments"] += fn["arguments"]
+
+                                if choice.get("finish_reason"):
+                                    finish_reason = choice["finish_reason"]
+
+                            except (KeyError, IndexError):
+                                continue
+                # Streamed to completion (or aborted) without a retry-triggering
+                # error -- done, no second attempt.
+                break
+
+        body, forced_name, structured = _plan()
+        async for _ev in _issue(body, forced_name):
+            yield _ev
+
+        # A structured forced call that came back disproving its own schema:
+        # demote the pair and re-issue once under the new policy. The wasted
+        # attempt is otherwise a whole pass lost per process -- and this is the
+        # one moment a retry is clean, because a forced call buffers its content
+        # rather than streaming it, so nothing but reasoning has reached the
+        # caller yet. Same shape as workflows/_forced_call.py's retry after
+        # note_forced_tool_choice_ignored.
+        #
+        # ``tools_in_prompt`` is the gate: a caller whose prefix must stay
+        # schema-free has no second shape to fall back to -- re-planning would
+        # rebuild the identical request -- so it demotes for everyone else's
+        # benefit and keeps its own degraded reply.
+        # The tracker sees only the surviving attempt's usage, so a retried call
+        # under-reports its true token cost by the discarded one.
+        if forced_name is not None and structured and tools_in_prompt and not tool_calls_acc:
+            if self._audit_structured_reply(model, "".join(content_parts), finish_reason):
+                body, forced_name, structured = _plan()
+                async for _ev in _issue(body, forced_name):
+                    yield _ev
 
         # Assemble the final message dict (mirrors the non-streaming message format)
         if forced_name is not None and not tool_calls_acc:
@@ -982,24 +1042,7 @@ class LLMClient:
         yield _done(" (text)", message, usage)
 
     async def complete_raw(self, prompt: str, model: str, **params) -> AsyncIterator[dict]:
-        """Stream a raw text completion from a bare *prompt* string (no chat template).
-
-        Text-transport only: POSTs *prompt* verbatim to llama.cpp's native
-        ``/completion``. There is no ``/apply-template`` step and no
-        ThinkSplitter — a raw continuation has no chat template, so no reasoning
-        channel; provider bytes are streamed through as content. Preserves the
-        ``complete()`` event contract (``content`` deltas then a ``done`` message
-        with synthesized usage). ``cache_prompt: true`` gives KV reuse across
-        successive continuations of the same document for free.
-
-        ``grammar``/``json_schema`` params constrain decoding (grammar wins,
-        mirroring ``_complete_text``) — prompt bytes and KV cache untouched, so
-        a forced-JSON call can still byte-extend a cached prefix.
-
-        *model* is accepted for signature symmetry with ``complete()`` (the
-        native ``/completion`` endpoint serves whatever model the server loaded,
-        so it is not sent in the body).
-        """
+        """Stream a raw completion for prompt."""
         async for event in self._with_retry(lambda: self._complete_raw(prompt, **params)):
             yield event
 
@@ -1120,6 +1163,58 @@ def agent_lane_from_settings(
     return writer_client, settings["model_name"]
 
 
+def _preview(text: str, limit: int = 200) -> str:
+    """A single-line, length-capped excerpt of *text* for a log line."""
+    flat = " ".join(text.split())
+    return flat if len(flat) <= limit else flat[:limit] + "…"
+
+
+def _balanced_span(text: str, open_ch: str, close_ch: str) -> str | None:
+    """Return the first brace-balanced ``open_ch``…``close_ch`` slice of *text*.
+
+    String-aware: braces inside a JSON string literal (and escaped quotes
+    inside one) do not move the depth counter, so a payload whose values are
+    prose full of punctuation still closes at the right place. Returns ``None``
+    when *text* has no opener or never returns to depth zero.
+    """
+    start = text.find(open_ch)
+    if start == -1:
+        return None
+    depth = 0
+    in_str = False
+    escaped = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_str:
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == open_ch:
+            depth += 1
+        elif ch == close_ch:
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    return None
+
+
+def _first_json(text: str, open_ch: str, close_ch: str) -> Any | None:
+    """Decode the first balanced ``open_ch``…``close_ch`` value in *text*, or ``None``."""
+    span = _balanced_span(text, open_ch, close_ch)
+    if span is None:
+        return None
+    try:
+        return json.loads(span)
+    except json.JSONDecodeError:
+        return None
+
+
 def _sanitize_args(obj):
     """Recursively strip tokenizer-artifact quote tokens (``<|"|>``) from string values."""
     if isinstance(obj, str):
@@ -1132,12 +1227,22 @@ def _sanitize_args(obj):
 
 
 def _make_tool_call(name: str, arguments) -> dict:
-    """Build a normalised tool call dict, JSON-decoding ``arguments`` if it's a string."""
-    if isinstance(arguments, str):
+    """Build a normalized tool-call dictionary."""
+    raw = arguments if isinstance(arguments, str) else None
+    if raw is not None:
         try:
-            arguments = json.loads(arguments)
+            arguments = json.loads(raw)
         except json.JSONDecodeError:
-            arguments = {}
+            arguments = _first_json(raw, "{", "}")
+            if isinstance(arguments, dict):
+                logger.warning("Tool %s: arguments salvaged from a non-JSON wrapper: %s", name, _preview(raw))
+    if not isinstance(arguments, dict):
+        logger.warning(
+            "Tool %s: arguments are not a JSON object; the call degrades to no arguments: %s",
+            name,
+            _preview(raw if raw is not None else repr(arguments)),
+        )
+        arguments = {}
     return {"name": name, "arguments": _sanitize_args(arguments)}
 
 
@@ -1181,28 +1286,14 @@ def parse_tool_calls(message: dict) -> list[dict]:
 
     # Try to find JSON objects or arrays in the content
     for start_char, end_char in [("{", "}"), ("[", "]")]:
-        start = content.find(start_char)
-        if start == -1:
-            continue
-        depth = 0
-        for i in range(start, len(content)):
-            if content[i] == start_char:
-                depth += 1
-            elif content[i] == end_char:
-                depth -= 1
-            if depth == 0:
-                try:
-                    parsed = json.loads(content[start : i + 1])
-                    if isinstance(parsed, dict) and "name" in parsed:
-                        tool_calls.append(_make_tool_call(parsed["name"], parsed.get("arguments", {})))
-                    elif isinstance(parsed, list):
-                        for item in parsed:
-                            if isinstance(item, dict) and "name" in item:
-                                tool_calls.append(_make_tool_call(item["name"], item.get("arguments", {})))
-                    if tool_calls:
-                        return tool_calls
-                except json.JSONDecodeError:
-                    pass
-                break
+        parsed = _first_json(content, start_char, end_char)
+        if isinstance(parsed, dict) and "name" in parsed:
+            tool_calls.append(_make_tool_call(parsed["name"], parsed.get("arguments", {})))
+        elif isinstance(parsed, list):
+            for item in parsed:
+                if isinstance(item, dict) and "name" in item:
+                    tool_calls.append(_make_tool_call(item["name"], item.get("arguments", {})))
+        if tool_calls:
+            return tool_calls
 
     return tool_calls

@@ -440,10 +440,13 @@ SIGNATURE_TABLES = frozenset(
         "character_expressions",
         "user_personas",
         "conversations",
+        "group_members",
         "messages",
         "director_state",
         "worlds",
         "lorebook_entries",
+        "world_changesets",
+        "member_sheet_proposals",
         "phrase_bank",
         "mood_fragments",
         "interactive_fragments",
@@ -497,11 +500,43 @@ def _signature(path: str) -> dict:
             "conv_persona": q(
                 "SELECT c.id, up.name FROM conversations c LEFT JOIN user_personas up ON c.persona_lock_id = up.id"
             ),
+            "group_members": q(
+                "SELECT conversation_id, speaker_key, character_card_id, display_name, public_profile_override, "
+                "card_sheet_override, member_kind, sort_order, muted, active FROM group_members"
+            ),
+            # A pending sheet update is user-facing work in progress, not a log:
+            # its whole point is that someone still has to decide it. Compared
+            # through the member's portable identity, since group_members.id is
+            # re-minted on the way in.
+            "member_sheet_proposals": q(
+                "SELECT gm.speaker_key, p.base_sheet, p.proposed_sheet, p.summary, p.status "
+                "FROM member_sheet_proposals p JOIN group_members gm ON p.member_id = gm.id"
+            ),
             "messages": q("SELECT conversation_id, turn_index, role, content FROM messages"),
             "active_leaf": q("SELECT c.id, m.content FROM conversations c LEFT JOIN messages m ON c.active_leaf_id = m.id"),
             "director_state": q("SELECT conversation_id FROM director_state"),
-            "worlds": q("SELECT id, name FROM worlds"),
-            "lorebook_entries": q("SELECT world_id, name, content FROM lorebook_entries"),
+            "worlds": q("SELECT id, name, dynamic_enabled, content_revision FROM worlds"),
+            # Overlay metadata is part of a lorebook's identity: a preset that
+            # restored the rows but flattened their layer would silently turn
+            # Agent-managed state into authored lore.
+            "lorebook_entries": q(
+                "SELECT world_id, name, content, entry_layer, overlay_action, archived FROM lorebook_entries"
+            ),
+            # A replacement's target is a surrogate id, so it is compared through
+            # the target's portable identity (its name) rather than the raw id.
+            "lorebook_overlay_targets": q(
+                "SELECT le.name, target.name FROM lorebook_entries le "
+                "LEFT JOIN lorebook_entries target ON le.supersedes_entry_id = target.id "
+                "WHERE le.entry_layer = 'dynamic'"
+            ),
+            "world_changesets": q("SELECT world_id, status, origin, summary, operations FROM world_changesets"),
+            # The source pointers are nullable cross-domain references; compare
+            # them through the message they name, so a changeset that came back
+            # attached to the wrong message (or detached) is caught.
+            "changeset_sources": q(
+                "SELECT wc.summary, m.content, wc.source_conversation_id, wc.source_character_label "
+                "FROM world_changesets wc LEFT JOIN messages m ON wc.source_assistant_message_id = m.id"
+            ),
             "personas": q("SELECT name, description FROM user_personas"),
             "phrase_bank": q("SELECT variants, kind, pattern FROM phrase_bank"),
             "fragments": q("SELECT id, label FROM mood_fragments"),
@@ -549,6 +584,41 @@ async def test_full_round_trip_is_identity_modulo_surrogate_ids(client, db_path)
 
     # a chat tree, persona-locked, with an active leaf to remap.
     _insert_conv_tree(path, "conv-keep", p1)
+
+    # Dynamic Worlds: an overlay row replacing an authored entry, plus one
+    # applied changeset (source pointers into the chat above -- a nullable
+    # cross-domain reference) and one pending proposal. Together these cover the
+    # overlay metadata, the self-FK on supersedes_entry_id, and the
+    # world_changesets -> messages/conversations pointers.
+    await client.put(f"/api/worlds/{w1}/dynamic", json={"enabled": True})
+    dyn = sqlite3.connect(path)
+    try:
+        ts = "2026-01-01T00:00:00"
+        target = dyn.execute("SELECT id FROM lorebook_entries WHERE name = 'Lore A'").fetchone()[0]
+        asst = dyn.execute("SELECT id FROM messages WHERE conversation_id = 'conv-keep' AND role = 'assistant'").fetchone()[0]
+        user = dyn.execute("SELECT id FROM messages WHERE conversation_id = 'conv-keep' AND role = 'user'").fetchone()[0]
+        dyn.execute(
+            "INSERT INTO lorebook_entries (world_id, name, content, entry_layer, overlay_action, supersedes_entry_id,"
+            " created_at, updated_at) VALUES (?, 'Lore A (revised)', 'alpha prime', 'dynamic', 'replace', ?, ?, ?)",
+            (w1, target, ts, ts),
+        )
+        dyn.execute(
+            "INSERT INTO world_changesets (world_id, status, base_revision, applied_revision,"
+            " source_user_message_id, source_assistant_message_id, source_conversation_id,"
+            " source_character_label, source_conversation_label, origin, summary, operations, created_at, applied_at)"
+            " VALUES (?, 'applied', 2, 3, ?, ?, 'conv-keep', 'Linked', 'Chat conv-keep', 'agent',"
+            ' \'Lore A revised\', \'[{"op": "replace", "target_entry_id": 1}]\', ?, ?)',
+            (w1, user, asst, ts, ts),
+        )
+        dyn.execute(
+            "INSERT INTO world_changesets (world_id, status, base_revision, source_conversation_id,"
+            " source_character_label, origin, summary, operations, created_at)"
+            " VALUES (?, 'pending', 3, 'conv-keep', 'Linked', 'agent', 'Awaiting review', '[]', ?)",
+            (w1, ts),
+        )
+        dyn.commit()
+    finally:
+        dyn.close()
 
     # configs touch, plus a phrase-bank row (surrogate full-replace path) and a
     # mood fragment (stable upsert) so those domains carry real data round-trip.

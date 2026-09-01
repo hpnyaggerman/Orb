@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from typing import Any, Protocol, cast
 
 from ...core.domain_types import MessageRole
-from ..connection import get_db
+from ..connection import _get_workflow_slot, _set_workflow_slot, get_db
 from ..models import (
     MessageRow,
     MessageWithAttachments,
@@ -215,30 +215,12 @@ async def add_message(
     parent_id: int | None = None,
     attachments: Sequence[Mapping[str, Any]] | None = None,
     progressive_fields: dict | None = None,
+    speaker_member_id: str | None = None,
+    exchange_id: str | None = None,
+    writer_draft: str | None = None,
+    advance_leaf: bool = False,
 ) -> tuple[int, list[dict]]:
-    """Add a message. Returns ``(message_id, rejected_workflow_atts)``.
-
-    The rejected list is populated when the workflow batch dropped atts
-    for rehydratability reasons (oversize without seed+generation_metadata);
-    the message and user atts still commit in that case. Callers are
-    expected to surface the rejection -- the orchestrator emits a
-    ``workflow_attachments_rejected`` SSE event on the assistant-persist
-    path.
-
-    Each attachment dict is one of two shapes, distinguished by an
-    in-memory 'source' routing key on the dict (not a persisted column
-    -- table identity carries provenance):
-
-    - User uploads (no 'source' or 'source' == 'user'): expects
-      'mime_type' (str), 'data_b64' (str), and optional 'filename' /
-      'size'. Lands in `user_attachments` via a direct INSERT inside
-      this function's transaction.
-    - Workflow artifacts ('source' starts with 'workflow:'): expects
-      'mime' (str), 'data' (bytes), 'filename' (str), 'workflow_id'
-      (str), plus optional 'parent_attachment_id', 'annotation',
-      'seed', and 'generation_metadata'. Lands in `workflow_attachments`
-      through the cache module's batch entry point.
-    """
+    """Insert a message and return its id and rejected attachments."""
     # workflow atts are materialized into a fresh list[dict] the cache writer
     # owns and mutates (it tags rejects with a 'reason' and shallow-copies); the
     # read-only user atts stay as the caller's mappings.
@@ -262,15 +244,18 @@ async def add_message(
         now = datetime.now(UTC).isoformat()
         try:
             cur = await db.execute(
-                "INSERT INTO messages (conversation_id, role, content, turn_index, parent_id, progressive_fields, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO messages (conversation_id, role, content, writer_draft, turn_index, parent_id, progressive_fields, created_at, speaker_member_id, exchange_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     cid,
                     role,
                     content,
+                    writer_draft,
                     turn_index,
                     parent_id,
                     json.dumps(progressive_fields or {}),
                     now,
+                    speaker_member_id,
+                    exchange_id,
                 ),
             )
         except sqlite3.IntegrityError as e:
@@ -300,7 +285,13 @@ async def add_message(
                     "registered -- import backend.workflows before producing them"
                 )
             _, rejected_workflow_atts = await _workflow_attachment_persister(message_id, workflow_atts, db=db)
-        await db.execute("UPDATE conversations SET updated_at = ? WHERE id = ?", (now, cid))
+        if advance_leaf:
+            await db.execute(
+                "UPDATE conversations SET updated_at = ?, active_leaf_id = ? WHERE id = ?",
+                (now, message_id, cid),
+            )
+        else:
+            await db.execute("UPDATE conversations SET updated_at = ? WHERE id = ?", (now, cid))
         await db.commit()
 
     return message_id, rejected_workflow_atts
@@ -336,6 +327,21 @@ async def update_message_content(msg_id: int, content: str) -> None:
     """Update the content of an existing message."""
     async with get_db() as db:
         await db.execute("UPDATE messages SET content = ? WHERE id = ?", (content, msg_id))
+        await db.commit()
+
+
+async def clear_writer_draft(msg_id: int) -> None:
+    """Drop the retained pre-editor Writer draft for one message.
+
+    Called when a human rewrites the row by hand: the retained draft then
+    describes text that no longer exists, and the on-demand prose rewriter —
+    which prefers the draft over the saved content — would restore it over the
+    edit and call that a rewrite. Cleared rather than replaced with the edit,
+    because "there is no pre-editor draft for this row" is the true statement;
+    the rewriter's fallback then works from the saved text.
+    """
+    async with get_db() as db:
+        await db.execute("UPDATE messages SET writer_draft = NULL WHERE id = ?", (msg_id,))
         await db.commit()
 
 
@@ -396,55 +402,12 @@ async def switch_to_branch(cid: str, message_id: int) -> bool:
 
 async def get_workflow_message_state(message_id: int, workflow_id: str) -> dict | None:
     """Return the workflow's slot on this message, or None if message missing or slot empty."""
-    async with get_db() as db:
-        rows = list(
-            await db.execute_fetchall(
-                "SELECT json_extract(workflow_state, '$.' || ?) AS slot FROM messages WHERE id = ?",
-                (workflow_id, message_id),
-            )
-        )
-        if not rows:
-            return None
-        slot = rows[0]["slot"]
-        if slot is None:
-            return None
-        return json.loads(slot)
+    return await _get_workflow_slot("messages", "id", message_id, workflow_id)
 
 
 async def set_workflow_message_state(message_id: int, workflow_id: str, payload: dict | None) -> None:
-    """Atomic per-slot write via SQLite JSON1.
-
-    payload=None removes the slot. Empty dict stores {}. No-op if message
-    missing (UPDATE matches zero rows).
-
-    The slot id "macros" is reserved: it carries a greeting's raw inline-macro
-    template (``{"template": ...}``) for ``reroll_unfrozen_greetings``, not a
-    registered workflow's state. Don't register a workflow under that id.
-
-    Read-modify-write callers must hold
-    ``backend.core.locks.workflow_state_lock(conversation_id, workflow_id)`` (the
-    message's owning conversation) across the read-then-write the payload was
-    computed from, or a concurrent caller can clobber the read between read
-    and write. Acquisition sites: ``backend.api.routes.workflows.api_trigger_workflow`` and
-    the pre/post pipeline hook loops in ``backend.pipeline.workflow_bridge``. The blind
-    first write from ``_persist_result`` to a just-minted assistant message
-    is exempt: that row is not yet the active leaf and no other caller can
-    name its id, so there is nothing to serialize against.
-    """
-    async with get_db() as db:
-        if payload is None:
-            await db.execute(
-                "UPDATE messages SET workflow_state = json_remove(COALESCE(workflow_state, '{}'), '$.' || ?) WHERE id = ?",
-                (workflow_id, message_id),
-            )
-        else:
-            await db.execute(
-                "UPDATE messages "
-                "SET workflow_state = json_set(COALESCE(workflow_state, '{}'), '$.' || ?, json(?)) "
-                "WHERE id = ?",
-                (workflow_id, json.dumps(payload), message_id),
-            )
-        await db.commit()
+    """Update one workflow attachment state atomically."""
+    await _set_workflow_slot("messages", "id", message_id, workflow_id, payload)
 
 
 async def delete_message_with_descendants(cid: str, msg_id: int) -> bool:
@@ -533,3 +496,43 @@ async def delete_message_with_descendants(cid: str, msg_id: int) -> bool:
 
         await db.commit()
         return True
+
+
+async def get_message_delete_preview(cid: str, msg_id: int) -> dict[str, int] | None:
+    """Count the sibling subtrees removed by ``delete_message_with_descendants``."""
+    async with get_db() as db:
+        rows = list(
+            await db.execute_fetchall(
+                "SELECT parent_id FROM messages WHERE id = ? AND conversation_id = ?",
+                (msg_id, cid),
+            )
+        )
+        if not rows:
+            return None
+        parent_id = rows[0]["parent_id"]
+        if parent_id is None:
+            root_clause = "m.parent_id IS NULL"
+            params: tuple[Any, ...] = (cid, cid)
+        else:
+            root_clause = "m.parent_id = ?"
+            params = (cid, parent_id, cid)
+        counts = list(
+            await db.execute_fetchall(
+                f"""
+                WITH RECURSIVE subtree(id, role) AS (
+                    SELECT m.id, m.role FROM messages m
+                    WHERE m.conversation_id = ? AND {root_clause}
+                    UNION ALL
+                    SELECT child.id, child.role FROM messages child
+                    JOIN subtree parent ON child.parent_id = parent.id
+                    WHERE child.conversation_id = ?
+                )
+                SELECT COUNT(*) AS message_count,
+                       SUM(CASE WHEN role = 'assistant' THEN 1 ELSE 0 END) AS assistant_count
+                FROM subtree
+                """,
+                params,
+            )
+        )
+        row = counts[0]
+        return {"message_count": int(row["message_count"]), "assistant_count": int(row["assistant_count"] or 0)}
