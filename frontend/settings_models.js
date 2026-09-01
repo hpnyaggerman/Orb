@@ -22,9 +22,7 @@ const MODEL_HYPERPARAM_KEYS = [
   "extra_body",
 ];
 
-const STANDARD_REASONING_LEVELS = ["none", "minimal", "low", "medium", "high", "xhigh"];
-
-const REASONING_LEVEL_HINTS = [{ url: "nano-gpt.com", model: "glm", levels: ["max"] }];
+const STANDARD_REASONING_LEVELS = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 const SETTING_FIELDS = [
   { k: "endpoint_url", l: "Endpoint URL", t: "text" },
@@ -273,27 +271,13 @@ export function renderEndpoints() {
   updateEndpointsLabel();
 }
 
-function _reasoningLevelExtras(prefix) {
-  const url = (document.querySelector(`[data-key="${prefix}endpoint_url"]`)?.value || "").toLowerCase();
-  const model = (document.querySelector(`[data-key="${prefix}model_name"]`)?.value || "").toLowerCase();
-  const extras = [];
-  for (const h of REASONING_LEVEL_HINTS) {
-    if (!url.includes(h.url)) continue;
-    if (h.model && !model.includes(h.model)) continue;
-    for (const lvl of h.levels) {
-      if (!extras.includes(lvl) && !STANDARD_REASONING_LEVELS.includes(lvl)) extras.push(lvl);
-    }
-  }
-  return extras;
-}
-
 function updateReasoningEffortFields() {
   for (const prefix of ["", "agent_"]) {
     const sel = document.querySelector(`[data-key="${prefix}reasoning_effort"]`);
     if (!sel) continue;
     const save = prefix ? saveAgentSetting : saveSetting;
     const desired = sel.dataset.desired ?? sel.value ?? "";
-    const levels = [...STANDARD_REASONING_LEVELS, ..._reasoningLevelExtras(prefix)];
+    const levels = [...STANDARD_REASONING_LEVELS];
     if (desired && desired !== "custom" && !levels.includes(desired)) levels.push(desired);
     sel.innerHTML = [
       `<option value="">Provider default</option>`,
