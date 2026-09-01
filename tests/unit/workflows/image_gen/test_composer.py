@@ -332,6 +332,17 @@ async def test_reasoning_mode_is_explicit_and_ignores_pipeline_pass_flags(monkey
         assert all(c["reasoning_on"] is reasoning_on and c["model_name"] == "agent-m" for c in calls)
 
 
+async def test_thinking_lifts_the_answer_sized_output_cap(monkeypatch):
+    """The per-call caps size a bare answer. A thinking model spends the same budget
+    on its reasoning first, so with the toggle on both calls get the forced-call
+    default the pipeline's own passes fall back to -- capped at the answer size,
+    DeepSeek at high effort came back truncated mid-thought with no arguments."""
+    for reasoning_on, expected in ((False, [2_048, 4_096]), (True, [composer.THINKING_MAX_TOKENS] * 2)):
+        calls = _record_forced_calls(monkeypatch)
+        await _run(reasoning_on=reasoning_on, scene_analysis=True)
+        assert [c["max_tokens"] for c in calls] == expected
+
+
 # ── scene hygiene ────────────────────────────────────────────────────────────
 
 

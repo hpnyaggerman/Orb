@@ -27,8 +27,17 @@ from .subjects import Subject
 
 logger = logging.getLogger(__name__)
 
+# The output budget while the prompter thinks. Each call's `answer_tokens` sizes a
+# bare answer -- a dozen JSON fields, a prompt of a few hundred tokens -- but a
+# thinking model spends the same `max_tokens` on its reasoning first (DeepSeek
+# counts reasoning_content against it), and at high effort it reasons past 2K
+# tokens on a long chat, so the call came back cut off mid-thought with no
+# arguments at all. Under reasoning the cap is the forced-call default, the
+# ceiling the pipeline's own passes fall back to.
+THINKING_MAX_TOKENS = 8_192
 
-async def _forced_args(*, client, model_name, prefix, tail, tool_name, settings, max_tokens, reasoning_on) -> dict:
+
+async def _forced_args(*, client, model_name, prefix, tail, tool_name, settings, answer_tokens, reasoning_on) -> dict:
     logger.info("[image_gen] %s tail:\n%s", tool_name, "\n--\n".join(m["content"] for m in tail))
     args: dict = {}
     async for event in forced_tool_call(
@@ -41,7 +50,7 @@ async def _forced_args(*, client, model_name, prefix, tail, tool_name, settings,
         # One workflow-owned mode for both calls, so they share a reasoning-forked lane.
         reasoning_on=reasoning_on,
         temperature=0.2,
-        max_tokens=max_tokens,
+        max_tokens=THINKING_MAX_TOKENS if reasoning_on else answer_tokens,
         offer_tools=OFFER_TOOLS,
     ):
         if event.get("type") == "result" and isinstance(event.get("args"), dict):
@@ -238,7 +247,7 @@ async def analyze_scene(
         tail=[{"role": "user", "content": analyze_ooc(pov, supports_negative, _sheets(subjects))}],
         tool_name="analyze_scene",
         settings=settings,
-        max_tokens=2_048,
+        answer_tokens=2_048,
         reasoning_on=reasoning_on,
     )
     # First-person view is the user looking at the subject: keep only the subject
@@ -308,7 +317,7 @@ async def compose_scene(
         tail=tail,
         tool_name="compose_image_prompt",
         settings=settings,
-        max_tokens=4_096,
+        answer_tokens=4_096,
         reasoning_on=reasoning_on,
     )
 
