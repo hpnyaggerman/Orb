@@ -1,17 +1,4 @@
-"""HTTP API layer: the FastAPI app factory.
-
-``build_app()`` assembles the application from its parts:
-  - the startup ``lifespan`` (DB init, pending migrations + VACUUM, schema
-    safety check),
-  - the ``no_cache_middleware``,
-  - every domain router under ``api/routes/`` (see ``routes.ROUTERS``), and
-  - the static ``frontend/`` mount, attached **last** so concrete routes match
-    before the ``/static`` catch-all.
-
-``backend.main`` calls this and exposes the result as ``app`` so the
-Dockerfiles' ``uvicorn backend.main:app`` and the integration conftest's
-``from backend.main import app`` keep working.
-"""
+"""FastAPI application factory and lifecycle."""
 
 from __future__ import annotations
 
@@ -23,9 +10,10 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 
-from ..database import DB_PATH, init_db
+from ..database import DB_PATH, close_wal_anchor, init_db, open_wal_anchor
 from ..database.migrations import run_pending, stamp_all
 from ..features.presets import schema_safety_problems as preset_schema_safety_problems
+from ..inference.local_models.llama_server import manager
 from .deps import FRONTEND_DIR
 from .routes import ROUTERS
 from .routes.storage import VACUUM_FREE_BYTES, free_bytes
@@ -40,9 +28,17 @@ async def lifespan(app: FastAPI):
     # guarded no-op migrations on first boot. Checked before init_db, which
     # creates the file. (Zero-size covers a file touched but never written.)
     fresh = not os.path.exists(DB_PATH) or os.path.getsize(DB_PATH) == 0
-    await init_db()
+    migrated = False
     if fresh:
+        await init_db()
         stamp_all(DB_PATH)
+    else:
+        # Existing tables still have their old column shape. Run migrations
+        # before feeding them the latest CREATE TABLES script: CREATE TABLE IF
+        # NOT EXISTS does not add columns, and a latest-schema index may name a
+        # column only the pending migration knows how to add.
+        migrated = bool(run_pending(DB_PATH))
+        await init_db()
     # A rebuild-style migration (0027's drop/rename, 0028's DROP COLUMN /
     # DROP TABLE) leaves the old table's pages on the freelist, and the live
     # DB runs auto_vacuum=NONE, so nothing returns them: the file stays
@@ -57,7 +53,7 @@ async def lifespan(app: FastAPI):
     # stranded until a migration happens to come along. Both arms are gated so
     # an ordinary boot never rewrites the whole file. Safe here: we're before
     # `yield`, so no request connection is open to contend with the VACUUM.
-    elif run_pending(DB_PATH) or free_bytes(DB_PATH) > VACUUM_FREE_BYTES:
+    if not fresh and (migrated or free_bytes(DB_PATH) > VACUUM_FREE_BYTES):
         vac = sqlite3.connect(DB_PATH, isolation_level=None)
         try:
             vac.execute("VACUUM")
@@ -79,7 +75,26 @@ async def lifespan(app: FastAPI):
             "will be refused until this is fixed:\n  - " + "\n  - ".join(problems)
         )
     logger.info("Database initialized")
-    yield
+    # One idle connection held for the life of the process, so the transient
+    # per-query connections are never the last WAL connection and stop paying
+    # 32 KiB of wal-index teardown each (see open_wal_anchor). Opened last:
+    # migrations, init_db and the VACUUM above all want the file to themselves,
+    # and the anchor is only useful once requests start.
+    await open_wal_anchor()
+    try:
+        yield
+    finally:
+        try:
+            # Every supervised llama-server child. These are Orb's only managed
+            # subprocesses, and without this teardown an orphan keeps its model
+            # resident and holds the GPU after Orb exits. A process that never
+            # imported a feature that owns one has an empty registry and nothing
+            # to do.
+            await manager.shutdown_all()
+        finally:
+            # Nested so a child that refuses to die still releases the anchor,
+            # whose close is what performs the final WAL checkpoint.
+            await close_wal_anchor()
 
 
 def build_app() -> FastAPI:

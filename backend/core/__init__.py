@@ -1,16 +1,8 @@
-"""Shared kernel — dependency-free leaves imported by every layer above.
-
-This package is the bottom of the one-way dependency order
-(``api → {pipeline, features} → workflows → {inference, analysis} → core``).
-It imports nothing upward; everything else may import it.
-
-The facade re-exports the kernel surface so callers write ``from .core import X``
-regardless of which submodule ``X`` actually lives in. Patch the *canonical*
-submodule (e.g. ``backend.core.locks._workflow_state_locks``), never this facade.
-"""
+"""Dependency-free shared kernel."""
 
 from __future__ import annotations
 
+from .domain_types import CastMember, GroupContextMode, TurnCast
 from .llm_types import (
     AssistantToolMessage,
     ChatMessage,
@@ -19,9 +11,11 @@ from .llm_types import (
 )
 from .locks import (
     maintenance_lock,
+    wal_anchor_lock,
     workflow_character_state_lock,
     workflow_config_lock,
     workflow_state_lock,
+    world_apply_lock,
 )
 from .macros import Macros, has_inline_macros, resolve_inline, resolve_stored_random
 from .text_segmentation import (
@@ -43,11 +37,16 @@ __all__ = [
     "ChatMessage",
     "ContentPart",
     "WireMessage",
+    "CastMember",
+    "GroupContextMode",
+    "TurnCast",
     # locks — process-level asyncio locks
     "maintenance_lock",
+    "wal_anchor_lock",
     "workflow_character_state_lock",
     "workflow_config_lock",
     "workflow_state_lock",
+    "world_apply_lock",
     # macros — string/message transforms
     "Macros",
     "has_inline_macros",

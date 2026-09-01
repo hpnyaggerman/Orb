@@ -21,9 +21,12 @@ import {
   initWorkflowMutationListener,
   loadConversations,
   loadWorkflowManifest,
+  newConversationHere,
   newConvForChar,
+  refreshConversationMessages,
   regenerate,
   renderMessages,
+  rewriteMessageProse,
   saveEdit,
   saveEditPending,
   saveForkEdit,
@@ -79,6 +82,7 @@ import {
   setDocProbs,
   toggleDocumentMode,
 } from "./document.js";
+import { initGroupSetup } from "./group_setup.js";
 import {
   addAltGreeting,
   clearExpressions,
@@ -121,8 +125,10 @@ import {
   closeLorebook,
   collapseWorlds,
   createWorld,
+  deactivateLinkedWorlds,
   deleteWorld,
   expandWorlds,
+  initWorldProposalActions,
   lbAddEntry,
   lbBackToList,
   lbDeleteEntry,
@@ -138,6 +144,7 @@ import {
   onWorldSearch,
   openLorebook,
   renameWorld,
+  setWorldProposalRefresh,
   showCreateWorldModal,
   showRenameWorldModal,
   toggleWorldEnabled,
@@ -169,7 +176,6 @@ import {
   activatePersona,
   applyTheme,
   deletePersona,
-  downloadLocalMlModel,
   editPersona,
   initTheme,
   initThemeList,
@@ -195,7 +201,6 @@ import {
   toggleHideUntilBaked,
   toggleLengthGuard,
   toggleLengthGuardEnforce,
-  toggleLocalMlEnabled,
   togglePreventPromptOverrides,
   toggleShowEditorDiff,
   toggleToolEnabled,
@@ -210,14 +215,12 @@ import { $ } from "./utils.js";
 import { loadWorkflowModules } from "./workflow_loader.js";
 import { initWorkflowTextInteraction } from "./workflow_text_interaction.js";
 
-// ── Sidebar toggle
 function toggleSection(header) {
   header.querySelector(".arrow").classList.toggle("collapsed");
   header.nextElementSibling.classList.toggle("collapsed");
 }
 window.toggleSection = toggleSection;
 
-// ── Burger menu
 function toggleBurger() {
   $("burger-dropdown").classList.toggle("open");
 }
@@ -229,9 +232,15 @@ document.addEventListener("click", (e) => {
   if (!e.target.closest("#burger-btn") && !e.target.closest("#burger-dropdown")) closeBurger();
 });
 
-// ── Image lightbox: click a generated image to pop it out full-screen; click
-// anywhere or press Escape to dismiss. Built as DOM nodes (not innerHTML) so the
-// data: src and alt need no escaping.
+document.addEventListener("click", (e) => {
+  const item = e.target.closest("[data-chat-action]");
+  if (!item) return;
+  closeBurger();
+  closeMobileHeaderActions();
+  if (item.dataset.chatAction === "inspector") toggleInspector();
+  else document.dispatchEvent(new CustomEvent(`${item.dataset.chatAction}-request`));
+});
+
 document.addEventListener("click", (e) => {
   const src = e.target.closest(".workflow-artifact-image");
   if (!src) return;
@@ -253,18 +262,14 @@ document.addEventListener("click", (e) => {
   document.body.appendChild(box);
 });
 
-// ── Expose to inline handlers
 Object.assign(window, {
-  // modal
   closeModal,
   closeSubModal,
   switchTab,
   showConfirmModal,
   runConfirmCb,
   runSubConfirmCb,
-  // theme
   applyTheme,
-  // settings / user
   saveSetting,
   onHybridInput,
   showUserModal,
@@ -276,7 +281,6 @@ Object.assign(window, {
   activatePersona,
   setPersonaConversationLock,
   setPersonaCharacterLock,
-  // tools
   toggleToolsPanel,
   setAgentEnabled,
   toggleToolEnabled,
@@ -300,13 +304,9 @@ Object.assign(window, {
   togglePreventPromptOverrides,
   toggleWorkflowsGlobal,
   toggleWorkflowEnabled,
-  downloadLocalMlModel,
-  toggleLocalMlEnabled,
   scoreSlop,
-  // phrase bank
   showPhraseBankModal,
   showAddPhraseGroupModal,
-  // presets / backups
   showPresetsModal,
   showSnapshotModal,
   onPresetDomainChange,
@@ -318,18 +318,15 @@ Object.assign(window, {
   restorePreset,
   deletePreset,
   refreshPresetLibrary,
-  // mood fragments
   showMoodFragmentModal,
   saveMoodFragment,
   deleteMoodFragment,
   toggleMoodFragmentEnabled,
-  // interactive fragments
   showInteractiveFragmentModal,
   saveInteractiveFragment,
   deleteInteractiveFragment,
   toggleInteractiveFragmentEnabled,
   updateInteractiveFragmentExample,
-  // characters
   selectChar,
   triggerImport,
   handleImportFile,
@@ -355,10 +352,9 @@ Object.assign(window, {
   importInternetChar,
   randomizeInternet,
   refreshCharacters,
-  // crop modal
   closeCropModal,
-  // conversations
   newConvForChar,
+  newConversationHere,
   selectConversation,
   deleteConversationFromModal,
   showConvHistoryModal,
@@ -367,12 +363,10 @@ Object.assign(window, {
   generateCompressionSummary,
   cancelCompression,
   applyCompression,
-  // title edit
   startEditTitle,
   saveTitleEdit,
   cancelTitleEdit,
   handleTitleEditKey,
-  // messages
   startEdit,
   cancelEdit,
   saveEdit,
@@ -385,6 +379,7 @@ Object.assign(window, {
   deleteMessage,
   switchBranch,
   regenerate,
+  rewriteMessageProse,
   superRegenerate,
   toggleMagicInput,
   handleMagicKey,
@@ -392,7 +387,6 @@ Object.assign(window, {
   continueFromUser,
   sendMessage,
   stopGeneration,
-  // inspector
   toggleInspector,
   selectReasoningPass,
   toggleReasoningPass,
@@ -401,7 +395,6 @@ Object.assign(window, {
   setInspectorTab,
   setToolsTab,
   selectWorkflowPipelinePass,
-  // ui
   toggleSection,
   toggleMobileSidebar,
   toggleMobileHeaderActions,
@@ -411,7 +404,6 @@ Object.assign(window, {
   triggerAttachImage,
   showAvatarPopup,
   hideAvatarPopup,
-  // document mode
   toggleDocumentMode,
   setDocAssisted,
   setDocProbs,
@@ -427,7 +419,6 @@ Object.assign(window, {
   docStop,
   docUndo,
   docRedo,
-  // worlds / lorebook
   showCreateWorldModal,
   createWorld,
   showRenameWorldModal,
@@ -450,11 +441,9 @@ Object.assign(window, {
   lbDraftChange,
   lbToggleConstant,
   lbImportJson,
-  // state
   S,
 });
 
-// ── Init
 initTheme();
 initThemeList();
 initComposer();
@@ -465,14 +454,12 @@ initWorkflowTextInteraction();
 initAudioPlayer();
 initTabLock();
 initWorkflowMutationListener();
+initGroupSetup();
 
-// On a fresh load with no conversation selected, render the JS empty state so
-// the homepage stats grid appears (index.html ships a static empty state).
 if (!S.activeConvId) {
   renderMessages();
 }
 
-// Load data independently to prevent failures from blocking other loads
 async function initAll() {
   initMobileUi({ closeBurger });
 
@@ -492,12 +479,10 @@ async function initAll() {
     await loadMoodFragments();
   } catch (e) {
     console.error("Failed to load mood fragments:", e);
-    // Show empty state but don't crash
     $("frag-list").innerHTML =
       '<div style="color:var(--text-muted);font-size:12px;padding:4px 0;">Failed to load mood fragments</div>';
   }
 
-  // Load conversations before characters so we can filter by recent activity
   try {
     await loadConversations();
   } catch (e) {
@@ -510,6 +495,13 @@ async function initAll() {
     console.error("Failed to load characters:", e);
   }
 
+  setWorldProposalRefresh(refreshConversationMessages);
+  initWorldProposalActions();
+  try {
+    await deactivateLinkedWorlds();
+  } catch (e) {
+    console.error("Failed to deactivate linked worlds:", e);
+  }
   try {
     await loadWorlds();
   } catch (e) {
@@ -536,5 +528,4 @@ async function initAll() {
   }
 }
 
-// Start initialization
 initAll();

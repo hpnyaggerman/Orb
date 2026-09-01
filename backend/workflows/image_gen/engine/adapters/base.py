@@ -1,17 +1,9 @@
-"""The image-backend adapter protocol.
-
-Mirrors the TTS split (``tts/engine/base.py`` + ``router.py``) with one difference:
-an image adapter binds a config *and a style* at construction rather than taking
-them per call. Every entry point already took ``config`` first, so binding it
-removes an argument rather than adding a concept; the style rides along because
-"which backend, which model, at what size" is a property of the style, and an
-adapter answering about one style while rendering another is the bug this fixes.
-"""
+"""Define the image-backend adapter protocol."""
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any, ClassVar
 
 from ...config import active_style
@@ -90,22 +82,7 @@ class ImageAdapter(ABC):
 
 
 def replayed_target(replay: Mapping[str, Any] | None, *, model: str, width: int, height: int) -> tuple[str, int, int]:
-    """What a stored image recorded, falling back to what the bound style says now.
-
-    The two facts every backend replays identically -- which model drew it, and at
-    what size. One function rather than a copy per adapter, because they must not
-    drift: reading today's setting at replay time is the silent substitution reroll
-    and rehydrate exist to avoid, and it is only ever noticed as "the restored image
-    is the wrong shape".
-
-    A recorded model of `""` or `None` falls through rather than pinning nothing: it
-    means the original ran a target carrying its own -- a self-contained ComfyUI graph
-    with its loaders inside it. The size is taken only as a *pair*, since half a
-    recorded resolution describes no image.
-
-    What is *not* here is the graph id: that is ComfyUI's alone, and it is the one pin
-    that can be gone from the config, which the caller has to disclose.
-    """
+    """Return the stored render target or current style defaults."""
     if not replay:
         return model, width, height
     stored_model = replay.get("backend_model")
@@ -128,3 +105,39 @@ def replayed_text(replay: Mapping[str, Any] | None, key: str, current: str) -> s
     """
     stored = (replay or {}).get(key)
     return stored if isinstance(stored, str) else current
+
+
+def replayed_reference_source(
+    replay: Mapping[str, Any] | None,
+    current: str,
+    *,
+    slots: Sequence[Mapping[str, Any]] | None = None,
+) -> str:
+    """Return the stored reference source or current defaults."""
+    if not replay:
+        return current
+    recorded = replay.get("reference_source")
+    if slots is None:
+        return recorded if isinstance(recorded, str) else current
+
+    declared = {
+        (str(slot[0]), str(slot[1]))
+        for entry in slots or ()
+        for slot in (entry.get("slot"),)
+        if isinstance(slot, (list, tuple)) and len(slot) == 2
+    }
+    entries = replay.get("references")
+    return next(
+        (
+            source
+            for entry in (entries if isinstance(entries, (list, tuple)) else ())
+            if isinstance(entry, Mapping) and _slot_key(entry.get("slot")) in declared
+            for source in (str(entry.get("source") or ""),)
+            if source
+        ),
+        current,
+    )
+
+
+def _slot_key(slot: Any) -> tuple[str, str] | None:
+    return (str(slot[0]), str(slot[1])) if isinstance(slot, (list, tuple)) and len(slot) == 2 else None

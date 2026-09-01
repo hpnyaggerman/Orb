@@ -1,12 +1,7 @@
-// Character Library browser modal: grid/list views with search + tag filtering
-// + sorting, plus the Internet browse panel (CharacterHub / Character Archive
-// search, randomize, import). Split out of library.js; the public surface is
-// re-exported from library.js. Reads the shared avatar cache-bust map and the
-// character-edit modal from library.js.
 import { api } from "./api.js";
 import { _avatarBust, showCharEditModal } from "./library.js";
 import { setModalCloseCallback, showModal } from "./modal.js";
-import { S } from "./state.js";
+import { charactersView, S } from "./state.js";
 import {
   $,
   avatarCell,
@@ -20,16 +15,31 @@ import {
 } from "./utils.js";
 import { validate } from "./validate.js";
 
-// Character browser modal state
-let _browserViewMode = "grid"; // 'grid', 'list', or 'internet'
+let _browserViewMode = "grid"; // grid, list, or internet
 let _browserSearchQuery = "";
 let _browserCharacters = [];
-let _browserSortBy = "time-added"; // 'name', 'time-added', 'most-recent-chat', 'most-chats'
+let _browserSortBy = "time-added"; // name, time-added, most-recent-chat, or most-chats
 let _browserConversations = [];
+let _browserLoading = false; // true while the cache is loading
 const _browserSelectedTags = new Set();
-let _browserTopTags = []; // top 15 most popular tags
+let _browserTopTags = []; // most-used tags
+const _tagBit = new Map(); // tag -> data-tagmask bit
+let _filterApplied = false;
 
-// Internet character browse state
+let _openToken = 0;
+
+let _hydration = null;
+
+const BROWSER_CHUNK = 60;
+
+const IDLE_RESERVE_MS = 8;
+
+const NO_BUDGET = { timeRemaining: () => 0 };
+const onIdle =
+  typeof requestIdleCallback === "function"
+    ? (fn) => requestIdleCallback(fn, { timeout: 200 })
+    : (fn) => setTimeout(() => fn(NO_BUDGET), 0);
+
 let _internetSource = "characterhub";
 let _internetQuery = "";
 let _internetPage = 1;
@@ -37,33 +47,24 @@ let _internetResults = [];
 let _internetLoading = false;
 let _internetHasMore = false;
 
-// ── Character Browser Modal
-
 export async function showCharacterBrowserModal() {
-  try {
-    _browserCharacters = await api.get("/characters");
-  } catch (e) {
-    _browserCharacters = S.characters || [];
-    console.error("Failed to load characters for browser:", e);
-  }
-  // Load conversations for sorting
-  try {
-    _browserConversations = await api.get("/conversations");
-  } catch (e) {
-    _browserConversations = [];
-    console.error("Failed to load conversations for browser:", e);
-  }
+  const token = ++_openToken;
+  _browserCharacters = charactersView();
+  _browserConversations = S.conversations || [];
+  _browserLoading = _browserCharacters.length === 0;
+
   computeTopTags();
   _browserSelectedTags.clear();
+  _filterApplied = false;
   _browserSortBy = S.characterBrowserSort || "time-added";
   _browserViewMode = _browserViewMode === "internet" ? "internet" : S.characterBrowserView || "grid";
   _browserSearchQuery = "";
-  renderCharacterBrowser();
+
   showModal(`
     <div class="modal-title-row">
       <div>
         <h2>Character Library</h2>
-        <div style="font-size:11px;color:var(--text-muted)">${_browserCharacters.length} character${_browserCharacters.length !== 1 ? "s" : ""}</div>
+        <div id="char-browser-count" style="font-size:11px;color:var(--text-muted)">${browserCountLabel()}</div>
       </div>
       <div class="modal-title-actions">
         <div class="view-toggle" id="char-browser-view-toggle">
@@ -86,11 +87,55 @@ export async function showCharacterBrowserModal() {
       </select>
     </div>
     <div class="char-browser-tags-row">
-      <div class="char-tags">
-        ${_browserTopTags.map((tag) => `<button class="char-tag ${_browserSelectedTags.has(tag) ? "active" : ""}" data-tag="${escAttr(tag)}" onclick="toggleTagSelection('${escHandlerArg(tag)}')">${esc(tag)}</button>`).join("")}
-      </div>
+      <div class="char-tags" id="char-browser-tags">${browserTagsHtml()}</div>
     </div>
     <div id="char-browser-content"></div>`);
+  renderCharacterBrowser();
+
+  if (!_browserLoading) return;
+  let characters = [];
+  let conversations = [];
+  try {
+    [characters, conversations] = await Promise.all([api.get("/characters"), api.get("/conversations")]);
+  } catch (e) {
+    console.error("Failed to load characters for browser:", e);
+  }
+  if (token !== _openToken) return;
+  _browserLoading = false;
+  _browserCharacters = characters;
+  _browserConversations = conversations;
+  const countEl = $("char-browser-count");
+  if (!countEl) return;
+  countEl.textContent = browserCountLabel();
+  computeTopTags();
+  const tagsEl = $("char-browser-tags");
+  if (tagsEl) tagsEl.innerHTML = browserTagsHtml();
+  renderCharacterBrowser();
+}
+
+function browserCountLabel() {
+  if (_browserLoading) return "Loading…";
+  const n = _browserCharacters.length;
+  return `${n} character${n !== 1 ? "s" : ""}`;
+}
+
+function browserTagsHtml() {
+  return _browserTopTags
+    .map(
+      (tag) =>
+        `<button class="char-tag ${_browserSelectedTags.has(tag) ? "active" : ""}" data-tag="${escAttr(tag)}" onclick="toggleTagSelection('${escHandlerArg(tag)}')">${esc(tag)}</button>`,
+    )
+    .join("");
+}
+
+function renderCharacterBrowser() {
+  const isInternet = _browserViewMode === "internet";
+  const searchRow = document.querySelector(".char-browser-search-row");
+  const tagsRow = document.querySelector(".char-browser-tags-row");
+  if (searchRow) searchRow.style.display = isInternet ? "none" : "";
+  if (tagsRow) tagsRow.style.display = isInternet ? "none" : "";
+  if (isInternet) renderInternetPanel();
+  else renderCharBrowserItems();
 }
 
 export function setCharBrowserView(mode) {
@@ -101,23 +146,9 @@ export function setCharBrowserView(mode) {
     btn.classList.toggle("active", btn.dataset.view === mode);
   });
 
-  const isInternet = mode === "internet";
-  const searchRow = document.querySelector(".char-browser-search-row");
-  const tagsRow = document.querySelector(".char-browser-tags-row");
-  if (searchRow) searchRow.style.display = isInternet ? "none" : "";
-  if (tagsRow) tagsRow.style.display = isInternet ? "none" : "";
-
   const container = $("char-browser-content");
   if (container) container.style.minHeight = "";
-
-  if (isInternet) {
-    renderInternetPanel();
-    return;
-  }
-
-  // renderCharBrowserItems renders the full set, captures the natural height for
-  // minHeight, then applies the active filter in place.
-  renderCharBrowserItems();
+  renderCharacterBrowser();
 }
 
 export function onCharBrowserSearch() {
@@ -129,9 +160,6 @@ export function onCharBrowserSearch() {
     return;
   }
   _browserSearchQuery = query;
-  // Filter in place — never rebuild the grid on a keystroke. Rebuilding tore
-  // down and recreated every avatar <img>, which flickered; toggling visibility
-  // on the existing nodes is flicker-free and instant.
   applyBrowserFilter();
 }
 
@@ -139,7 +167,6 @@ export function setCharBrowserSort(sortBy) {
   _browserSortBy = sortBy;
   S.characterBrowserSort = sortBy;
   api.put("/settings", { character_library_sort: sortBy }).catch((e) => console.error("Failed to save sort mode", e));
-  // Update dropdown UI
   const select = document.getElementById("char-browser-sort");
   if (select) select.value = sortBy;
   renderCharBrowserItems();
@@ -151,8 +178,7 @@ export function toggleTagSelection(tag) {
   } else {
     _browserSelectedTags.add(tag);
   }
-  // Update button visual via data-tag attribute
-  const button = document.querySelector(`.char-tag[data-tag="${tag}"]`);
+  const button = [...document.querySelectorAll("#char-browser-tags .char-tag")].find((b) => b.dataset.tag === tag);
   if (button) {
     button.classList.toggle("active", _browserSelectedTags.has(tag));
   }
@@ -167,40 +193,50 @@ function computeTopTags() {
       counts.set(tag, (counts.get(tag) || 0) + 1);
     }
   }
-  // sort by count descending, then alphabetically
   const sorted = Array.from(counts.entries()).sort((a, b) => {
     if (b[1] !== a[1]) return b[1] - a[1];
     return a[0].localeCompare(b[0]);
   });
   _browserTopTags = sorted.slice(0, 15).map((entry) => entry[0]);
+  _tagBit.clear();
+  _browserTopTags.forEach((tag, i) => {
+    _tagBit.set(tag, 1 << i);
+  });
+}
+
+function tagMaskFor(tags) {
+  let mask = 0;
+  for (const tag of tags) {
+    const bit = _tagBit.get(tag);
+    if (bit !== undefined) mask |= bit;
+  }
+  return mask;
 }
 
 function computeConversationStats() {
   const map = new Map();
   for (const conv of _browserConversations) {
-    const cardId = conv.character_card_id;
-    if (!cardId) continue;
-    const entry = map.get(cardId) || { count: 0, recentTimestamp: "" };
-    entry.count += 1;
-    const ts = convActivity(conv);
-    if (ts && (!entry.recentTimestamp || ts > entry.recentTimestamp)) {
-      entry.recentTimestamp = ts;
+    const cardIds = conv.character_card_id ? [conv.character_card_id] : conv.group_card_ids || [];
+    for (const cardId of cardIds) {
+      const entry = map.get(cardId) || { count: 0, recentTimestamp: "" };
+      entry.count += 1;
+      const ts = convActivity(conv);
+      if (ts && (!entry.recentTimestamp || ts > entry.recentTimestamp)) entry.recentTimestamp = ts;
+      map.set(cardId, entry);
     }
-    map.set(cardId, entry);
   }
   return map;
 }
 
 function applySort(characters) {
-  const stats = computeConversationStats();
   const sortBy = _browserSortBy;
+  const stats = sortBy === "most-recent-chat" || sortBy === "most-chats" ? computeConversationStats() : new Map();
   const collator = new Intl.Collator(undefined, { sensitivity: "base" });
   return [...characters].sort((a, b) => {
     switch (sortBy) {
       case "name":
         return collator.compare(a.name, b.name);
       case "time-added": {
-        // Use created_at descending (newest first)
         const aTime = a.created_at || "";
         const bTime = b.created_at || "";
         return bTime.localeCompare(aTime);
@@ -223,80 +259,102 @@ function applySort(characters) {
   });
 }
 
-// Show/hide already-rendered cards to match the active search + tag filter,
-// without rebuilding the DOM. The match data rides on each card as data-name
-// (lowercased) and data-tags (JSON), so filtering is a cheap visibility toggle
-// — no avatar <img> is destroyed/recreated, so there is no flicker.
 function applyBrowserFilter() {
+  const query = _browserSearchQuery;
+  const selectedMask = tagMaskFor(_browserSelectedTags);
+  const filterOn = !!query || selectedMask !== 0;
+  if (filterOn) flushHydration();
+  if (!filterOn && !_filterApplied) return;
+
   const container = $("char-browser-content");
   if (!container) return;
   const items = container.querySelectorAll("[data-char-item]");
   if (!items.length) return;
 
-  const query = _browserSearchQuery;
-  const hasTagFilter = _browserSelectedTags.size > 0;
   let visible = 0;
-
   for (const el of items) {
-    let show = true;
-    if (query && !(el.dataset.name || "").includes(query)) {
-      show = false;
-    }
-    if (show && hasTagFilter) {
-      let tags;
-      try {
-        tags = JSON.parse(el.dataset.tags || "[]");
-      } catch {
-        tags = [];
-      }
-      for (const tag of _browserSelectedTags) {
-        if (!tags.includes(tag)) {
-          show = false;
-          break;
-        }
-      }
-    }
-    // Inline display overrides the card's stylesheet display rule (which would
-    // win over the [hidden] UA rule); "" restores the stylesheet value.
-    el.style.display = show ? "" : "none";
+    const show =
+      (!query || (el.dataset.name || "").includes(query)) &&
+      (selectedMask === 0 || (Number(el.dataset.tagmask) & selectedMask) === selectedMask);
+    const next = show ? "" : "none";
+    if (el.style.display !== next) el.style.display = next;
     if (show) visible++;
   }
 
   const emptyEl = container.querySelector("[data-browser-empty]");
   if (emptyEl) emptyEl.style.display = visible === 0 ? "" : "none";
+  _filterApplied = filterOn;
 }
 
 function renderCharBrowserItems() {
   const container = $("char-browser-content");
   if (!container) return;
+  _hydration = null;
 
-  // Render the full character set once (sorted). Search/tag filtering is then
-  // applied in place by applyBrowserFilter, so typing never rebuilds the grid.
   const sorted = applySort(_browserCharacters);
 
   if (sorted.length === 0) {
     container.style.minHeight = "";
-    container.innerHTML = `<div class="char-browser-empty">No characters available</div>`;
+    container.innerHTML = `<div class="char-browser-empty">${_browserLoading ? "Loading…" : "No characters available"}</div>`;
     return;
   }
 
   const wrapClass = _browserViewMode === "grid" ? "char-browser-grid" : "char-browser-list";
   const renderItem = _browserViewMode === "grid" ? renderCharBrowserCard : renderCharBrowserListItem;
+  const head = sorted.slice(0, BROWSER_CHUNK);
   container.innerHTML =
-    `<div class="${wrapClass}">${sorted.map(renderItem).join("")}</div>` +
+    `<div class="${wrapClass}">${head.map(renderItem).join("")}</div>` +
     `<div class="char-browser-empty" data-browser-empty style="display:none">No characters match your filters</div>`;
 
-  // Capture the natural full-set height so the panel doesn't collapse/jump when
-  // a filter hides most cards.
-  container.style.minHeight = `${container.offsetHeight}px`;
+  container.style.minHeight = `${Math.min(container.offsetHeight, Math.round(window.innerHeight * 0.85))}px`;
 
+  if (sorted.length > head.length) hydrateRest(container.firstElementChild, sorted, renderItem, head.length);
+
+  _filterApplied = false;
   applyBrowserFilter();
 }
 
-// Match-data attributes shared by the grid card and the list item, read by
-// applyBrowserFilter. data-name is lowercased for case-insensitive search.
+function hydrateRest(wrap, sorted, renderItem, start) {
+  _hydration = { wrap, sorted, renderItem, next: start };
+  const step = () => {
+    onIdle((deadline) => {
+      const run = _hydration;
+      if (!run || run.wrap !== wrap) return;
+      if (!wrap.isConnected) {
+        _hydration = null;
+        return;
+      }
+      do {
+        appendChunk(run, Math.min(run.next + BROWSER_CHUNK, run.sorted.length));
+      } while (run.next < run.sorted.length && deadline.timeRemaining() > IDLE_RESERVE_MS);
+      if (_filterApplied) applyBrowserFilter();
+      if (run.next < run.sorted.length) step();
+      else _hydration = null;
+    });
+  };
+  step();
+}
+
+function appendChunk(run, end) {
+  run.wrap.insertAdjacentHTML(
+    "beforeend",
+    run.sorted
+      .slice(run.next, end)
+      .map((c) => run.renderItem(c))
+      .join(""),
+  );
+  run.next = end;
+}
+
+function flushHydration() {
+  const run = _hydration;
+  _hydration = null;
+  if (!run?.wrap.isConnected || run.next >= run.sorted.length) return;
+  appendChunk(run, run.sorted.length);
+}
+
 function charItemMatchAttrs(c) {
-  return `data-char-item data-name="${escAttr((c.name || "").toLowerCase())}" data-tags="${escAttr(JSON.stringify(c.tags || []))}"`;
+  return `data-char-item data-name="${escAttr((c.name || "").toLowerCase())}" data-tagmask="${tagMaskFor(c.tags || [])}"`;
 }
 
 function renderCharBrowserCard(c) {
@@ -323,8 +381,6 @@ function renderCharBrowserListItem(c) {
       </div>
     </div>`;
 }
-
-// ── Internet character browse
 
 function renderInternetPanel() {
   const container = $("char-browser-content");
@@ -468,18 +524,4 @@ export async function importInternetChar(fullPath) {
   } catch (e) {
     toast(`Import failed: ${e.message}`, true);
   }
-}
-
-function renderCharacterBrowser() {
-  setTimeout(() => {
-    if (_browserViewMode === "internet") {
-      const searchRow = document.querySelector(".char-browser-search-row");
-      const tagsRow = document.querySelector(".char-browser-tags-row");
-      if (searchRow) searchRow.style.display = "none";
-      if (tagsRow) tagsRow.style.display = "none";
-      renderInternetPanel();
-      return;
-    }
-    renderCharBrowserItems();
-  }, 0);
 }

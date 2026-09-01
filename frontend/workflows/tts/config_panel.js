@@ -1,16 +1,10 @@
-// Tools-panel "Secondary" card. Two sections: the global config slot
-// (volume / click-to-speak / karaoke) read and written through the workflow
-// config route, and the active conversation's per-character voice profile read
-// and written through the on-demand trigger. Backend / voice / model discovery
-// and voice preview need no conversation, so they ride the conversation-less
-// query route instead.
-
 import {
   api,
   closeModal,
   convUrl,
   esc,
   getActiveConvId,
+  getGroupCast,
   playAudio,
   registerAction,
   requestRepaint,
@@ -19,9 +13,6 @@ import {
 
 const WORKFLOW_ID = "tts";
 
-// Which profile fields each backend honors. Backend, voice, and the enable
-// toggle are always shown; everything here is shown only for the listed
-// backends.
 const BACKEND_FIELDS = {
   edge: ["language", "rate", "pitch"],
   kokoro: ["api_url", "language", "rate"],
@@ -30,8 +21,6 @@ const BACKEND_FIELDS = {
   elevenlabs: ["api_key", "model"],
 };
 
-// Filled into an empty api_url when the user first selects a self-hosted or
-// cloud backend, so the common case needs no typing.
 const DEFAULT_API_URL = {
   openai: "https://api.openai.com",
   fish: "http://localhost:8080",
@@ -55,8 +44,6 @@ let cfg = { auto_play: false, volume: 0.75, click_granularity: "block", click_pl
 
 export function initConfigPanel(sharedConfig) {
   cfg = sharedConfig;
-  // All panel controls wire via data-wf-action (see the markup below) resolved by
-  // the framework's delegated dispatcher — no window globals, no inline on*.
   registerAction(WORKFLOW_ID, "openSettings", () => openSettings());
   registerAction(WORKFLOW_ID, "closeSettings", () => closeModal());
   registerAction(WORKFLOW_ID, "cfgGlobal", () => saveGlobal());
@@ -64,23 +51,52 @@ export function initConfigPanel(sharedConfig) {
   registerAction(WORKFLOW_ID, "voiceReload", () => loadVoices());
   registerAction(WORKFLOW_ID, "profileSave", () => saveProfile());
   registerAction(WORKFLOW_ID, "preview", () => preview());
+  registerAction(WORKFLOW_ID, "profileMember", (el) => selectMember(el));
 }
+
+let memberId = null;
+let loadedProfile = null;
 
 function triggerUrl() {
   return convUrl(getActiveConvId(), "workflows", WORKFLOW_ID, "trigger");
 }
 
-// Conversation-less config/discovery: backend list, voice/model enumeration,
-// and preview. Unlike triggerUrl(), these carry no conversation, so they post
-// to the workflow's query route rather than the per-conversation trigger.
+function castWithCards() {
+  return (getGroupCast() || []).filter((member) => member.card_id);
+}
+
+function profileTarget() {
+  return memberId ? { speaker_member_id: memberId } : {};
+}
+
+function selectMember(select) {
+  const next = select.value;
+  if (next === memberId) return;
+  const dirty = loadedProfile && JSON.stringify(readForm()) !== JSON.stringify(loadedProfile);
+  if (dirty && !window.confirm("Discard your unsaved changes to this voice?")) {
+    select.value = memberId;
+    return;
+  }
+  memberId = next;
+  populateProfile();
+}
+
+function memberPickerHtml(cast) {
+  const options = cast
+    .map(
+      (member) =>
+        `<option value="${esc(member.id)}"${member.id === memberId ? " selected" : ""}>${esc(member.name)}</option>`,
+    )
+    .join("");
+  return `<label class="tts-config-row">Cast member
+      <select id="tts-pf-member" data-wf-action="tts:profileMember" data-wf-on="change">${options}</select>
+    </label>`;
+}
+
 function query(action, extra) {
   return api.post(`/workflows/${WORKFLOW_ID}/query`, { action, ...extra });
 }
 
-// Tools-panel card body: the framework owns the card frame (name + on/off toggle);
-// this fills in the description and a Settings button that opens the full form in a
-// modal, so the workflow stays a single entry rather than spilling its whole form
-// into the panel.
 export function configPanelRenderer() {
   return `<div class="tool-card-desc">Generate and play spoken audio for assistant replies.</div>
     <button class="btn btn-sm tool-card-btn" data-wf-action="tts:openSettings">Settings</button>`;
@@ -113,9 +129,6 @@ function settingsBodyHtml() {
     <div class="modal-actions"><button class="btn" data-wf-action="tts:closeSettings">Close</button></div>`;
 }
 
-// Opens the settings modal. The per-character section is filled after the modal
-// mounts, and refetched on every open -- so it always reflects the active
-// conversation's character without needing a re-render hook.
 function openSettings() {
   showModal(settingsBodyHtml());
   setTimeout(populateProfile, 0);
@@ -133,12 +146,7 @@ function saveGlobal() {
   if (granularity) cfg.click_granularity = granularity.value;
   if (playscope) cfg.click_play_scope = playscope.value;
   if (karaoke) cfg.show_karaoke = karaoke.checked;
-  // Clickable-word marking is applied per render and not torn down live, so a
-  // granularity change must repaint to add or clear the affordance on the
-  // already-rendered messages.
   if (cfg.click_granularity !== prevGranularity) requestRepaint();
-  // The config slot is replaced wholesale on write, so every key must be sent
-  // or an omitted one reverts to its default.
   api
     .put(`/workflows/${WORKFLOW_ID}/config`, {
       config: {
@@ -159,10 +167,23 @@ async function populateProfile() {
     el.innerHTML = `<div class="tts-config-note">Open a conversation to set its character's voice.</div>`;
     return;
   }
+  const cast = getGroupCast() ? castWithCards() : null;
+  if (cast) {
+    if (!cast.length) {
+      el.innerHTML = `<div class="tts-config-note">This scene has no character cards to give a voice.</div>`;
+      return;
+    }
+    if (!cast.some((member) => member.id === memberId)) memberId = cast[0].id;
+  } else {
+    memberId = null;
+  }
   let profile;
   let backends;
   try {
-    const [pr, bk] = await Promise.all([api.post(triggerUrl(), { action: "get_profile" }), query("list_backends")]);
+    const [pr, bk] = await Promise.all([
+      api.post(triggerUrl(), { action: "get_profile", ...profileTarget() }),
+      query("list_backends"),
+    ]);
     profile = pr?.profile;
     backends = bk?.backends || [];
   } catch (e) {
@@ -177,8 +198,9 @@ async function populateProfile() {
     el.innerHTML = `<div class="tts-config-note">This conversation has no character.</div>`;
     return;
   }
-  el.innerHTML = profileFormHtml(profile, backends);
+  el.innerHTML = profileFormHtml(profile, backends, cast);
   applyFieldVisibility(profile.backend);
+  loadedProfile = readForm();
   loadVoices(profile.voice_id);
   if (BACKEND_FIELDS[profile.backend]?.includes("model")) loadModels(profile.model);
 }
@@ -191,11 +213,12 @@ function field(name, inner) {
   return `<div class="tts-pf-field" data-field="${name}">${inner}</div>`;
 }
 
-function profileFormHtml(p, backends) {
+function profileFormHtml(p, backends, cast = null) {
   const backendOpts = backends.map((b) => opt(b.id, b.name || b.id, b.id === p.backend)).join("");
   const langOpts = LANGUAGES.map(([code, label]) => opt(code, label, p.language?.startsWith(code))).join("");
   return `
     <div class="tts-config-heading">Voice (this character)</div>
+    ${cast ? memberPickerHtml(cast) : ""}
     <label class="tts-config-row"><input type="checkbox" id="tts-pf-enabled"${p.enabled ? " checked" : ""}> Auto-generate speech for this character's replies</label>
     <label class="tts-config-row">Backend
       <select id="tts-pf-backend" data-wf-action="tts:backendChange" data-wf-on="change">${backendOpts}</select>
@@ -250,8 +273,6 @@ function onBackendChange() {
 
 async function loadVoices(selectId) {
   const sel = document.getElementById("tts-pf-voice");
-  // The mounted <select> is the real precondition, not a conversation: voice
-  // discovery rides the conversation-less query route (see query()).
   if (!sel) return;
   const f = readForm();
   const want = selectId != null ? selectId : sel.value;
@@ -295,7 +316,9 @@ async function saveProfile() {
   if (!getActiveConvId()) return;
   const status = document.getElementById("tts-pf-status");
   try {
-    const res = await api.post(triggerUrl(), { action: "set_profile", profile: readForm() });
+    const saved = readForm();
+    const res = await api.post(triggerUrl(), { action: "set_profile", profile: saved, ...profileTarget() });
+    if (!res?.error) loadedProfile = saved;
     if (status) status.textContent = res?.error ? res.error : "Saved";
   } catch (e) {
     console.error("tts: profile save failed", e);
@@ -304,9 +327,6 @@ async function saveProfile() {
 }
 
 async function preview() {
-  // Guard on the mounted form, not a conversation: preview synthesizes the
-  // form's unsaved profile through the conversation-less query route, and the
-  // Preview button only exists once the form is rendered.
   const status = document.getElementById("tts-pf-status");
   if (!status) return;
   try {

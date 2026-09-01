@@ -1,12 +1,10 @@
-"""Secondary-workflow routes: manifest, config, on-demand trigger, and the
-workflow-attachment lifecycle (regenerate / reroll-gen / rehydrate / activate /
-delete / access)."""
+"""Secondary-workflow configuration and attachment routes."""
 
 from __future__ import annotations
 
 import json
 import logging
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from typing import Any
 
@@ -22,6 +20,7 @@ from ...database import (
     get_character_card,
     get_conversation,
     get_db,
+    get_group_member,
     get_message_by_id,
     get_messages,
     get_messages_before,
@@ -72,6 +71,33 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 
+async def _resolve_workflow_character(
+    conv: Mapping[str, Any],
+    messages: Sequence[Mapping[str, Any]],
+    *,
+    target_message: Mapping[str, Any] | None = None,
+    speaker_member_id: str | None = None,
+) -> tuple[str | None, Mapping[str, Any] | None]:
+    """Resolve the solo card or a group message/member's current card."""
+    card_id = conv.get("character_card_id")
+    if conv.get("kind", "solo") == "group":
+        member_id = speaker_member_id
+        if member_id is None and target_message is not None:
+            member_id = target_message.get("speaker_member_id")
+        if member_id is None:
+            member_id = next(
+                (message.get("speaker_member_id") for message in reversed(messages) if message.get("speaker_member_id")),
+                None,
+            )
+        if member_id:
+            member = await get_group_member(str(member_id), conversation_id=str(conv["id"]))
+            card_id = member.get("character_card_id") if member else None
+        else:
+            card_id = None
+    card = await get_character_card(card_id) if card_id else None
+    return card_id, card
+
+
 def _gate_workflow_sub(
     sub: Subscription | None, wid: str, settings: Mapping[str, Any], *, action: str, detail: str
 ) -> Subscription:
@@ -91,19 +117,7 @@ def _gate_workflow_sub(
 
 @contextmanager
 def _hook_failures(label: str, wid: Any, aid: int | None = None, *, defect: str) -> Iterator[None]:
-    """The one distinction every hook call site has to make, drawn once.
-
-    A render failure is not an Orb defect: the provider rejected it, the model was
-    retired, the key is out of credits. Those arrive as ``WorkflowUserFacingError``,
-    whose message is the hook's own already-sanitized sentence (see
-    ``workflows/errors.py``), and go out as 502 -- the backend Orb depends on is what
-    did not deliver. Everything else is a bug: 500, traceback in the log, `defect` on
-    the wire and nothing else, since an unexpected traceback is where internals leak.
-
-    Shared so the five hook routes cannot drift: the streaming path already relays
-    the provider's own words, and the same failed render must not read differently
-    because the user pressed Reroll instead of Visualize.
-    """
+    """Map workflow hook failures to the API response shape."""
 
     def where() -> str:
         # Built on the failing path only, so the happy path pays nothing for it.
@@ -172,19 +186,7 @@ async def api_get_workflow_config(workflow_id: str):
 
 @router.post("/api/workflows/{workflow_id}/query")
 async def api_query_workflow(workflow_id: str, body: dict = Body(default={})):  # noqa: B008
-    """Run a workflow's conversation-less QUERY hook: global config / discovery.
-
-    The off-turn counterpart to ``/trigger`` for operations with no conversation
-    in scope -- readiness, capability discovery, external-backend probing.
-    Ungated by enablement, the same policy and reason as the config routes: these
-    answer setup and capability questions that must work *before* a workflow is
-    enabled (an artifact backend is configured, then switched on). Single-dispatch
-    by workflow id; 404 when the workflow declares no QUERY handler. No lock -- the
-    contract is read-only (queries never mutate workflow state). The handler's dict
-    is returned verbatim; it reports its own failures in-band as ``{"error": ...}``,
-    so a probe failure is a 200 the caller can degrade on, not an HTTP error. An
-    *unexpected* raise still becomes a 500, mirroring ``/trigger``.
-    """
+    """Run a workflow's conversation-free query hook."""
     if get_workflow(workflow_id) is None:
         raise HTTPException(status_code=404, detail=f"Workflow {workflow_id!r} is not registered")
     sub = get_subscription(workflow_id, HookType.QUERY)
@@ -234,13 +236,22 @@ async def api_trigger_workflow(cid: str, workflow_id: str, body: dict = Body(def
         conv = await get_conversation(cid)
         if conv is None:
             raise HTTPException(status_code=404, detail="Conversation not found")
-        card_id = conv.get("character_card_id")
-        card = await get_character_card(card_id) if card_id else None
         msgs = await get_messages(cid)
+        explicit_message = None
+        if type(body.get("message_id")) is int:
+            candidate = await get_message_by_id(body["message_id"])
+            if candidate is not None and candidate.get("conversation_id") == cid:
+                explicit_message = candidate
+        card_id, card = await _resolve_workflow_character(
+            conv,
+            msgs,
+            target_message=explicit_message,
+            speaker_member_id=body.get("speaker_member_id") if isinstance(body.get("speaker_member_id"), str) else None,
+        )
         last_user = next((m["content"] for m in reversed(msgs) if m["role"] == "user"), "")
         client = client_from_settings(settings_snapshot)
         agent_client, agent_model_name = agent_lane_from_settings(settings_snapshot, writer_client=client)
-        async with workflow_character_state_lock(conv.get("character_card_id") or "", workflow_id):
+        async with workflow_character_state_lock(card_id or "", workflow_id):
             with _hook_failures("on_demand hook", workflow_id, defect="On-demand handler raised; see server logs"):
                 od_ctx = OnDemandCtx(
                     conversation_id=cid,
@@ -250,7 +261,7 @@ async def api_trigger_workflow(cid: str, workflow_id: str, body: dict = Body(def
                     client=client,
                     agent_client=agent_client,
                     agent_model_name=agent_model_name,
-                    character_id=conv.get("character_card_id"),
+                    character_id=card_id,
                     character=_readonly(card),
                 )
                 result = await sub.callable(od_ctx, body)
@@ -300,8 +311,7 @@ async def api_regenerate_attachment(
         client = client_from_settings(settings_snapshot)
         agent_client, agent_model_name = agent_lane_from_settings(settings_snapshot, writer_client=client)
 
-        card_id = conv.get("character_card_id")
-        card = await get_character_card(card_id) if card_id else None
+        card_id, card = await _resolve_workflow_character(conv, list(msgs), target_message=anchor)
         with _hook_failures("regenerate hook", wid, aid, defect="Regenerate handler raised; see server logs"):
             regen_ctx = RegenCtx(
                 conversation_id=cid,
@@ -314,7 +324,7 @@ async def api_regenerate_attachment(
                 client=client,
                 agent_client=agent_client,
                 agent_model_name=agent_model_name,
-                character_id=conv.get("character_card_id"),
+                character_id=card_id,
                 character=_readonly(card),
             )
             new_dicts = await sub.callable(regen_ctx, body)
@@ -403,21 +413,7 @@ def _decode_generation_params(att: Mapping[str, Any]) -> dict:
 
 
 def _apply_param_overrides(params: dict, body: Mapping[str, Any] | None) -> None:
-    """Merge caller-supplied overrides into an attachment's stored generation params.
-
-    Replaces only keys the artifact already recorded, and only string-for-string, so a
-    client can retarget a render it can see (an edited prompt, today's style) without
-    inventing parameters the workflow never wrote. Reached only from /reroll-gen:
-    /rehydrate must replay its row exactly to recover the bytes it lost.
-
-    What *sticks* is narrower than what is accepted, and deliberately so. The hook
-    receives this dict and may amend it in place, so a workflow that records what its
-    render actually did will overwrite any key describing the render itself. An
-    override therefore survives into the sibling only where it names the *subject* --
-    the prompt, the style -- rather than the machinery. Overriding a key the workflow
-    rewrites is accepted and then lost, which is the honest outcome: a stored record
-    has to describe the render that happened, not the one a client asked for.
-    """
+    """Merge request overrides into stored generation parameters."""
     overrides = body.get("params") if isinstance(body, Mapping) else None
     if not isinstance(overrides, Mapping):
         return

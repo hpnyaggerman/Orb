@@ -1,8 +1,3 @@
-// Settings entrypoint. Endpoint/model configuration and persona management were
-// split into settings_models.js and settings_personas.js; this file keeps the
-// theme picker, the loadSettings orchestrator, the agent tools panel, the phrase
-// bank, and reset-to-defaults, and re-exports the two sub-modules so existing
-// importers (app.js, workflow_loader.js) keep working unchanged.
 import { api } from "./api.js";
 import { renderInspectorSecondary, renderMessages } from "./chat.js";
 import { renderInteractiveFragments } from "./library_fragments.js";
@@ -14,8 +9,6 @@ import { effectiveWorkflowEnabled, S } from "./state.js";
 import { $, esc, escAttr, formatBytes, toast } from "./utils.js";
 import { validate } from "./validate.js";
 
-// Re-export the sub-module public surfaces so "./settings.js" remains the stable
-// import path for endpoint/model and persona functions.
 export {
   loadAgentModelConfigs,
   loadEndpoints,
@@ -40,11 +33,12 @@ export {
   updateUserBtn,
 } from "./settings_personas.js";
 
-// ── Theme
 let _themes = null;
 
+const DEFAULT_THEME = "camono";
+
 export function applyTheme(name) {
-  if (_themes && !_themes.includes(name)) name = "dark";
+  if (_themes && !_themes.includes(name)) name = DEFAULT_THEME;
   $("theme-link").href = `/static/themes/${name}.css`;
   localStorage.setItem("ar-theme", name);
   const sel = $("theme-select");
@@ -52,7 +46,7 @@ export function applyTheme(name) {
 }
 
 export function initTheme() {
-  applyTheme(localStorage.getItem("ar-theme") || "dark");
+  applyTheme(localStorage.getItem("ar-theme") || DEFAULT_THEME);
 }
 
 export async function initThemeList() {
@@ -60,14 +54,13 @@ export async function initThemeList() {
   _themes = themes;
   const sel = $("theme-select");
   if (!sel) return;
-  const current = localStorage.getItem("ar-theme") || "dark";
+  const current = localStorage.getItem("ar-theme") || DEFAULT_THEME;
   sel.innerHTML = themes
     .map((t) => `<option value="${t}">${t.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())}</option>`)
     .join("");
-  sel.value = _themes.includes(current) ? current : "dark";
+  sel.value = _themes.includes(current) ? current : DEFAULT_THEME;
 }
 
-// ── Settings
 export async function loadSettings() {
   S.settings = await api.get("/settings");
   S.activePersonaId = S.settings.active_persona_id || null;
@@ -76,17 +69,13 @@ export async function loadSettings() {
   if (S.settings.enabled_tools) S.enabledTools = { ...S.enabledTools, ...S.settings.enabled_tools };
   if (typeof S.settings.enable_agent === "number") S.agentEnabled = S.settings.enable_agent !== 0;
 
-  // Length guard is a feature flag, not a tool — its own settings columns, not enabled_tools.
+  if (!S.settings.local_ml_config || typeof S.settings.local_ml_config !== "object") S.settings.local_ml_config = {};
+
   S.lengthGuardEnabled = Boolean(S.settings.length_guard_enabled);
   S.lengthGuardEnforce = Boolean(S.settings.length_guard_enforce);
 
-  // Agentic Lorebook: a feature flag (not a tool). When on, the Director picks
-  // relevant lorebook entries each turn instead of keyword matching. Depends on
-  // the Director (direct_scene) being enabled.
   S.agenticLorebookEnabled = Boolean(S.settings.agentic_lorebook_enabled);
 
-  // Editor Feedback: a feature flag (post-writer user-facing note). Gated here
-  // and again by at least one enabled feedback-type interactive fragment server-side.
   S.feedbackEnabled = Boolean(S.settings.feedback_enabled);
   S.directorIndividualFragments = Boolean(S.settings.director_individual_fragments);
   S.directionNotesRecord = Boolean(S.settings.direction_notes_record);
@@ -132,7 +121,6 @@ export async function loadSettings() {
     await loadAgentModelConfigs(S.agentEndpointId);
   }
 
-  // Expand Endpoints section if endpoint_url is empty
   const endpointsSection = $("endpoints-section");
   if (endpointsSection && (!S.settings.endpoint_url || S.settings.endpoint_url.trim() === "")) {
     const header = endpointsSection.previousElementSibling;
@@ -152,7 +140,6 @@ export async function loadSettings() {
   updateUserBtn();
 }
 
-// Labelled hairline separator used by the settings panel and its modals.
 const divider = (label) =>
   `<div style="display:flex;align-items:center;gap:12px;margin:16px 0 8px"><div style="flex:1;height:1px;background:var(--accent-dim)"></div><span style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--accent-dim)">${label}</span><div style="flex:1;height:1px;background:var(--accent-dim)"></div></div>`;
 
@@ -186,30 +173,27 @@ export function renderSettings() {
       <button class="btn btn-block btn-sm" onclick="showPresetsModal()">💾 Backup &amp; Presets</button>
     </div>
   `;
-  // Wired here rather than as inline on*= handlers: check_frontend_layers.py
-  // ratchets the inline-handler count and it is already at its ceiling.
   $("cleanup-btn").addEventListener("click", showCleanupModal);
   loadLocalMLSection();
 }
 
-// Human labels for local-ML features (keys match backend local_ml.MODELS).
 const LOCAL_ML_LABELS = {
   autocomplete: "Input Autocomplete",
   slop_classifier: "AI-Slop Classifier",
   emotion_classifier: "Character Expressions",
   pov_classifier: "Image POV",
+  prose_rewriter: "Prose Rewriter",
 };
 const LOCAL_ML_DESCS = {
   autocomplete: "Autocomplete input as you type.",
   slop_classifier: "Unlock AI slop scorer.",
   emotion_classifier: "Track a character's mood with expression images in the avatar popup.",
   pov_classifier: "Auto POV for image-gen.",
+  prose_rewriter: "Locally rewrite prose, automatically or on demand.",
 };
 
-// Tri-state per feature: deps missing → grayed Download + hint; deps ok & model
-// absent → active Download; model present → enable/disable toggle. Fetched fresh
-// (not from S.settings) because deps/present are server-filesystem facts.
-async function loadLocalMLSection() {
+async function loadLocalMLSection({ expectLoad = false } = {}) {
+  stopMlStateWatch();
   const el = $("local-ml-section");
   if (!el) return;
   let st;
@@ -219,8 +203,6 @@ async function loadLocalMLSection() {
     el.innerHTML = '<div class="tool-card-desc">Could not load Local ML status.</div>';
     return;
   }
-  // Deps missing → one grouped opt-in card instead of repeating the install
-  // command on every feature.
   if (!st.deps_ok) {
     const names = Object.keys(st.features)
       .map((f) => `<li>${esc(LOCAL_ML_LABELS[f] || f)}</li>`)
@@ -232,57 +214,273 @@ async function loadLocalMLSection() {
     return;
   }
   el.innerHTML = Object.entries(st.features)
-    .map(([f, info]) => {
-      const name = esc(LOCAL_ML_LABELS[f] || f);
-      if (!info.present) {
-        return `<div class="tool-card">
-          <div class="tool-card-header"><span class="tool-card-name">${name}</span>
-            <button class="btn btn-sm" id="local-ml-dl-${f}" onclick="downloadLocalMlModel('${f}')">Download</button></div>
-          <div class="tool-card-desc">Not downloaded (~${info.size_mb} MB)</div>
-        </div>`;
-      }
-      const desc = LOCAL_ML_DESCS[f] || "";
-      return `<div class="tool-card ${info.enabled ? "tool-on" : ""}">
-        <div class="tool-card-header"><span class="tool-card-name">${name}</span>
-          <label class="tog" onclick="event.stopPropagation()">
-            <input type="checkbox" ${info.enabled ? "checked" : ""} onchange="toggleLocalMlEnabled('${f}', this.checked)">
-            <span class="tog-slider"></span>
-          </label></div>
-        ${desc ? `<div class="tool-card-desc">${desc}</div>` : ""}
-      </div>`;
-    })
+    .map(([f, info]) => (info.variants ? variantCard(f, info) : simpleCard(f, info)))
     .join("");
+  wireLocalMLSection(el);
+  watchMlStates(st.features, expectLoad);
 }
 
-export async function downloadLocalMlModel(feature) {
-  const btn = $(`local-ml-dl-${feature}`);
-  if (btn) {
-    btn.disabled = true;
-    btn.textContent = "Downloading…";
+function simpleCard(f, info) {
+  const name = esc(LOCAL_ML_LABELS[f] || f);
+  if (!info.present) {
+    return `<div class="tool-card">
+      <div class="tool-card-header"><span class="tool-card-name">${name}</span>
+        <button class="btn btn-sm" data-ml-act="download" data-ml-feature="${escAttr(f)}">Download</button></div>
+      <div class="tool-card-desc">Not downloaded (~${info.size_mb} MB)</div>
+    </div>`;
   }
+  const desc = LOCAL_ML_DESCS[f] || "";
+  return `<div class="tool-card ${info.enabled ? "tool-on" : ""}">
+    <div class="tool-card-header"><span class="tool-card-name">${name}</span>
+      ${enableToggle(f, info.enabled)}</div>
+    ${desc ? `<div class="tool-card-desc">${desc}</div>` : ""}
+  </div>`;
+}
+
+const enableToggle = (f, on) =>
+  `<label class="tog" data-ml-act="stop">
+    <input type="checkbox" ${on ? "checked" : ""} data-ml-act="enabled" data-ml-feature="${escAttr(f)}">
+    <span class="tog-slider"></span>
+  </label>`;
+
+function variantCard(f, info) {
+  const name = esc(LOCAL_ML_LABELS[f] || f);
+  const desc = LOCAL_ML_DESCS[f] || "";
+  const ready = Boolean(info.runtime_ok);
+  const anyPresent = info.variants.some((v) => v.present);
+  const showVariants = ready || anyPresent;
+  const rows = info.variants.map((v) => variantRow(f, v, info.selected, ready)).join("");
+  return `<div class="tool-card ${ready && anyPresent && info.enabled ? "tool-on" : ""}"
+       data-ml-feature="${escAttr(f)}" data-ml-selected="${escAttr(info.selected || "")}">
+    <div class="tool-card-header"><span class="tool-card-name">${name}</span>
+      ${ready && anyPresent ? enableToggle(f, info.enabled) : ""}</div>
+    ${desc ? `<div class="tool-card-desc">${desc}</div>` : ""}
+    ${ready ? "" : runtimeGate()}
+    ${showVariants ? `<div class="ml-variants">${rows}</div>` : ""}
+    ${ready ? batchSizeControl(f, info) : ""}
+    ${ready ? `<div class="ml-foot">${gpuCheck(f, info)}${stateRow(f, info)}</div>` : ""}
+  </div>`;
+}
+
+const gpuCheck = (f, info) =>
+  `<label class="lg-enforce-label ml-check" title="Offload the model to the GPU. Switches the running model over.">
+    <input type="checkbox" ${info.gpu ? "checked" : ""} data-ml-act="gpu" data-ml-feature="${escAttr(f)}">
+    Run on GPU
+  </label>`;
+
+function batchSizeControl(f, info) {
+  if (!Number.isInteger(info.batch_size)) return "";
+  const id = escAttr(`ml-batch-size-${f}`);
+  const options = [
+    [1, "1 · lowest VRAM"],
+    [2, "2"],
+    [3, "3"],
+    [4, "4 · default"],
+    [8, "8 · fastest"],
+  ]
+    .map(
+      ([value, label]) => `<option value="${value}" ${info.batch_size === value ? "selected" : ""}>${label}</option>`,
+    )
+    .join("");
+  return `<div class="ml-batch">
+    <label for="${id}">Parallel</label>
+    <select class="tool-card-select" id="${id}" data-ml-act="batch-size" data-ml-feature="${escAttr(f)}">${options}</select>
+    <div>Lower values use less VRAM (~140–190 MB per slot).</div>
+  </div>`;
+}
+
+function variantRow(f, v, selected, ready) {
+  const attrs = `data-ml-feature="${escAttr(f)}" data-ml-variant="${escAttr(v.id)}"`;
+  const rid = escAttr(`ml-var-${f}-${v.id}`);
+  const on = ready && v.present && v.id === selected;
+  const label = escAttr(v.label);
+  const pick =
+    ready && v.present
+      ? `<input type="radio" id="${rid}" name="local-ml-variant-${escAttr(f)}" ${on ? "checked" : ""}
+              aria-label="Use ${label}" data-ml-act="select" ${attrs}>
+       <label class="ml-variant-name" for="${rid}">${label}</label>`
+      : `<span class="ml-variant-name">${label}</span>`;
+  const act = v.present
+    ? `<button class="btn btn-xs btn-danger ml-variant-act" title="Delete" aria-label="Delete ${label}"
+               data-ml-act="delete" ${attrs}>×</button>`
+    : `<button class="btn btn-xs ml-variant-act" data-ml-act="download" ${attrs}
+               ${ready ? "" : 'disabled title="Download the llama.cpp runtime first"'}>Download</button>`;
+  return `<div class="ml-variant${on ? " ml-variant-on" : ""}">
+    ${pick}
+    <span class="ml-variant-size">${(v.size_mb / 1024).toFixed(1)} GB</span>
+    ${act}
+    <div class="ml-variant-detail">${esc(v.detail)}</div>
+  </div>`;
+}
+
+function runtimeGate() {
+  return `<div class="ml-gate">
+    <div class="ml-gate-title">llama.cpp runtime required</div>
+    <div class="ml-gate-desc">Rewrites run in a local llama-server. Fetch it to unlock the models.</div>
+    <div class="ml-gate-act">
+      <button class="btn btn-sm" data-ml-act="runtime">Download · 150 MB</button>
+    </div>
+  </div>`;
+}
+
+function stateRow(f, info) {
+  const cls = info.state === "loading" ? " ml-foot-loading" : info.error ? " ml-foot-error" : "";
+  return `<span class="ml-foot-state${cls}" id="local-ml-state-${escAttr(f)}">${esc(mlStateText(info))}</span>`;
+}
+
+const mlStateText = (info) => `${info.state || "idle"}${info.error ? `: ${info.error}` : ""}`;
+
+const ML_STATE_POLL_MS = 1500;
+let mlStateTimer = null;
+
+function stopMlStateWatch() {
+  if (mlStateTimer !== null) clearTimeout(mlStateTimer);
+  mlStateTimer = null;
+}
+
+function watchMlStates(features, expectLoad) {
+  stopMlStateWatch();
+  const loading = Object.values(features).some((info) => info.state === "loading");
+  if (!loading && !expectLoad) return;
+  mlStateTimer = setTimeout(pollMlStates, ML_STATE_POLL_MS);
+}
+
+async function pollMlStates() {
+  mlStateTimer = null;
+  if (!$("local-ml-section")) return; // panel closed — nothing to write into
+  let st;
   try {
-    await api.post(`/local-ml/${feature}/download`, {});
-    await loadLocalMLSection(); // flips the card to a toggle
+    st = await api.get("/local-ml/status");
   } catch (_e) {
-    toast("Download failed", true);
-    if (btn) {
-      btn.disabled = false;
-      btn.textContent = "Download";
+    return; // a dropped poll costs nothing; the next render re-reads
+  }
+  for (const [f, info] of Object.entries(st.features)) {
+    const el = $(`local-ml-state-${f}`);
+    if (!el) continue;
+    el.textContent = mlStateText(info);
+    el.classList.toggle("ml-foot-error", Boolean(info.error));
+    el.classList.toggle("ml-foot-loading", info.state === "loading");
+  }
+  watchMlStates(st.features, false);
+}
+
+function wireLocalMLSection(el) {
+  if (el.dataset.mlWired) return;
+  el.dataset.mlWired = "1";
+  el.addEventListener("click", onLocalMLClick);
+  el.addEventListener("change", onLocalMLChange);
+}
+
+async function onLocalMLClick(ev) {
+  const target = ev.target.closest("[data-ml-act]");
+  if (!target) return;
+  const { mlAct: act, mlFeature: feature, mlVariant: variant } = target.dataset;
+  if (act === "stop") return ev.stopPropagation();
+  if (act === "download") return downloadLocalMlModel(feature, variant, target);
+  if (act === "delete") return deleteLocalMlModel(feature, variant);
+  if (act === "runtime") return fetchLlamaRuntime(target);
+}
+
+function onLocalMLChange(ev) {
+  const target = ev.target.closest("[data-ml-act]");
+  if (!target) return;
+  const { mlAct: act, mlFeature: feature, mlVariant: variant } = target.dataset;
+  if (act === "enabled") return toggleLocalMlEnabled(feature, target.checked);
+  if (act === "select") return saveLocalMlConfig(feature, { variant });
+  if (act === "gpu") return saveLocalMlConfig(feature, { gpu: target.checked });
+  if (act === "batch-size") return saveLocalMlConfig(feature, { batchSize: Number(target.value) });
+}
+
+function applyLocalMlResponse(res) {
+  if (!res || typeof res !== "object") return;
+  if (typeof res.local_ml_enabled === "object") S.settings.local_ml_enabled = res.local_ml_enabled;
+  if (typeof res.local_ml_config === "object") S.settings.local_ml_config = res.local_ml_config;
+  renderMessages();
+}
+
+async function saveLocalMlConfig(feature, patch) {
+  const root = $("local-ml-section");
+  const card = root?.querySelector(`.tool-card[data-ml-feature="${feature}"]`);
+  const picked = root?.querySelector(`input[name="local-ml-variant-${feature}"]:checked`);
+  const gpuBox = root?.querySelector(`input[data-ml-act="gpu"][data-ml-feature="${feature}"]`);
+  const batchSelect = root?.querySelector(`select[data-ml-act="batch-size"][data-ml-feature="${feature}"]`);
+  const body = {
+    variant: patch.variant ?? picked?.dataset.mlVariant ?? (card?.dataset.mlSelected || null),
+    gpu: patch.gpu ?? Boolean(gpuBox?.checked),
+    batch_size: patch.batchSize ?? Number(batchSelect?.value || 4),
+  };
+  try {
+    applyLocalMlResponse(await api.post(`/local-ml/${feature}/config`, body));
+  } catch (e) {
+    toast(e.message || "Failed to save", true);
+  }
+  loadLocalMLSection({ expectLoad: true }); // the config write pre-warms in the background
+}
+
+function deleteLocalMlModel(feature, variant) {
+  confirmDelete("Model", "Delete this downloaded model file? It can be downloaded again.", async () => {
+    try {
+      applyLocalMlResponse(
+        await api.del(`/local-ml/${feature}/model${variant ? `?variant=${encodeURIComponent(variant)}` : ""}`),
+      );
+    } catch (e) {
+      toast(e.message || "Delete failed", true);
     }
+    loadLocalMLSection();
+  });
+}
+
+function beginMlBusy(btn) {
+  const scope = btn?.closest(".ml-variant, .ml-gate, .tool-card");
+  if (!scope) return () => {};
+  const others = [...(btn.closest(".tool-card")?.querySelectorAll("button[data-ml-act]") ?? [btn])];
+  scope.classList.add("ml-busy");
+  scope.setAttribute("aria-busy", "true");
+  for (const b of others) b.disabled = true;
+  return () => {
+    scope.classList.remove("ml-busy");
+    scope.removeAttribute("aria-busy");
+    for (const b of others) b.disabled = false;
+  };
+}
+
+/** Fetch the runtime: both builds, so the GPU toggle never waits on a download.
+ *
+ * `expectLoad` because the fetch re-warms the model on what just landed —
+ * without it the state poller stops and the card sits on a stale line while the
+ * new runtime loads behind it.
+ */
+async function fetchLlamaRuntime(btn) {
+  const endBusy = beginMlBusy(btn);
+  try {
+    await api.post("/local-ml/prose_rewriter/runtime", {});
+  } catch (e) {
+    toast(e.message || "Runtime download failed", true);
+    endBusy();
+  }
+  loadLocalMLSection({ expectLoad: true });
+}
+
+async function downloadLocalMlModel(feature, variant, btn) {
+  const endBusy = beginMlBusy(btn);
+  try {
+    applyLocalMlResponse(await api.post(`/local-ml/${feature}/download`, variant ? { variant } : {}));
+    await loadLocalMLSection(); // flips the card to a toggle
+  } catch (e) {
+    toast(e.message || "Download failed", true);
+    endBusy();
   }
 }
 
-export async function toggleLocalMlEnabled(feature, on) {
+async function toggleLocalMlEnabled(feature, on) {
   try {
-    const res = await api.post(`/local-ml/${feature}/enabled`, { enabled: on });
-    if (res && typeof res.local_ml_enabled === "object") S.settings.local_ml_enabled = res.local_ml_enabled;
+    applyLocalMlResponse(await api.post(`/local-ml/${feature}/enabled`, { enabled: on }));
   } catch (_e) {
     toast("Failed to toggle", true);
   }
-  loadLocalMLSection();
+  loadLocalMLSection({ expectLoad: on }); // enabling pre-warms; disabling has nothing to wait for
 }
 
-// ── Agent Tools Panel
 const TOOL_DEFS = [
   {
     id: "direct_scene",
@@ -296,9 +494,6 @@ const TOOL_DEFS = [
   },
 ];
 
-// Individual scanners the Output Auditor can run; keys match backend AUDIT_TYPES.
-// Exported so the doc-mode pane (document_audit.js) reuses the same labels and
-// tooltips, filtered to its four doc-applicable keys.
 export const AUDIT_TYPE_DEFS = [
   { key: "banned_phrases", label: "Banned phrases", title: "Flag phrases from the Phrase Bank." },
   {
@@ -325,8 +520,6 @@ export const AUDIT_TYPE_DEFS = [
   },
 ];
 
-// The single settings-write path. Every toggle in the app funnels through here
-// so one failure story ("Failed to save setting") covers them all.
 export async function persistSettings(payload) {
   try {
     S.settings = await api.put("/settings", payload);
@@ -377,7 +570,6 @@ export async function toggleAgenticLorebook(on) {
 export async function toggleFeedbackEnabled(on) {
   S.feedbackEnabled = on;
   renderToolsPanel();
-  // Feedback fragments in the sidebar are greyed out when this feature is off.
   renderInteractiveFragments();
   await persistSettings({ feedback_enabled: on });
 }
@@ -391,9 +583,7 @@ export async function toggleDirectorIndividualFragments(on) {
 export async function setDirectionNotesRecord(on) {
   S.directionNotesRecord = on;
   renderToolsPanel();
-  // Direction-note fragments in the sidebar are greyed out when recording is off.
   renderInteractiveFragments();
-  // The per-message add-note button is gated on this switch, so repaint the messages too.
   renderMessages();
   updateDirectionNotesButton();
   await persistSettings({ direction_notes_record: on });
@@ -406,8 +596,6 @@ export async function setDirectionNotesInject(val) {
   await persistSettings({ direction_notes_inject: val });
 }
 
-// The Notes button and its panel only matter while notes are being recorded or injected;
-// with both off the feature is dormant, so hide the entry points and close the panel.
 function updateDirectionNotesButton() {
   const on = S.directionNotesRecord || S.directionNotesInject !== "off";
   for (const id of ["direction-notes-panel-btn", "mobile-direction-notes-btn"]) {
@@ -468,14 +656,6 @@ export async function saveLengthGuardConfig() {
   }
 }
 
-// -- Workflow enable/disable toggles (Agents panel, Secondary tab)
-//
-// Two storage columns back these: workflows_globally_enabled (master) and the
-// workflow_enabled {wid: bool} map. The master persists through the normal settings
-// PUT; each per-workflow flip goes through its dedicated per-key route (which writes
-// only that key), never the full-column settings PUT, so two tabs flipping different
-// workflows cannot clobber each other.
-
 export async function toggleWorkflowsGlobal(on) {
   await persistSettings({ workflows_globally_enabled: on });
   renderToolsPanel();
@@ -490,21 +670,11 @@ export async function toggleWorkflowEnabled(wid, on) {
   } catch (_e) {
     toast("Failed to toggle workflow", true);
   }
-  // Re-render regardless: on success the reassigned map drives the new state; on
-  // failure the unchanged stored value reverts the checkbox.
   renderToolsPanel();
   renderMessages();
   renderInspectorSecondary();
 }
 
-// One card per manifest workflow, under a master switch, in the Secondary tab.
-// Empty when no workflow exists so the panel's "no workflows" fallback still shows.
-// Each per-workflow checkbox reflects effective state -- so the master being off
-// shows every card unchecked, greyed, and disabled (the dependent-disable pattern)
-// while the stored per-workflow value is preserved (the master writes a separate
-// column). A workflow that ships a config panel folds it into the same card (one
-// entry, not a separate toggle and settings card) -- the registered renderer returns
-// the card body (description + any controls), shown only while the workflow is on.
 function buildWorkflowToggleRows() {
   if (!S.workflowManifest.length) return "";
   const g = S.settings?.workflows_globally_enabled;
@@ -558,9 +728,6 @@ export function renderToolsPanel() {
   $("agent-master-card").classList.toggle("tool-on", S.agentEnabled);
   $("tools-panel-btn").style.opacity = S.agentEnabled ? "1" : "0.5";
 
-  // Agentic Lorebook is independent of Direction (direct_scene): the picks run in
-  // their own select_lorebook call, so it works whenever the Agent is on with at
-  // least one non-constant lorebook entry.
   const alOn = S.agenticLorebookEnabled;
   const agenticLorebookCard = `<div class="tool-card ${alOn ? "tool-on" : ""}">
     <div class="tool-card-header">
@@ -680,7 +847,6 @@ export function renderToolsPanel() {
     <div class="tool-card-desc">Lets the AI keep lasting notes as the story unfolds. <b>Recording</b> saves them; <b>Injection</b> feeds saved notes back to the director, writer, or both.</div>
   </div>`;
 
-  // Grouped by pipeline stage: Director (before the writer) vs Editor (post-writing cleanup).
   const divider = (label) => `<div class="tools-divider"><span>${label}</span></div>`;
   $("tools-list").classList.toggle("workflows-off", !S.agentEnabled);
   $("tools-list").innerHTML =
@@ -700,8 +866,6 @@ export function renderToolsPanel() {
       `<div style="color:var(--text-muted);font-size:12px;padding:8px 0;">No workflows registered.</div>`;
   }
 }
-
-// ── Phrase Bank
 
 export async function showPhraseBankModal() {
   const groups = await api.get("/phrase-bank");
@@ -804,13 +968,11 @@ export function showAddPhraseGroupModal(editId = null, group = null) {
   _refreshPhraseSaveState();
 }
 
-// Current mode is whichever toggle button carries the `active` class.
 function _phraseMode() {
   const active = document.querySelector(".phrase-mode-btn.active");
   return active ? active.dataset.mode : "literal";
 }
 
-// Live-validate the regex field and gate the Save/Update button on it.
 function _refreshPhraseSaveState() {
   const saveBtn = document.getElementById("phrase-save-btn");
   const errEl = document.getElementById("phrase-regex-error");
@@ -825,14 +987,12 @@ function _refreshPhraseSaveState() {
 
   const value = input ? input.value : "";
   const result = validate.validatePhraseRegex(value);
-  // Only surface an error once the user has actually typed something.
   const showError = !result.valid && value.trim().length > 0;
   if (errEl) errEl.textContent = showError ? result.error : "";
   if (input) input.classList.toggle("invalid", showError);
   if (saveBtn) saveBtn.disabled = !result.valid;
 }
 
-// Helper functions exposed to window
 window.addVariantRow = () => {
   const container = document.getElementById("variant-list");
   const row = document.createElement("div");
@@ -842,10 +1002,8 @@ window.addVariantRow = () => {
     <button class="btn btn-xs btn-danger" onclick="removeVariantRow(this)">×</button>
   `;
   container.appendChild(row);
-  // Focus the new input and scroll it into view
   const input = row.querySelector(".variant-input");
   input.focus();
-  // Scroll the modal to show the new row
   row.scrollIntoView({ behavior: "smooth", block: "nearest" });
 };
 
@@ -854,7 +1012,6 @@ window.removeVariantRow = (btn) => {
   if (rows.length > 1) {
     btn.closest(".variant-row").remove();
   } else {
-    // If it's the last row, just clear it
     btn.closest(".variant-row").querySelector(".variant-input").value = "";
   }
 };
@@ -910,7 +1067,6 @@ window.savePhraseGroup = async (editId) => {
     }
     payload = { kind: "regex", pattern, variants: [] };
   } else {
-    // Exclude the regex field, which shares the .variant-input class.
     const variantInputs = document.querySelectorAll(".variant-input:not(.phrase-regex-input)");
     const rawVariants = Array.from(variantInputs).map((input) => input.value);
     const variants = rawVariants.map((v) => v.trim()).filter((v) => v.length > 0);
@@ -941,10 +1097,6 @@ window.savePhraseGroup = async (editId) => {
   }
 };
 
-// ── Data cleanup ──
-//
-// Two axes: which categories to clean, and how far back. Sizes are fetched per
-// cutoff so the age choice is made against real numbers rather than a guess.
 const CLEANUP_AGES = [
   [0, "Now (everything)"],
   [7, "7 days"],
@@ -952,8 +1104,6 @@ const CLEANUP_AGES = [
   [90, "90 days"],
 ];
 
-// The cap the LRU-3 eviction in the backend already enforces on every artifact
-// write — setting it is what makes artifacts self-trim without pressing anything.
 async function saveAttachmentBudget(el) {
   const mb = Math.max(50, Math.round(Number(el.value) || 0));
   el.value = String(mb);
@@ -995,16 +1145,10 @@ export async function showCleanupModal() {
     ${divider("Danger Zone")}
     <button class="btn btn-danger" id="cleanup-reset" style="width:100%;justify-content:center">⚠️ Reset to Defaults</button>`);
 
-  // e.target, not the bare handler: saveAttachmentBudget wants the input, and
-  // addEventListener hands it an Event (the old wiring silently saved 50 MB).
   $("attach-budget-mb").addEventListener("change", (e) => saveAttachmentBudget(e.target));
   $("cleanup-reset").addEventListener("click", showResetConfirmModal);
 
   const daysEl = $("cleanup-days");
-  // free_bytes is dead space *already* on the freelist, not what this run frees
-  // — right after a cleanup it is 0 while the checkboxes still show data, which
-  // read as a bug. The estimate is what the boxes select plus that freelist,
-  // since the cleanup VACUUMs either way.
   let stats = null;
   const paint = () => {
     if (!stats) return;
@@ -1041,8 +1185,6 @@ export async function showCleanupModal() {
         days: Number(daysEl.value),
       });
       closeModal();
-      // A lost VACUUM race still frees the pages, it just cannot hand them back
-      // to the OS until the next boot — say so rather than report a smaller win.
       const tail = r.compacted ? "" : " — disk space is returned on next restart";
       toast(`Freed ${formatBytes(r.bytes_reclaimed)}${tail}`);
       renderMessages();
@@ -1055,10 +1197,6 @@ export async function showCleanupModal() {
   await refresh();
 }
 
-// ── Reset to Defaults ──
-
-// Sub-modal layer: opened from inside Data Hygiene, so a cancel leaves that
-// modal standing instead of tearing it down.
 export async function showResetConfirmModal() {
   showSubConfirmModal(
     {

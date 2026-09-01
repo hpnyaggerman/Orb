@@ -1,15 +1,4 @@
-"""
-config.py — Per-turn configuration resolution.
-
-Resolves settings and the enabled-tools map into the immutable
-:class:`_PipelineConfig` the passes run under: feature flags, the two
-:class:`ModelLane` call surfaces (writer + agent), length-guard config, and the
-dynamic tool-schema overrides that stay byte-identical across all passes (so the
-LLM's KV cache is not busted).
-
-Imports the pass modules (length guard, director/editor overrides) — which is
-why the dependency-free predicates live in ``predicates.py`` rather than here.
-"""
+"""Resolve per-turn settings, model lanes, and tool schemas."""
 
 from __future__ import annotations
 
@@ -18,6 +7,8 @@ from typing import Any
 
 from ..core import ChatMessage, Macros
 from ..database.models import PhraseGroup
+from ..features.prose_rewriter import ProseRewriteConfig
+from ..features.prose_rewriter import resolve_config as resolve_prose_rewrite
 from ..inference import (
     CachedBase,
     LLMClient,
@@ -76,6 +67,12 @@ def _resolve_pipeline_config(
     length_guard: LengthGuard | None = resolve_length_guard(settings, agent_on)
     enabled_tools = apply_length_guard_tools(enabled_tools, length_guard)
 
+    # No `agent_on` conjunction, unlike every other editor feature above: the
+    # prose rewriter is a local model gated only by its own Local ML toggle,
+    # its selected variant being on disk, and a llama-server binary resolving.
+    # It contributes no tool schema, so the cached prefix is untouched.
+    prose_rewrite: ProseRewriteConfig | None = resolve_prose_rewrite(settings)
+
     # In dual-model mode the writer's KV cache is disjoint; skip tool schemas there.
     dual_model = is_dual_model(agent_client)
     writer_enabled_tools = {} if dual_model else enabled_tools
@@ -116,6 +113,7 @@ def _resolve_pipeline_config(
         audit_enabled=audit_enabled,
         length_guard=length_guard,
         do_edit=audit_enabled or length_guard is not None,
+        prose_rewrite=prose_rewrite,
         writer_lane=writer_lane,
         agent_lane=agent_lane,
     )
@@ -142,21 +140,12 @@ def _build_writer_tools_blob(
     enabled_tools: dict,
     *,
     agentic_lorebook: bool = False,
+    dynamic_world: bool = False,
+    grouped: bool = False,
 ) -> dict:
-    """Build the dynamic tool-schema overrides shared across all cached calls.
-
-    Mutates *enabled_tools* in place to enable ``give_feedback`` when the feedback
-    step is active, ``record_direction_note`` when the direction-note step is, and
-    ``select_lorebook`` when agentic lorebook is active. Returns a ``schema_overrides``
-    dict (``direct_scene`` and optionally ``give_feedback``/``record_direction_note``)
-    held byte-stable across every cached call in a turn so the LLM's KV cache is not
-    busted. (``select_lorebook`` needs no override -- its schema is fixed, so enabling
-    it lets ``enabled_schemas`` emit the registry schema into the shared blob.)
-
-    Called by ``_prepare_turn``.
-    """
+    """Build the tool schemas shared by cached calls."""
     writer_fragments, feedback_fragments, direction_note_fragments = _split_interactive_fragments(interactive_fragments)
-    direct_scene = build_direct_scene_override(writer_fragments)
+    direct_scene = build_direct_scene_override(writer_fragments, grouped=grouped)
     # Per-fragment mode fills one field per call, so requiredness on the shared blob
     # is meaningless -- and a non-empty `required` contradicts the "Fill ONLY X, leave
     # others empty" step prompt, which confuses the reasoning pass on endpoints that
@@ -166,6 +155,8 @@ def _build_writer_tools_blob(
     overrides: dict = {"direct_scene": direct_scene}
     if agentic_lorebook:
         enabled_tools["select_lorebook"] = True
+    if dynamic_world:
+        enabled_tools["propose_world_changes"] = True
     if _feedback_active(settings, feedback_fragments, agent_on=agent_enabled(settings)):
         overrides["give_feedback"] = build_feedback_override(feedback_fragments)
         enabled_tools["give_feedback"] = True

@@ -1,16 +1,16 @@
 :root {
-  --bg-deep:#0d0d0c;--bg-primary:#131312;--bg-surface:#181816;--bg-elevated:#1e1d1c;
-  --bg-hover:#242321;--border:#2c2b28;--border-light:#383631;
+  --bg-deep:#1e2326;--bg-primary:#272e33;--bg-surface:#2e383c;--bg-elevated:#374145;
+  --bg-hover:#414b50;--border:#414b50;--border-light:#4f5b58;
 
-  --text-primary:#9b8e77;
-  --text-secondary:#cec1a8;
-  --text-muted:#6d634f;
+  --text-primary:#d3c6aa;
+  --text-secondary:#9da9a0;
+  --text-muted:#7a8478;
 
-  --accent:#f1e9d5;
-  --accent-dim:#6b6049;
-  --accent-glow:rgba(216,200,158,0.06);
+  --accent:#a7c080;
+  --accent-dim:#6e7f54;
+  --accent-glow:rgba(167,192,128,0.13);
 
-  --red:#c45d3a;
+  --red:#e67e80;
 
   --font-prose:'Fira Code','Cascadia Code','Courier New',Consolas,monospace;
   --font-ui:'Fira Code','Cascadia Code','Courier New',Consolas,monospace;
@@ -20,17 +20,19 @@
   --sidebar-width:300px;--inspector-width:340px;--tools-width:260px;
 }
 
-/* Scrollbars */
 ::-webkit-scrollbar { width: 6px; height: 6px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: var(--border-light); border-radius: 0; }
 ::-webkit-scrollbar-thumb:hover { background: var(--accent-dim); }
-* { scrollbar-width: thin; scrollbar-color: var(--border-light) transparent; }
+:root {
+  --scrollbar-width: thin;
+  --scrollbar-thumb: var(--border-light);
+  --scrollbar-track: transparent;
+}
 
 textarea { appearance: none; -webkit-appearance: none; }
 textarea::-webkit-resizer { background: transparent; }
 
-/* Full-width messages */
 .message {
   max-width: 100% !important;
   margin-left: 0 !important;
@@ -59,7 +61,14 @@ textarea::-webkit-resizer { background: transparent; }
   padding: 1 !important;
 }
 
-/* Narration/thought text: dimmed like code comments, stays in the warm palette */
 .message .msg-body em {
-  color: var(--text-muted) !important;
+  color: #859289 !important;
+}
+
+.sidebar-section-header .arrow {
+  color: var(--accent-dim);
+}
+
+.sidebar-section-header:hover .arrow {
+  color: var(--accent);
 }

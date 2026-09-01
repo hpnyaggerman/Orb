@@ -1,14 +1,4 @@
-"""
-orchestrator.py — Sequences the three passes for one turn.
-
-:func:`_run_pipeline` resolves the per-turn config, threads a mutable
-:class:`TurnState` through the director, writer, and editor stages, runs
-POST_PIPELINE workflow hooks, and emits the terminal ``_result`` event.
-
-Context loading lives in ``context``, persistence in ``persistence``, and the
-public entry points in ``entrypoints``. ``_run_pipeline`` is called by
-``_generate_reply`` (and directly by tests).
-"""
+"""Sequence the Director, Writer, Editor, and post-pipeline stages."""
 
 from __future__ import annotations
 
@@ -16,7 +6,7 @@ import logging
 from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Any, TypeVar
 
-from ..core import ChatMessage, Macros
+from ..core import CastMember, ChatMessage, GroupContextMode, Macros
 from ..database.models import PhraseGroup
 from ..inference import LLMClient, _KVCacheTracker
 from .config import _resolve_pipeline_config, _split_interactive_fragments
@@ -29,35 +19,20 @@ from .failures import (
 )
 from .passes.director import direction_note_step, director_stage
 from .passes.editor import editor_stage
-from .passes.writer import writer_stage
+from .passes.writer import strip_speaker_label, writer_stage
 from .predicates import direction_note_recording_active
-from .state import LorebookTurn, TurnState
+from .sheet_update import sheet_update_stage
+from .state import LorebookTurn, SheetUpdateTurn, TurnState, WorldProposalTurn
 from .workflow_bridge import _PostPipelineResult, _run_post_pipeline
+from .world_proposal import world_proposal_stage
 
 logger = logging.getLogger(__name__)
 
 _Ev = TypeVar("_Ev")
 
 
-# ── Core pipeline ─────────────────────────────────────────────────────────────
-
-
 async def _staged(stage: str, gen: AsyncIterator[_Ev]) -> AsyncIterator[_Ev]:
-    """Pass *gen*'s events through, labelling anything that escapes it with *stage*.
-
-    The sequence below is the only code that knows which pass is running, and a
-    failure is classified two layers up in ``entrypoints._run_turn_handler``. So
-    the label rides the exception (see ``failures.mark_stage``).
-
-    Worth the wrapper because the alternative was a frontend guess keyed on the
-    last phase event, and the phases do not line up with the passes: nothing moves
-    the frontend off ``"directing"`` until the writer's first token, so every
-    writer *rejection* -- which by definition arrives before any token -- used to
-    be reported against the director.
-
-    ``except Exception`` deliberately excludes ``GeneratorExit`` and
-    ``CancelledError``: a stop is not a failed stage and must stay untouched.
-    """
+    """Pass events through and label uncategorized failures."""
     try:
         async for ev in gen:
             yield ev
@@ -117,6 +92,14 @@ async def _run_pipeline(
     schema_overrides: Mapping[str, dict],
     history: Sequence[Mapping[str, Any]] | None = None,
     lorebook: LorebookTurn | None = None,
+    world_proposal: WorldProposalTurn | None = None,
+    sheet_update: SheetUpdateTurn | None = None,
+    speaker: CastMember | None = None,
+    speaker_cue: str = "",
+    context_mode: GroupContextMode = "private",
+    run_director: bool = True,
+    director_seed: TurnState | None = None,
+    run_exchange_final: bool = True,
 ) -> AsyncIterator[dict]:
     """Run the director → writer → editor passes for one turn.
 
@@ -169,34 +152,42 @@ async def _run_pipeline(
         active_moods=director["active_moods"],
         macro_choices=dict(director.get("macro_choices") or {}),
     )
+    # A group exchange runs one Director for every speaker, so speakers 2..n start
+    # from its result instead of re-deriving it. Which fields that covers is
+    # ``TurnState``'s to say (``_DIRECTOR_SEED_FIELDS``), not this module's --
+    # including the pre-writer notes, which the driver clears from the seed once
+    # the exchange's first reply has anchored them.
+    if director_seed is not None:
+        state.seed_from(director_seed)
 
-    # --- Director pass (+ rewrite, style injection, agentic-lorebook block) ---
-    async for ev in _staged(
-        STAGE_DIRECTOR,
-        director_stage(
-            cfg,
-            state,
-            settings=settings,
-            director=director,
-            mood_fragments=mood_fragments,
-            writer_fragments=writer_fragments,
-            attachments=attachments,
-            kv_tracker=kv_tracker,
-            lorebook=lorebook,
-            macros=macros,
-        ),
-    ):
-        yield ev
+    if run_director:
+        async for ev in _staged(
+            STAGE_DIRECTOR,
+            director_stage(
+                cfg,
+                state,
+                settings=settings,
+                director=director,
+                mood_fragments=mood_fragments,
+                writer_fragments=writer_fragments,
+                attachments=attachments,
+                kv_tracker=kv_tracker,
+                lorebook=lorebook,
+                macros=macros,
+            ),
+        ):
+            yield ev
 
     # Both clients share one abort token, so checking either is equivalent.
     if client.is_aborted:
         return
 
-    # --- Direction-note step (pre-writer placement) ---
     # Reflects on the scene direction the director just set, so it requires
     # direct_scene (which is what produces that direction).
-    if direction_note_recording_active(settings, pre_writer_notes, agent_on=cfg.agent_on) and cfg.enabled_tools.get(
-        "direct_scene"
+    if (
+        run_director
+        and direction_note_recording_active(settings, pre_writer_notes, agent_on=cfg.agent_on)
+        and cfg.enabled_tools.get("direct_scene")
     ):
         async for ev in _staged(
             STAGE_DIRECTOR,
@@ -219,7 +210,6 @@ async def _run_pipeline(
         ):
             yield ev
 
-    # --- Writer pass ---
     async for ev in _staged(
         STAGE_WRITER,
         writer_stage(
@@ -229,6 +219,10 @@ async def _run_pipeline(
             attachments=attachments,
             kv_tracker=kv_tracker,
             depth_block=lorebook.depth_block,
+            speaker=speaker,
+            speaker_cue=speaker_cue,
+            macros=macros,
+            context_mode=context_mode,
         ),
     ):
         yield ev
@@ -239,7 +233,6 @@ async def _run_pipeline(
         kv_tracker.log_summary()
         return
 
-    # --- Editor pass (edit loop + post-writer feedback step) ---
     async for ev in _staged(
         STAGE_EDITOR,
         editor_stage(
@@ -254,7 +247,15 @@ async def _run_pipeline(
     ):
         yield ev
 
-    # --- Post-pipeline workflow iteration ---
+    # A full editor rewrite can reintroduce the model's self-label after the
+    # writer's streaming gate removed it. Apply the same pure transform and
+    # announce the corrected authoritative draft before workflows consume it.
+    if speaker is not None:
+        stripped_draft = strip_speaker_label(state.resp_text, speaker.name)
+        if stripped_draft != state.resp_text:
+            state.resp_text = stripped_draft
+            yield {"event": "writer_rewrite", "data": {"refined_text": stripped_draft}}
+
     # director_output is a plain dict (PostCtx expects a read-only mapping).
     director_output = state.as_director_output()
     post: _PostPipelineResult | None = None
@@ -286,11 +287,11 @@ async def _run_pipeline(
     # Fold any hook-rewritten draft back into state before emitting _result.
     state.resp_text = post.draft
 
-    # --- Direction-note step (post-turn placement) ---
     # Sees the finished reply. Skipped on an empty draft (no message to anchor notes
     # to) and on a stop arriving after the last pre-editor abort check.
     if (
-        direction_note_recording_active(settings, post_turn_notes, agent_on=cfg.agent_on)
+        run_exchange_final
+        and direction_note_recording_active(settings, post_turn_notes, agent_on=cfg.agent_on)
         and state.resp_text.strip()
         and not client.is_aborted
     ):
@@ -313,6 +314,36 @@ async def _run_pipeline(
                 state,
                 "editor",
             ),
+        ):
+            yield ev
+
+    # Last, deliberately: it judges the prose that will actually be persisted, so
+    # it has to sit after the editor and after any draft-rewriting post-pipeline
+    # hook. Same skip conditions as the post-turn notes step -- an empty draft has
+    # nothing to derive world state from, and a stop must not start a fresh call.
+    if run_exchange_final and world_proposal is not None and state.resp_text.strip() and not client.is_aborted:
+        async for ev in _staged(
+            STAGE_EDITOR,
+            world_proposal_stage(
+                cfg,
+                state,
+                settings=settings,
+                turn=world_proposal,
+                kv_tracker=kv_tracker,
+            ),
+        ):
+            yield ev
+
+    # Last of the post-turn steps, and for the same reason the world stage is
+    # second-to-last: it judges the prose that will actually be persisted, so it
+    # has to sit after the editor and after any draft-rewriting post-pipeline
+    # hook. `run_exchange_final` is what makes it once-per-exchange rather than
+    # once-per-speaker; the driver only builds a turn for the final speaker, and
+    # the gate here is what keeps that true if another caller forgets.
+    if run_exchange_final and sheet_update is not None and state.resp_text.strip() and not client.is_aborted:
+        async for ev in _staged(
+            STAGE_EDITOR,
+            sheet_update_stage(cfg, state, turn=sheet_update),
         ):
             yield ev
 

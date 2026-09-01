@@ -1,13 +1,4 @@
-"""Analysis layer — pure prose-quality detection.
-
-Depends only on ``core`` and ``database.models`` (+ stdlib). It sits below
-``workflows`` and ``pipeline``, parallel to ``inference`` — shared by the editor
-pass and workflow tools without any sideways analysis/inference dependency.
-
-The facade re-exports the auditor entry points and the public result types.
-Detector *functions* (``detect_cliches``, ``detect_opening_monotony``, …) and
-private helpers are reached via ``analysis.detectors.<module>`` directly.
-"""
+"""Pure prose-quality detection and editor patching helpers."""
 
 from __future__ import annotations
 
@@ -19,26 +10,29 @@ from .detectors.slop_detector import DetectionResult
 from .detectors.structural_repetition import StructuralResult
 from .detectors.template_repetition import FlaggedTemplate, TemplateResult
 from .format_consistency import FormatDriftReport, normalize_to_baseline
-from .patching import apply_id_patches, filter_audit_report_to_text
+from .patching import (
+    PatchError,
+    PatchErrorKind,
+    apply_id_patches,
+    filter_audit_report_to_text,
+)
 from .targets import Target, build_targets, format_numbered_report, target_ids_for
 from .text.text_segmentation import split_narration_sentences
 
 __all__ = [
-    # audit — consolidated runner + report
     "AUDIT_TYPES",
     "AuditReport",
     "format_report",
     "report_to_dict",
     "run_audit",
-    # targets — findings resolved into id-addressable draft locations
     "Target",
     "build_targets",
     "format_numbered_report",
     "target_ids_for",
-    # patching — report filtering + id-anchored application
     "apply_id_patches",
     "filter_audit_report_to_text",
-    # detector result types
+    "PatchError",
+    "PatchErrorKind",
     "DetectionResult",
     "MonotonyResult",
     "FlaggedOpener",
@@ -47,9 +41,7 @@ __all__ = [
     "StructuralResult",
     "PhraseResult",
     "EchoResult",
-    # format consistency — deterministic markup normalizer
     "FormatDriftReport",
     "normalize_to_baseline",
-    # shared segmentation helper
     "split_narration_sentences",
 ]

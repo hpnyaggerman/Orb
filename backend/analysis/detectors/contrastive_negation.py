@@ -1,28 +1,10 @@
-"""
-contrastive_negation.py — Detect the "not X, but Y" rhetorical pattern that
-marks a lot of AI-generated prose.
-
-Catches patterns like:
-    "It's not a bug, but a feature."
-    "This isn't a setback, it is an opportunity."
-    "He doesn't just give up; he breaks down."
-
-Avoids common false positives:
-    - "not only … but (also)"
-    - infinitive negation ("told him not to go, but …")
-    - ordinary clause contrast ("I'm not sure, but I think …")
-    - unrelated be-verb in the second clause ("isn't done, but the deadline is …")
-    - questions ("Isn't that odd? Where is …")
-    - subject switches ("He isn't X, she is Y")
-"""
+"""Detect contrastive negation in prose."""
 
 from __future__ import annotations
 
 import re
 
 from ..text.text_segmentation import split_sentences
-
-# ── helpers ───────────────────────────────────────────────────────────────────
 
 # Dialogue is intentionally kept: clause-grammar analysis must see quoted text.
 # Paragraph-first splitting (in text_segmentation) prevents a paragraph that
@@ -75,36 +57,33 @@ _CLAUSE_SIGNALS = (
 )
 
 
+# Ordered ``(members, suffixes, blocked_suffixes, tag)`` rules; the first match
+# wins, so closed-class membership stays ahead of the suffix heuristics that
+# would otherwise shadow it ("does" is a VERB before "s" makes it one, "only" is
+# an ADV before "ly" does). A word matching no rule is a NOUN.
+_TAG_RULES: tuple[tuple[frozenset[str], tuple[str, ...], tuple[str, ...], str], ...] = (
+    (_BE_VERBS | _DO_VERBS, (), (), "VERB"),
+    (frozenset({"a", "an", "the"}), (), (), "DET"),
+    (frozenset({"not"}), ("n't",), (), "NEG"),
+    (_CONJUNCTIONS, (), (), "CONJ"),
+    (_PRONOUNS, (), (), "PRON"),
+    (frozenset(), ("ly",), (), "ADV"),
+    (frozenset(), ("tion", "ment", "ness", "ity", "ure"), (), "NOUN"),
+    (frozenset(), ("ing", "ed"), (), "VERB"),
+    # Plural/3rd-person "s", minus the endings that are simply part of the stem.
+    (frozenset(), ("s", "es"), ("ss", "us", "is", "as", "os"), "VERB"),
+    (frozenset(), ("ful", "ous", "ive", "ble", "al", "ent", "ant"), (), "ADJ"),
+    (_COMMON_VERBS, (), (), "VERB"),
+)
+
+
 def _tag_word(word: str) -> str:
     low = word.lower()
-    if low in _BE_VERBS:
-        return "VERB"
-    if low in _DO_VERBS:
-        return "VERB"
-    if low in ("a", "an", "the"):
-        return "DET"
-    if low in ("not", "n't") or low.endswith("n't"):
-        return "NEG"
-    if low in _CONJUNCTIONS:
-        return "CONJ"
-    if low in _PRONOUNS:
-        return "PRON"
-    if low.endswith("ly"):
-        return "ADV"
-    if low.endswith(("tion", "ment", "ness", "ity", "ure")):
-        return "NOUN"
-    if low.endswith(("ing", "ed")):
-        return "VERB"
-    if low.endswith(("s", "es")) and not low.endswith(("ss", "us", "is", "as", "os")):
-        return "VERB"
-    if low.endswith(("ful", "ous", "ive", "ble", "al", "ent", "ant")):
-        return "ADJ"
-    if low in _COMMON_VERBS:
-        return "VERB"
+    for members, suffixes, blocked, tag in _TAG_RULES:
+        if low in members or (low.endswith(suffixes) and not low.endswith(blocked)):
+            return tag
     return "NOUN"
 
-
-# ── constants ─────────────────────────────────────────────────────────────────
 
 _NEGATED_BE = frozenset(
     {
@@ -129,9 +108,6 @@ _PERSONAL_PRONOUNS = frozenset("i me he him she her we us they them you".split()
 # Object-form pronouns can't open a clause; in do-support X they're objects
 # ("doesn't just hit it"), not clause signals.
 _OBJECT_PRONOUNS = frozenset("me him her it us them".split())
-
-
-# ── guard helpers ─────────────────────────────────────────────────────────────
 
 
 def _strip_trailing_punct(tokens: list[str], tags: list[str]):
@@ -160,9 +136,7 @@ def _x_looks_like_clause(x_tokens: list[str], ignore: frozenset[str] = frozenset
 
 
 def _y_looks_like_clause(y_tokens: list[str], exclude_it: bool = False) -> bool:
-    """True if the Y span opens with its own subject, making it an independent
-    clause rather than a bare complement. Pass exclude_it=True in do-support
-    contexts where 'it' is unambiguously an object, not a subject."""
+    """Return whether Y opens with an independent subject."""
     if not y_tokens:
         return False
     first = y_tokens[0].lower()
@@ -170,13 +144,8 @@ def _y_looks_like_clause(y_tokens: list[str], exclude_it: bool = False) -> bool:
     return first in _CLAUSE_SIGNALS and first not in exclusions
 
 
-# ── Strategy 2: negated be-verb … affirmative be-verb ────────────────────────
-
-
 def _find_negated_be_pattern(tokens: list[str], tags: list[str]) -> dict | None:
-    """Match the 'isn't X, ... is Y' pattern, but only when the affirmative
-    clause shares the same subject (or refers back to it with 'it', 'this',
-    'that')."""
+    """Match a negated-be / affirmative-be pattern with a shared subject."""
 
     neg_idx = None
     neg_width = 1
@@ -239,9 +208,6 @@ def _find_negated_be_pattern(tokens: list[str], tags: list[str]) -> dict | None:
             "is_parallel": x_tags == y_tags,
         }
     return None
-
-
-# ── Strategy 3: do-support ───────────────────────────────────────────────────
 
 
 def _find_do_support_pattern(tokens: list[str], tags: list[str], lowers: list[str]) -> dict | None:
@@ -347,9 +313,6 @@ def _find_do_support_pattern(tokens: list[str], tags: list[str], lowers: list[st
     }
 
 
-# ── Strategy 1: "not … but …" ────────────────────────────────────────────────
-
-
 def _find_not_but_pattern(lowers: list[str], words: list[str], tags: list[str]) -> dict | None:
     not_idx = but_idx = None
     for i, w in enumerate(lowers):
@@ -388,8 +351,6 @@ def _find_not_but_pattern(lowers: list[str], words: list[str], tags: list[str]) 
         "is_parallel": x_tags == y_tags,
     }
 
-
-# ── main entry point ──────────────────────────────────────────────────────────
 
 _BE_CONTRACTION_STARTERS = frozenset(
     {
@@ -433,14 +394,7 @@ def _split_contractions(tokens: list[str]) -> list[str]:
 
 
 def detect_contrastive_negation(text: str) -> list[dict]:
-    """Find "not X, but Y", "isn't X, it is Y", and "doesn't X, it Ys" rhetorical patterns.
-
-    Returns a list of dicts, one per matched sentence, with keys:
-        sentence      — the full sentence that matched
-        x_template    — POS tag sequence for the negated span (X)
-        y_template    — POS tag sequence for the affirmed span (Y)
-        is_parallel   — True when X and Y share the same tag sequence
-    """
+    """Return sentences matching the supported contrastive-negation patterns."""
     sentences = _split_sentences(text)
     results = []
 

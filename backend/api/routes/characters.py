@@ -9,7 +9,7 @@ import os
 import tempfile
 import uuid
 import zipfile
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import Response
@@ -24,21 +24,36 @@ from ...database import (
     get_character_avatar,
     get_character_card,
     get_character_expression,
+    get_character_usage,
     get_lorebook_entries,
+    get_settings,
     get_user_persona,
     get_world,
     get_world_by_name,
     list_character_cards,
     list_expression_labels,
     set_character_expressions,
+    set_public_profile,
     sync_conversations_for_card,
     update_character_card,
 )
 from ...features.cards import downloader as card_downloader
+from ...features.cards import draft_card_profile
 from ...features.cards import expressions as card_expressions
 from ...features.cards import parsing as tavern_cards
-from ..deps import _normalise_lorebook_entry, lorebook_to_book
-from ..schemas import CharacterCardCreate, CharacterCardUpdate, ImportUrlRequest
+from ...inference import agent_lane_from_settings, client_from_settings
+from ..deps import (
+    _normalise_lorebook_entry,
+    lorebook_to_book,
+    profile_draft_failures,
+    project_lorebook_view,
+)
+from ..schemas import (
+    CharacterCardCreate,
+    CharacterCardUpdate,
+    ImportUrlRequest,
+    PublicProfilePayload,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +172,32 @@ async def api_get_character(card_id: str):
     return card
 
 
+@router.post("/api/characters/{card_id}/public-profile/generate")
+async def api_generate_public_profile(card_id: str):
+    """Return an editable draft; generation never overwrites the card.
+
+    Raises rather than degrading: a plausible-looking profile built from the
+    card's description under a "Draft ready" toast is worse than an error,
+    because it is indistinguishable from a real answer.
+    """
+    card = await get_character_card(card_id)
+    if not card:
+        raise HTTPException(status_code=404, detail="Character card not found")
+    settings = await get_settings()
+    client = client_from_settings(settings)
+    agent_client, model = agent_lane_from_settings(settings, writer_client=client)
+    with profile_draft_failures(f"Public-profile generation for card {scrub_log(card_id)!r}"):
+        return await draft_card_profile(agent_client, model or "", card)
+
+
+@router.put("/api/characters/{card_id}/public-profile")
+async def api_save_public_profile(card_id: str, data: PublicProfilePayload):
+    card = await set_public_profile(card_id, data.appearance, data.role)
+    if not card:
+        raise HTTPException(status_code=404, detail="Character card not found")
+    return (card.get("extensions") or {}).get("orb", {}).get("public_profile", {})
+
+
 @router.put("/api/characters/{card_id}")
 async def api_update_character(card_id: str, data: CharacterCardUpdate):
     old_card = await get_character_card(card_id)
@@ -186,6 +227,13 @@ async def api_delete_character(card_id: str, delete_conversations: bool = False)
     return {"ok": True}
 
 
+@router.get("/api/characters/{card_id}/usage")
+async def api_character_usage(card_id: str):
+    if not await get_character_card(card_id):
+        raise HTTPException(status_code=404, detail="Character card not found")
+    return await get_character_usage(card_id)
+
+
 @router.get("/api/characters/{card_id}/avatar")
 async def api_get_avatar(card_id: str, request: Request):
     result = await get_character_avatar(card_id)
@@ -206,8 +254,14 @@ async def api_get_avatar(card_id: str, request: Request):
 
 
 @router.get("/api/characters/{card_id}/export")
-async def api_export_character(card_id: str):
-    """Export a character card as a V2-compatible card PNG."""
+async def api_export_character(card_id: str, world_view: Literal["authored", "effective"] = "authored"):
+    """Export a character card as a V2-compatible card PNG.
+
+    The embedded ``character_book`` is the *authored* lorebook by default, so a
+    card shared with someone else carries the lore its author wrote rather than
+    whatever a particular playthrough's Agent proposed and its owner accepted.
+    ``world_view=effective`` opts into exporting the projection instead.
+    """
     card = await get_character_card(card_id, include_avatar=True)
     if not card:
         raise HTTPException(status_code=404, detail="Character not found")
@@ -232,7 +286,7 @@ async def api_export_character(card_id: str):
     world_id = export_card.get("world_id")
     if world_id and not export_card.get("character_book"):
         world = await get_world(world_id)
-        entries = await get_lorebook_entries(world_id)
+        entries = project_lorebook_view(await get_lorebook_entries(world_id), world_view)
         export_card["character_book"] = lorebook_to_book(world["name"] if world else "", entries)
 
     png_bytes = tavern_cards.to_png(export_card, avatar_bytes)
@@ -243,9 +297,6 @@ async def api_export_character(card_id: str):
         media_type="image/png",
         headers={"Content-Disposition": f'attachment; filename="{safe_name}.png"'},
     )
-
-
-# ── Character expressions (expression packs) ──────────────────────────────────
 
 
 @router.post("/api/characters/{card_id}/expressions")

@@ -1,20 +1,4 @@
-"""Per-(endpoint, model) request translation profiles.
-
-Some OpenAI-compatible backends reject unknown body fields or require
-specific value shapes. This module defines policies that mutate the request
-body before it leaves ``LLMClient.complete()``.
-
-Two-level lookup (PROFILES dict):
-- Known endpoint + known model → model-specific profile (replaces default).
-- Known endpoint + unknown/blank model → endpoint default (``None`` key).
-- Unknown endpoint → ``None`` = pass-through (local llama.cpp, vLLM, etc.).
-
-To add a new quirk:
-  1. Flip a typed knob (``allow_extra``, ``allow_forced_tool_choice``).
-  2. Attach a ``custom=`` callable for one-off logic.
-  3. Promote a recurring ``custom=`` pattern to a named dataclass field.
-  4. Subclass ``ModelProfile`` and override ``apply()`` for radically different APIs.
-"""
+"""Translate requests for endpoint and model quirks."""
 
 from __future__ import annotations
 
@@ -175,10 +159,16 @@ PROFILES: dict[str, dict[str | None, ModelProfile]] = {
             allow_forced_tool_choice=False,  # forced -> "auto"
         ),
     },
-    # NanoGPT proxies to per-model providers whose tool-argument decoding is
+    # NanoGPT is a *proxy*: each model id it fronts sits behind a different
+    # upstream engine with its own config, so no endpoint-wide statement about
+    # decoding is true of every model. Its own tool-argument decoding is
     # unconstrained (observed: GLM-5.2 TEE mangles hyphenated argument keys
-    # under a forced call), but its documented response_format json_schema
-    # strict mode is honored -- so forced calls go out as structured output.
+    # under a forced call) while its documented response_format json_schema
+    # strict mode is honored by the routes that implement it -- so the opt-in
+    # here is the *optimistic default*, not a claim about the whole catalogue.
+    # An upstream that quietly ignores the schema is demoted per model on the
+    # first reply that proves it (``note_structured_output_ignored``), which is
+    # why this stays one endpoint-wide knob instead of a hand-kept model list.
     "nano-gpt.com": {
         None: ModelProfile(
             allow_extra=None,  # lenient passthrough; drop nothing
@@ -200,28 +190,28 @@ def note_forced_tool_choice_ignored(endpoint_url: str, model: str) -> None:
     _FORCED_CHOICE_IGNORED.add((endpoint_url, model))
 
 
-def honors_forced_tool_choice(endpoint_url: str, model: str = "", params: Mapping[str, Any] | None = None) -> bool:
-    """True when a forced-function ``tool_choice`` is expected to actually force.
+# (endpoint_url, model) pairs whose reply proved the endpoint did not actually
+# constrain decoding to the strict ``response_format`` schema it was sent. A
+# provider that *rejects* the field answers 4xx and is handled by
+# recover_from_error; one that accepts and ignores it can only be caught by
+# reading the reply. In-memory only, like ``_FORCED_CHOICE_IGNORED`` above.
+_STRUCTURED_OUTPUT_IGNORED: set[tuple[str, str]] = set()
 
-    Dry-runs :func:`prepare_request_body` over a throwaway body rather than
-    re-stating any provider rule, so profile knobs, conditional transforms
-    (DeepSeek's thinking check) and session-learned drops all count. *params*
-    is the rest of the intended body — pass the reasoning params, since
-    whether forcing survives can depend on them.
 
-    Providers that ignore the field instead of rejecting it can't be known up
-    front; they get learned via :func:`note_forced_tool_choice_ignored`.
+def note_structured_output_ignored(endpoint_url: str, model: str) -> None:
+    """Record that *model* ignored a strict ``response_format`` schema.
 
-    Callers that assembled a multi-tool array only as a cache optimization
-    should ship just the forced tool when this returns ``False``: an unforced
-    array turns every rival schema into a coin flip.
-
-    ``True`` says the *choice* survives to the wire. It says nothing about what
-    the server then renders into the prompt — several backends honor forcing by
-    serializing only the forced tool and dropping the rest of the array (see
-    docs/architecture/kv-cache.md, Invariant 3). So a ``True`` here does not mean
-    a shared multi-tool array is producing a shared prefix.
+    Callers must only report a reply that *proves* the constraint was absent --
+    a completed, non-empty answer that is not the JSON the schema demanded.
+    A truncated or empty reply proves nothing (same standard as
+    :func:`note_forced_tool_choice_ignored`), and demoting on one would cost
+    the endpoint its best-caching call shape over a flaky turn.
     """
+    _STRUCTURED_OUTPUT_IGNORED.add((endpoint_url, model))
+
+
+def honors_forced_tool_choice(endpoint_url: str, model: str = "", params: Mapping[str, Any] | None = None) -> bool:
+    """Return whether this endpoint should honor forced tool choice."""
     if (endpoint_url, model) in _FORCED_CHOICE_IGNORED:
         return False
     body: dict = {**(dict(params) if params else {}), "tool_choice": {"type": "function", "function": {"name": "_probe"}}}
@@ -230,7 +220,17 @@ def honors_forced_tool_choice(endpoint_url: str, model: str = "", params: Mappin
 
 
 def supports_structured_tool_calls(endpoint_url: str, model: str = "") -> bool:
-    """True when the (endpoint, model) profile opts into structured forced calls."""
+    """True when the (endpoint, model) profile opts into structured forced calls.
+
+    The profile knob is an *opt-in that evidence can revoke*. A proxy endpoint
+    fronts many upstream engines, so honoring strict ``response_format`` is a
+    per-model fact the URL cannot settle; a model that answers a schema-forced
+    call with something the schema forbids has proven its route decodes
+    unconstrained, and :func:`note_structured_output_ignored` demotes just that
+    pair for the rest of the session.
+    """
+    if (endpoint_url, model) in _STRUCTURED_OUTPUT_IGNORED:
+        return False
     profile = profile_for(endpoint_url, model)
     return profile is not None and profile.structured_tool_calls
 
@@ -252,7 +252,6 @@ def profile_for(endpoint_url: str, model: str = "") -> ModelProfile | None:
     return None
 
 
-# ---------------------------------------------------------------------------
 # Request preparation + error recovery (the provider seam LLMClient calls)
 #
 # These two module-level functions are the *entire* provider-specific surface
@@ -261,7 +260,6 @@ def profile_for(endpoint_url: str, model: str = "") -> ModelProfile | None:
 # worth one retry. Everything that knows about a provider -- URL matching,
 # error-text sniffing, the session memory of what a model rejects -- lives
 # here, not in llm_client.
-# ---------------------------------------------------------------------------
 
 # (endpoint_url, model) pairs seen to reject the tool_choice param this
 # session. In-memory only (cleared on restart); lets later calls drop it up
