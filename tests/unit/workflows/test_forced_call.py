@@ -4,11 +4,12 @@ path."""
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator
 from typing import Any
 
 from backend.inference import STANDALONE_TOOLS, TOOLS
-from backend.workflows._forced_call import forced_tool_call
+from backend.workflows._forced_call import _usage_line, forced_tool_call
 
 _TOOL_NAME = "editor_rewrite"
 _SETTINGS = {"model_name": "test-model"}
@@ -507,3 +508,63 @@ class TestGracefulDegradation:
             )
         )
         assert out == [{"type": "result", "args": {}}]
+
+
+class TestUsageLogging:
+    """The accounting line is what says whether a thinking call spent its budget on
+    reasoning or on the answer -- the failure that shows up as "no arguments"."""
+
+    def test_usage_line_reads_the_reported_split(self):
+        usage = {
+            "prompt_tokens": 1200,
+            "prompt_tokens_details": {"cached_tokens": 1000},
+            "completion_tokens": 450,
+            "completion_tokens_details": {"reasoning_tokens": 300},
+        }
+        message = {"reasoning_content": "x" * 900, "tool_calls": [{"function": {"name": "t", "arguments": '{"a": 1}'}}]}
+        assert _usage_line(usage, message) == (
+            "tokens prompt=1200 cached=1000 completion=450 reasoning=300 | streamed reasoning=900 chars, answer=8 chars"
+        )
+        # DeepSeek spells the cache side differently; the answer side is the same.
+        deepseek = {
+            "prompt_tokens": 1200,
+            "prompt_cache_hit_tokens": 1000,
+            "completion_tokens": 450,
+            "completion_tokens_details": {"reasoning_tokens": 300},
+        }
+        assert _usage_line(deepseek, message) == _usage_line(usage, message)
+
+    def test_usage_line_measures_the_stream_when_the_provider_reports_nothing(self):
+        message = {"reasoning_content": "thought" * 3, "content": "answer"}
+        assert _usage_line(None, message) == "tokens unreported | streamed reasoning=21 chars, answer=6 chars"
+        # A usage block with no reasoning split still carries the streamed size.
+        assert _usage_line({"prompt_tokens": 10, "completion_tokens": 5}, message) == (
+            "tokens prompt=10 cached=0 completion=5 reasoning=? | streamed reasoning=21 chars, answer=6 chars"
+        )
+        # An empty reply is a real zero, not an unreported count.
+        assert "completion=0 reasoning=?" in _usage_line({"prompt_tokens": 10, "completion_tokens": 0}, message)
+
+    async def test_every_finished_call_logs_one_accounting_line(self, caplog):
+        done = {
+            "type": "done",
+            "message": {
+                "tool_calls": [{"function": {"name": _TOOL_NAME, "arguments": '{"rewritten_text": "x"}'}}],
+                "finish_reason": "stop",
+            },
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5},
+        }
+        with caplog.at_level(logging.INFO, logger="backend.workflows._forced_call"):
+            await _collect(
+                forced_tool_call(
+                    client=_FakeClient([done]),
+                    prefix=[],
+                    tail_messages=[],
+                    tool_name=_TOOL_NAME,
+                    settings=_SETTINGS,
+                )
+            )
+        lines = [r.getMessage() for r in caplog.records if r.getMessage().startswith(f"forced_tool_call {_TOOL_NAME}: ")]
+        assert lines == [
+            f"forced_tool_call {_TOOL_NAME}: model=test-model finish=stop tokens prompt=10 cached=0 "
+            "completion=5 reasoning=? | streamed reasoning=0 chars, answer=23 chars"
+        ]

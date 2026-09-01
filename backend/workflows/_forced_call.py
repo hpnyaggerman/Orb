@@ -16,8 +16,42 @@ from ..inference import (
     parse_tool_calls,
     reasoning_cfg,
 )
+from ..inference.kv_tracker import extract_cache_stats
 
 logger = logging.getLogger(__name__)
+
+
+def _usage_line(usage: Mapping[str, Any] | None, message: Mapping[str, Any]) -> str:
+    """One line of token accounting for a finished forced call.
+
+    The reported half reads the provider's ``usage`` block: the prompt and cache
+    side through :func:`extract_cache_stats`, the answer side as
+    ``completion_tokens`` with the ``completion_tokens_details.reasoning_tokens``
+    split OpenAI, OpenRouter and DeepSeek all spell the same way. The measured half
+    is what actually streamed, in characters, because a provider that reports no
+    reasoning split -- or no usage at all -- must not hide a call that spent its
+    whole budget thinking.
+    """
+    reasoning_chars = len(message.get("reasoning_content") or "")
+    answer_chars = len(message.get("content") or "") + sum(
+        len(str((call.get("function") or {}).get("arguments") or "")) for call in message.get("tool_calls") or []
+    )
+    measured = f"streamed reasoning={reasoning_chars} chars, answer={answer_chars} chars"
+    if not isinstance(usage, Mapping):
+        return f"tokens unreported | {measured}"
+    cache = extract_cache_stats(dict(usage))
+    details = usage.get("completion_tokens_details") or usage.get("output_tokens_details")
+    reasoning = details.get("reasoning_tokens") if isinstance(details, Mapping) else None
+    if reasoning is None:
+        reasoning = usage.get("reasoning_tokens")
+    completion = usage.get("completion_tokens")
+    if completion is None:
+        completion = usage.get("output_tokens")
+    return (
+        f"tokens prompt={cache['prompt_tokens']} cached={cache['cached_tokens']} "
+        f"completion={completion if completion is not None else '?'} "
+        f"reasoning={reasoning if reasoning is not None else '?'} | {measured}"
+    )
 
 
 def _plain(obj: Any) -> Any:
@@ -146,6 +180,13 @@ async def forced_tool_call(
                     }
             elif etype == "done":
                 resp = event.get("message", {}) or {}
+                logger.info(
+                    "forced_tool_call %s: model=%s finish=%s %s",
+                    tool_name,
+                    resolved_model,
+                    resp.get("finish_reason") or "?",
+                    _usage_line(event.get("usage"), resp),
+                )
                 if kv_tracker is not None:
                     kv_tracker.record_usage(kv_label, event.get("usage"))
 
