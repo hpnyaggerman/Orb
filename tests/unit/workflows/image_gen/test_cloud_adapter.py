@@ -352,6 +352,15 @@ def test_a_configured_provider_is_ready():
     assert _bound(_config("xai", model="")).readiness()["ready"] is True
 
 
+def test_the_connections_proxy_reaches_the_client():
+    """The one read of the stored proxy, through the real `_client` that `_adapter`
+    replaces wholesale."""
+    config = _config()
+    config["cloud"]["providers"]["xai"]["proxy"] = "socks5://127.0.0.1:1080"
+    assert _bound(config)._client(30.0).proxy == "socks5://127.0.0.1:1080"
+    assert _bound(_config())._client(30.0).proxy is None
+
+
 def test_readiness_judges_a_replay_on_the_model_it_recorded():
     """Clearing the model field must not refuse a rehydrate of an image whose own
     model is still there to render it -- the stored model is what will be sent."""

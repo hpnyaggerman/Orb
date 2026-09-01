@@ -131,15 +131,15 @@ CONFIG_DEFAULTS = {
         # A ComfyUI graph is meaningless to any other backend, so this one stays put.
         "user_graphs": [],
     },
-    # Connectivity only: an address and a credential, exactly as wide as
-    # `external_comfy`'s. What an image looks like belongs to the style.
+    # Connectivity only: how Orb reaches the provider. What an image looks like
+    # belongs to the style.
     "cloud": {
         "provider": "xai",
         # One entry per cloud connection, keyed by provider id. One representative
         # entry ships so the preset-schema coverage walker can see the `api_key` leaf
         # under the map level; it is inert and the panel does not list it until it
         # holds something.
-        "providers": {"xai": {"api_key": "", "base_url": ""}},
+        "providers": {"xai": {"api_key": "", "base_url": "", "proxy": ""}},
     },
 }
 
@@ -410,11 +410,31 @@ def _cloud_base_url(value: Any) -> str:
     return url.rstrip("/")
 
 
-def _cloud_provider_entry(raw: Any) -> dict:
-    """One cloud connection: an address and a credential, and nothing else.
+# The schemes httpx can mount a proxy transport for (socks5 through the
+# httpx[socks] extra) -- the same allowlist the LLM endpoint proxy is gated on.
+PROXY_SCHEMES = ("http", "https", "socks5")
 
-    Exactly as wide as the ComfyUI connection's `{api_url, api_key}`, because a
-    connection is how Orb *reaches* a backend. What an image looks like -- the model,
+
+def _proxy_url(value: Any) -> str:
+    """A proxy for this connection's requests, or "" for a direct connection.
+
+    Gated on the scheme at save time so a URL httpx cannot mount is dropped here
+    rather than failing every render. Credentials are kept, unlike on the API
+    URLs: a proxy URL is where they belong, and it rides no request line or log.
+    """
+    url = _text(value, 2_048)
+    if not url:
+        return ""
+    parsed = urlsplit(url)
+    if parsed.scheme.lower() not in PROXY_SCHEMES or not parsed.hostname:
+        return ""
+    return url
+
+
+def _cloud_provider_entry(raw: Any) -> dict:
+    """One cloud connection: an address, a credential and an optional proxy.
+
+    Only what it takes to *reach* the backend. What an image looks like -- the model,
     the resolution, the quality, whether a reference rides along -- is what a style
     is, and lives there, so two styles on one provider can differ.
 
@@ -426,6 +446,7 @@ def _cloud_provider_entry(raw: Any) -> dict:
     return {
         "api_key": _text(raw.get("api_key"), 2_048),
         "base_url": _cloud_base_url(raw.get("base_url")),
+        "proxy": _proxy_url(raw.get("proxy")),
     }
 
 

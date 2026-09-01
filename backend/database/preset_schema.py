@@ -80,6 +80,8 @@ SECRET_JSON_PATHS: dict[tuple[str, str], tuple[tuple[str, ...], ...]] = {
     ("settings", "workflow_config"): (
         ("image_gen", "external_comfy", "api_key"),
         ("image_gen", "cloud", "providers", "*", "api_key"),
+        # Secret for the reason endpoints.proxy is: a proxy URL may carry credentials.
+        ("image_gen", "cloud", "providers", "*", "proxy"),
     ),
     ("character_cards", "workflow_state"): (("tts", "api_key"),),
     ("conversations", "workflow_state"): (),

@@ -14,7 +14,9 @@ For general image settings, see [Image Generation](image-generation.md).
 1. Open **Workflow → Secondary**.
 2. In **Image Generation**, select **Settings**.
 3. Open **Connections → Add connection**.
-4. Select a provider and enter its API key.
+4. Select a provider and enter its API key. Optionally enter a **Proxy** URL
+   (`http://`, `https://`, or `socks5://`) for this connection; it is independent
+   of any proxy set on an LLM endpoint.
 5. Select **Test connection**.
 6. Under **Styles**, assign the connection to a style.
 7. Choose a **Model** and **Resolution**. Set **Quality** or **Reference images**

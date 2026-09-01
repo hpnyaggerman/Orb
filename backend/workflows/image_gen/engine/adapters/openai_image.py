@@ -202,6 +202,7 @@ class OpenAICompatibleImageAdapter(ImageAdapter):
             str(self._entry.get("api_key") or ""),
             label=self.label,
             timeout=timeout,
+            proxy=str(self._entry.get("proxy") or ""),
         )
 
     def _require_preset(self) -> ProviderPreset:

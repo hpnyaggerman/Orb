@@ -291,10 +291,10 @@ def test_an_unknown_provider_id_is_retained_with_its_key():
     cloud = _cloud(provider="renamed_in_v2", providers={"renamed_in_v2": {"api_key": "still-mine", "model": "m"}})
 
     assert cloud["provider"] == "renamed_in_v2"
-    # A connection is an address and a credential, exactly as wide as the ComfyUI
-    # one's {api_url, api_key}. `model` was here and belongs to the style now, so it
-    # is read on the way past and not written back -- which is the migration.
-    assert cloud["providers"]["renamed_in_v2"] == {"api_key": "still-mine", "base_url": ""}
+    # A connection is how Orb reaches the provider: an address, a credential and a
+    # proxy. `model` was here and belongs to the style now, so it is read on the way
+    # past and not written back -- which is the migration.
+    assert cloud["providers"]["renamed_in_v2"] == {"api_key": "still-mine", "base_url": "", "proxy": ""}
 
 
 def test_switching_provider_keeps_the_other_providers_keys():
@@ -319,6 +319,28 @@ def test_switching_provider_keeps_the_other_providers_keys():
 def test_a_cloud_base_url_override_rejects_credentials_and_plaintext(url, expected):
     stored = _cloud(provider="custom", providers={"custom": {"base_url": url}})
     assert stored["providers"]["custom"]["base_url"] == expected
+
+
+@pytest.mark.parametrize(
+    "url, expected",
+    [
+        ("socks5://127.0.0.1:1080", "socks5://127.0.0.1:1080"),
+        ("http://proxy.example.test:8080", "http://proxy.example.test:8080"),
+        # Credentials stay: a proxy URL is where they belong, and it rides no
+        # request line or log the way a base URL's would.
+        ("https://user:secret@proxy.example.test:8443", "https://user:secret@proxy.example.test:8443"),
+        ("   ", ""),
+        ("socks5h://127.0.0.1:1080", ""),  # httpx mounts no transport for it
+        ("ftp://proxy.example.test", ""),
+        ("socks5://", ""),
+        ("not a url", ""),
+    ],
+)
+def test_a_connection_proxy_is_kept_only_when_httpx_can_mount_it(url, expected):
+    """The LLM endpoint proxy's allowlist, applied on save: a scheme httpx cannot
+    build a transport for is dropped here rather than failing every render."""
+    stored = _cloud(provider="xai", providers={"xai": {"api_key": "k", "proxy": url}})
+    assert stored["providers"]["xai"]["proxy"] == expected
 
 
 # ── the render target, on the style ──────────────────────────────────────────
@@ -415,7 +437,7 @@ def test_render_settings_hoist_from_the_connection_onto_each_style_that_links_it
     # top level. Inert until its graph maps size slots, which is opt-in at import.
     assert (styles["local"]["width"], styles["local"]["height"]) == (1536, 1024)
     # And the entry keeps only what a connection is.
-    assert config["cloud"]["providers"]["togetherai"] == {"api_key": "k", "base_url": ""}
+    assert config["cloud"]["providers"]["togetherai"] == {"api_key": "k", "base_url": "", "proxy": ""}
 
 
 def _migrated_config(*, style: dict, references: list[dict], cloud: dict | None = None) -> dict:
@@ -547,7 +569,7 @@ def test_a_connection_no_style_links_loses_its_model_and_keeps_its_key():
     """Nothing renders there, so there is nothing to hoist the model onto. Linking a
     style later seeds from the preset's own default, resolved at the adapter."""
     cloud = _cloud(provider="xai", providers={"openai": {"api_key": "kept", "model": "gpt-image-1"}})
-    assert cloud["providers"]["openai"] == {"api_key": "kept", "base_url": ""}
+    assert cloud["providers"]["openai"] == {"api_key": "kept", "base_url": "", "proxy": ""}
 
 
 def test_the_cloud_block_is_connectivity_only():

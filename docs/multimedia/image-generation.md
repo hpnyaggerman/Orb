@@ -52,7 +52,8 @@ and image files. A ComfyUI connection without an imported workflow cannot render
 ### Cloud provider
 
 1. Open **Connections → Add connection**.
-2. Choose a provider and enter its API key.
+2. Choose a provider and enter its API key, and a proxy URL if this connection
+   needs one.
 3. Select **Test connection** to load the provider's models.
 4. Assign the connection to a style.
 5. Choose a model, resolution, and any supported quality or reference-image options.

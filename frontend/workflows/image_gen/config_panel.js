@@ -605,8 +605,9 @@ function cloudFields(connection) {
   return `${unknown}<div class="ig-grid">
       <label>API key<input type="password" ${connField("api_key")} value="${escAttr(entry.api_key || "")}" placeholder="Paste your key"></label>
       ${baseUrl}
+      <label>Proxy<input ${connField("proxy")} value="${escAttr(entry.proxy || "")}" placeholder="socks5://127.0.0.1:1080"></label>
     </div>
-    <div class="image-gen-note">Model, resolution and the reference image are chosen per style, under <strong>Styles</strong> above.</div>
+    <div class="image-gen-note">Model, resolution and the reference image are chosen per style, under <strong>Styles</strong> above. A proxy set here routes this connection only.</div>
     ${capabilityLine(preset)}${docs}`;
 }
 
@@ -694,6 +695,7 @@ function captureConnections() {
       ...entry,
       api_key: get("api_key") ?? entry.api_key ?? "",
       base_url: get("base_url") ?? entry.base_url ?? "",
+      proxy: get("proxy") ?? entry.proxy ?? "",
     };
   }
 }
@@ -712,6 +714,7 @@ function addConnection() {
     ...existing,
     api_key: existing.api_key || "",
     base_url: existing.base_url || "",
+    proxy: existing.proxy || "",
   };
   pendingConnections.add(id);
   rebuildConnections();
@@ -746,7 +749,7 @@ function refreshConnectionState(el) {
   }
   refreshConnectionSummary();
   renderStyles(openStyleIds());
-  if (["api_key", "base_url", "api_url"].includes(el.dataset.igConnField)) loadModels(id);
+  if (["api_key", "base_url", "api_url", "proxy"].includes(el.dataset.igConnField)) loadModels(id);
 }
 
 function revealConnection(id) {

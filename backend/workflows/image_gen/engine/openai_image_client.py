@@ -167,12 +167,16 @@ class OpenAIImageClient:
         label: str = "the image provider",
         timeout: float = 180.0,
         transport: httpx.AsyncBaseTransport | None = None,
+        proxy: str | None = None,
     ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.label = label
         self.timeout = timeout
         self.transport = transport
+        # "" is the stored default (no proxy) and must reach httpx as None: it
+        # rejects "" as a proxy URL.
+        self.proxy = proxy or None
 
     def _http(self, timeout: float) -> httpx.AsyncClient:
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
@@ -181,6 +185,7 @@ class OpenAIImageClient:
             headers={**headers, "Content-Type": "application/json"},
             timeout=timeout,
             transport=self.transport,
+            proxy=self.proxy,
         )
 
     def _bad(self, said: str, kind: str = "malformed") -> CloudImageError:
@@ -327,15 +332,17 @@ class OpenAIImageClient:
 
         `b64_json` is preferred wherever supported -- one fewer hop, and nothing
         fetches an attacker-influenceable URL. When this path is taken: https only,
-        and the cap is enforced while streaming rather than by trusting
-        `content-length`, which the server is free to lie about.
+        the cap is enforced while streaming rather than by trusting
+        `content-length`, which the server is free to lie about, and the download
+        rides the connection's proxy like the API call did, so the provider's CDN
+        never sees the bare network.
         """
         if not url.lower().startswith("https://"):
             raise self._bad("returned an image over an insecure URL", "insecure_url")
         chunks: list[bytes] = []
         total = 0
         try:
-            async with httpx.AsyncClient(timeout=timeout, transport=self.transport) as client:
+            async with httpx.AsyncClient(timeout=timeout, transport=self.transport, proxy=self.proxy) as client:
                 async with client.stream("GET", url) as response:
                     response.raise_for_status()
                     async for chunk in response.aiter_bytes():

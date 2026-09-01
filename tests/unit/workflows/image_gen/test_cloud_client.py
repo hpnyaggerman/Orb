@@ -13,6 +13,7 @@ import base64
 import httpx
 import pytest
 
+from backend.workflows.image_gen.engine import openai_image_client
 from backend.workflows.image_gen.engine.image_bytes import MAX_IMAGE_BYTES
 from backend.workflows.image_gen.engine.openai_image_client import (
     MODEL_NOT_FOUND,
@@ -558,3 +559,42 @@ async def test_a_transport_failure_never_reveals_the_endpoint():
     with pytest.raises(CloudImageError) as exc:
         await _client(handler).create_image("/images/generations", {"model": "m"}, provider_id="xai", timeout=10)
     assert str(exc.value) == "Could not communicate with xAI (Grok)"
+
+
+# -- the connection's proxy ---------------------------------------------------
+
+
+def test_a_blank_proxy_means_a_direct_connection():
+    # The stored default is ""; httpx rejects "" as a proxy URL, so it must reach
+    # httpx as None.
+    assert _client(_ok({}), proxy="").proxy is None
+    assert _client(_ok({})).proxy is None
+    assert _client(_ok({}), proxy="socks5://127.0.0.1:1080").proxy == "socks5://127.0.0.1:1080"
+
+
+@pytest.mark.asyncio
+async def test_the_proxy_rides_both_the_api_call_and_the_hosted_result_download(monkeypatch):
+    """One connection, one route out: a provider that answers with a URL must not
+    have that URL fetched from the bare network after the API call went through the
+    proxy. Observed at construction, because httpx routes every request through the
+    proxy mount ahead of any transport -- a MockTransport behind a real proxy never
+    sees the request at all."""
+    seen: list[str | None] = []
+    real = httpx.AsyncClient
+
+    class Recording(real):
+        def __init__(self, *args, **kwargs):
+            seen.append(kwargs.pop("proxy", None))
+            super().__init__(*args, **kwargs)
+
+    monkeypatch.setattr(openai_image_client.httpx, "AsyncClient", Recording)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/images/generations"):
+            return httpx.Response(200, json={"data": [{"url": "https://cdn.example.test/out.png"}]})
+        return httpx.Response(200, content=PNG, headers={"content-type": "image/png"})
+
+    await _client(handler, proxy="socks5://127.0.0.1:1080").create_image(
+        "/images/generations", {"model": "m"}, provider_id="xai", timeout=10
+    )
+    assert seen == ["socks5://127.0.0.1:1080", "socks5://127.0.0.1:1080"]
