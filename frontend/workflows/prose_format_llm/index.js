@@ -15,7 +15,7 @@ function injectStyles() {
   const link = document.createElement("link");
   link.id = "pf-workflow-styles";
   link.rel = "stylesheet";
-  link.href = "/static/workflows/" + WORKFLOW_ID + "/prose_format.css";
+  link.href = `/static/workflows/${WORKFLOW_ID}/prose_format.css`;
   document.head.appendChild(link);
 }
 
@@ -27,9 +27,9 @@ registerWorkflowPipeline({
   id: WORKFLOW_ID,
   label: "Prose Format",
   passes: [
-    { id: WORKFLOW_ID + ":analyze", label: "Analyze" },
-    { id: WORKFLOW_ID + ":judge", label: "Judge" },
-    { id: WORKFLOW_ID + ":enforce", label: "Enforce" },
+    { id: `${WORKFLOW_ID}:analyze`, label: "Analyze" },
+    { id: `${WORKFLOW_ID}:judge`, label: "Judge" },
+    { id: `${WORKFLOW_ID}:enforce`, label: "Enforce" },
   ],
 });
 
