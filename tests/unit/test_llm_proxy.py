@@ -5,7 +5,7 @@ Proxy lives on the ``endpoints`` row (next to ``url`` / ``api_key``). Three seam
   * ``LLMClient`` normalizes the stored value ("" = no proxy) to what httpx wants
     (None for a direct connection; httpx rejects "" as a URL).
   * ``EndpointUpdate`` gates the scheme at save time so a typo fails on save, not
-    on every LLM turn. httpx 0.27 accepts http/https/socks5 (socks5 via the
+    on every LLM turn. httpx accepts http/https/socks5/socks5h (SOCKS via the
     httpx[socks] extra) and nothing else.
   * ``client_from_settings`` / ``agent_client_from_settings`` thread the
     get_settings() overlay keys (``proxy`` / ``agent_proxy``) into the client.
@@ -41,7 +41,7 @@ def test_llmclient_preserves_real_proxy():
 
 @pytest.mark.parametrize(
     "url",
-    ["http://proxy:8080", "https://proxy:8443", "socks5://127.0.0.1:1080"],
+    ["http://proxy:8080", "https://proxy:8443", "socks5://127.0.0.1:1080", "socks5h://127.0.0.1:1080"],
 )
 def test_endpoint_update_accepts_supported_schemes(url):
     assert EndpointUpdate(proxy=url).proxy == url
@@ -61,10 +61,10 @@ def test_endpoint_update_proxy_unset_is_none():
     assert EndpointUpdate().proxy is None
 
 
-@pytest.mark.parametrize("url", ["socks5h://h:1", "socks4://h:1", "ftp://h:1", "not-a-url"])
+@pytest.mark.parametrize("url", ["socks4://h:1", "ftp://h:1", "not-a-url"])
 def test_endpoint_update_rejects_unsupported_schemes(url):
-    # socks5h/socks4 are rejected too -- httpx 0.27 does not accept them, so the
-    # allowlist must match what httpx can actually build.
+    # socks4 is rejected too -- httpx does not accept it, so the allowlist must
+    # match what httpx can actually build.
     with pytest.raises(ValidationError):
         EndpointUpdate(proxy=url)
 

@@ -105,15 +105,18 @@ class EndpointUpdate(BaseModel):
     @classmethod
     def _validate_proxy(cls, v: str | None) -> str | None:
         # Empty/blank means "no proxy". A set value must use a scheme httpx
-        # accepts (http/https, or socks5 via the httpx[socks] extra); reject
-        # anything else here so a typo fails at save time, not on every LLM turn.
+        # accepts (http/https, or socks5/socks5h via the httpx[socks] extra);
+        # reject anything else here so a typo fails at save time, not on every
+        # LLM turn. socks5h is the curl spelling of what httpx does for socks5
+        # as well -- the target hostname is handed to the proxy unresolved -- so
+        # the two are interchangeable here.
         if v is None:
             return v
         v = v.strip()
         if not v:
             return ""
-        if urlsplit(v).scheme.lower() not in ("http", "https", "socks5"):
-            raise ValueError("proxy URL must start with http://, https://, or socks5://")
+        if urlsplit(v).scheme.lower() not in ("http", "https", "socks5", "socks5h"):
+            raise ValueError("proxy URL must start with http://, https://, socks5://, or socks5h://")
         return v
 
 

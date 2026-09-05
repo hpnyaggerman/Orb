@@ -418,9 +418,9 @@ def _cloud_base_url(value: Any) -> str:
     return url.rstrip("/")
 
 
-# The schemes httpx can mount a proxy transport for (socks5 through the
-# httpx[socks] extra) -- the same allowlist the LLM endpoint proxy is gated on.
-PROXY_SCHEMES = ("http", "https", "socks5")
+# The schemes httpx can mount a proxy transport for (socks5 and socks5h through
+# the httpx[socks] extra) -- the same allowlist the LLM endpoint proxy is gated on.
+PROXY_SCHEMES = ("http", "https", "socks5", "socks5h")
 
 
 def _proxy_url(value: Any) -> str:

@@ -342,7 +342,8 @@ def test_a_cloud_base_url_override_rejects_credentials_and_plaintext(url, expect
         # request line or log the way a base URL's would.
         ("https://user:secret@proxy.example.test:8443", "https://user:secret@proxy.example.test:8443"),
         ("   ", ""),
-        ("socks5h://127.0.0.1:1080", ""),  # httpx mounts no transport for it
+        ("socks5h://127.0.0.1:1080", "socks5h://127.0.0.1:1080"),
+        ("socks4://proxy.example.test:1080", ""),  # httpx mounts no transport for it
         ("ftp://proxy.example.test", ""),
         ("socks5://", ""),
         ("not a url", ""),
