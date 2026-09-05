@@ -2,7 +2,8 @@
 
 Covers:
   - ModelProfile.allow_extra=None disables drop-filtering entirely.
-  - The OpenRouter PROFILES entry coerces forced tool_choice proactively.
+  - The OpenRouter endpoint default coerces forced tool_choice proactively,
+    for every model id.
   - LLMClient.complete()'s provider-gated, error-specific retry: drops
     tool_choice once for the matching OpenRouter 404 (regardless of its value),
     raises immediately for unrelated 404s, and never retries when no
@@ -49,6 +50,8 @@ def test_honors_forced_tool_choice_dry_run():
     # deepseek-reasoner drops it unconditionally; unknown endpoints pass through.
     assert not honors_forced_tool_choice("https://api.deepseek.com", "deepseek-reasoner")
     assert honors_forced_tool_choice("http://localhost:5000/v1", "any-model", thinking_on)
+    # OpenRouter's endpoint default coerces for every model id.
+    assert not honors_forced_tool_choice("https://openrouter.ai/api/v1", "some/other-model")
 
 
 def test_allow_extra_frozenset_still_drops():
@@ -59,22 +62,19 @@ def test_allow_extra_frozenset_still_drops():
     assert "weird" not in body
 
 
-def test_openrouter_minimax_profile_coerces_forced_tool_choice():
-    prof = profile_for("https://openrouter.ai/api/v1", "minimax/minimax-m3")
+def test_openrouter_default_coerces_forced_tool_choice_for_every_model():
+    # No per-model list: the endpoint default applies to any id, listed or not.
+    prof = profile_for("https://openrouter.ai/api/v1", "some/other-model")
     assert prof is not None
-    body = {
-        "model": "minimax/minimax-m3",
-        "messages": [],
-        "tool_choice": {"type": "function", "function": {"name": "direct_scene"}},
-        "temperature": 0.7,
-    }
-    prof.apply(body)
-    assert body["tool_choice"] == "auto"
-    assert body["temperature"] == 0.7  # nothing dropped
-
-
-def test_openrouter_unlisted_model_is_passthrough():
-    assert profile_for("https://openrouter.ai/api/v1", "some/other-model") is None
+    for forced in ({"type": "function", "function": {"name": "direct_scene"}}, "required"):
+        body = {"model": "some/other-model", "messages": [], "tool_choice": forced, "temperature": 0.7}
+        prof.apply(body)
+        assert body["tool_choice"] == "auto"
+        assert body["temperature"] == 0.7  # nothing dropped
+    for untouched in ("auto", "none"):
+        body = {"model": "some/other-model", "messages": [], "tool_choice": untouched}
+        prof.apply(body)
+        assert body["tool_choice"] == untouched
 
 
 # ---- helpers ---------------------------------------------------------------
@@ -183,9 +183,10 @@ async def test_openrouter_404_retries_by_dropping_tool_choice(tc):
     client = LLMClient("https://openrouter.ai/api/v1")
     with p:
         events = await _drain(client.complete([], "any/model", tool_choice=tc))
-    # Two attempts: first sends the value, second omits tool_choice entirely.
+    # Two attempts: first sends the profile-translated value (forced and
+    # "required" go out as "auto" on OpenRouter), second omits tool_choice.
     assert len(fake.bodies) == 2
-    assert fake.bodies[0]["tool_choice"] == tc
+    assert fake.bodies[0]["tool_choice"] == ("auto" if is_forced_tool_choice(tc) else tc)
     assert "tool_choice" not in fake.bodies[1]
     assert events[-1]["type"] == "done"
     # Pair remembered for the session.

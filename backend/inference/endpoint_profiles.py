@@ -149,14 +149,23 @@ PROFILES: dict[str, dict[str | None, ModelProfile]] = {
             allow_forced_tool_choice=False,
         ),
     },
-    # No None-key default: unlisted OpenRouter models stay pass-through (most
-    # honor forcing). List only models known to reject a forced-function
-    # tool_choice; add a one-liner per newly-found one. llm_client self-heals
-    # the first hit of an unlisted model and logs a reminder to add it here.
+    # OpenRouter routes each model id to a third-party provider, so whether a
+    # forced tool_choice comes back intact is a property of the route, not of
+    # the model. Measured 2026-09-05 on deepseek/deepseek-v4-pro (Parasail
+    # route, 15 attempts per shape, request bytes identical apart from
+    # tool_choice): forced and "required" returned the arguments under a
+    # rewritten key every time (user_intent_hypothesis for
+    # user-intent-hypothesis, 0/15 byte-exact); "auto" returned the key intact
+    # 15/15 and still called the tool 15/15. Orb reads arguments by the exact
+    # name it sent, so forcing there loses the value silently. Coercing is the
+    # endpoint default until a route is shown to honor forcing intact; such a
+    # model gets an exact-id override with allow_forced_tool_choice=True. A
+    # route that rejects even "auto" is learned from its 404 in
+    # recover_from_error rather than listed here.
     "openrouter.ai": {
-        "minimax/minimax-m3": ModelProfile(
+        None: ModelProfile(
             allow_extra=None,  # OpenRouter is lenient; drop nothing
-            allow_forced_tool_choice=False,  # forced -> "auto"
+            allow_forced_tool_choice=False,  # forced / "required" -> "auto"
         ),
     },
     # NanoGPT is a *proxy*: each model id it fronts sits behind a different
@@ -311,16 +320,15 @@ def recover_from_error(endpoint_url: str, model: str, body: dict, status: int, t
 
     Currently handles one quirk: an OpenRouter model whose routed provider
     rejects ``tool_choice`` entirely. Recovery is to drop the param and retry;
-    the 404 lands before any SSE event so the retry is clean. Add such models
-    to ``PROFILES['openrouter.ai']`` for a zero-retry fix.
+    the 404 lands before any SSE event so the retry is clean. The endpoint
+    default already coerces forced choices to "auto", so what is rejected here
+    is "auto" or "none", which no profile knob can withhold up front; the pair
+    is remembered per session instead.
     """
     if not _is_openrouter(endpoint_url):
         return None
     if "tool_choice" in body and _is_tool_choice_unsupported(status, text):
         _TOOL_CHOICE_UNSUPPORTED.add((endpoint_url, model))
         tc = body.pop("tool_choice")
-        return (
-            f"Model {model} rejected tool_choice={tc!r}; retrying without it. "
-            f"Add it to endpoint_profiles.PROFILES['openrouter.ai'] for a zero-retry fix."
-        )
+        return f"Model {model} rejected tool_choice={tc!r}; retrying without it for the rest of the session."
     return None
