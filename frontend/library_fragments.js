@@ -514,8 +514,13 @@ function _wireCardFragModal(type, isEdit, fragId) {
       return;
     }
     const globals = type === "mood" ? S.moodFragments : S.interactiveFragments;
-    if (!isEdit && (globals.some((g) => g.id === d.id) || _cardFragPending[type].some((f) => f.id === d.id))) {
-      toast(`A ${type === "mood" ? "mood" : "interactive"} fragment with this ID already exists`, true);
+    const key = validate.fragmentIdKey(d.id);
+    const taken = (list) => list.some((f) => validate.fragmentIdKey(f.id) === key);
+    if (!isEdit && (taken(globals) || taken(_cardFragPending[type]))) {
+      toast(
+        `A ${type === "mood" ? "mood" : "interactive"} fragment with this ID already exists (IDs that differ only by case or separators are the same)`,
+        true,
+      );
       return;
     }
     const existing = isEdit ? _cardFragPending[type].find((f) => f.id === fragId) : null;

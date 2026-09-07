@@ -71,6 +71,7 @@ from .tool_registry import (
     build_feedback_tool,
     enabled_schemas,
     register_tool,
+    wire_field,
 )
 
 __all__ = [
@@ -144,4 +145,5 @@ __all__ = [
     "build_direction_note_tool",
     "enabled_schemas",
     "register_tool",
+    "wire_field",
 ]

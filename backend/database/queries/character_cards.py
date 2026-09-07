@@ -9,7 +9,7 @@ from typing import Any, cast
 
 import aiosqlite
 
-from ...core import TurnCast, has_inline_macros, resolve_inline
+from ...core import TurnCast, fold_key, has_inline_macros, resolve_inline
 from ..connection import (
     _build_set_clause,
     _get_workflow_slot,
@@ -92,7 +92,7 @@ _INTERACTIVE_FIELD_TYPES = {"string", "array", "progressive", "feedback", "direc
 
 
 def _card_fragment_entries(raw: Any) -> list[dict]:
-    """Filter a raw fragments list down to well-formed, enabled, unique entries."""
+    """Filter a raw fragments list down to well-formed, enabled entries, unique under ``fold_key``."""
     if not isinstance(raw, list):
         return []
     out: list[dict] = []
@@ -105,9 +105,9 @@ def _card_fragment_entries(raw: Any) -> list[dict]:
             continue
         if not (isinstance(label, str) and label.strip()):
             continue
-        if fid in seen or not entry.get("enabled", True):
+        if fold_key(fid) in seen or not entry.get("enabled", True):
             continue
-        seen.add(fid)
+        seen.add(fold_key(fid))
         out.append(entry)
     return out
 
@@ -206,17 +206,19 @@ async def cast_embedded_fragments(
 
 
 def merge_fragments_by_id(base: list, extra: Sequence[Mapping[str, Any]]) -> list:
-    """Append *extra* to *base*, skipping ids already present. Globals win.
+    """Append *extra* to *base*, skipping ids already present under ``fold_key``. Globals win.
 
     The rule ``card_embedded_fragments`` states and every caller has to apply:
     a card can never hijack a user-configured fragment, and two cards naming the
-    same id contribute it once.
+    same id contribute it once. Ids that differ only by case or separators are
+    the same id here, because the model is shown one name for both.
     """
-    seen = {fragment["id"] for fragment in base}
+    seen = {fold_key(fragment["id"]) for fragment in base}
     for fragment in extra:
-        if fragment["id"] not in seen:
+        key = fold_key(fragment["id"])
+        if key not in seen:
             base.append(fragment)
-            seen.add(fragment["id"])
+            seen.add(key)
     return base
 
 

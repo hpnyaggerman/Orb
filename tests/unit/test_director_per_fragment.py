@@ -213,6 +213,21 @@ class TestPerFragmentLoop:
         result = await _run(base, _FRAGMENTS[:1], self._toggle_on(), director={"active_moods": ["pre"]})
         assert result.active_moods == []
 
+    async def test_wire_spellings_are_read_back_as_the_stored_ids(self):
+        # The schema and prompt cite the wire form of a hyphenated id; whatever
+        # spelling the model echoes, the pass records the stored id. Mood values
+        # get the same treatment.
+        frags = [{**_FRAGMENTS[0], "id": "user-intent-hypothesis"}]
+        responses = [_ds_message({"user_intent_hypothesis": "wants X"}), _ds_message({"moods": ["Tense"]})]
+        base = _FakeBase(frags, responses)
+        result = await _run(base, frags, self._toggle_on())
+        assert result.extra_fields == {"user-intent-hypothesis": "wants X"}
+        assert result.active_moods == ["tense"]
+        assert result.calls[0]["arguments"] == {"user-intent-hypothesis": "wants X"}
+        assert list((base.schemas[0] or {})["properties"]) == ["user_intent_hypothesis"]
+        assert "'user_intent_hypothesis'" in base.calls[0][1]
+        assert "'user-intent-hypothesis'" not in base.calls[0][1]
+
     async def test_non_string_moods_are_dropped(self):
         # Nothing but a fragment id can be a mood, and an unhashable item would
         # blow up the same set() union.

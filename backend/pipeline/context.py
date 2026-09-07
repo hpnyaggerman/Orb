@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import logging
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Any
 
 from .. import database as db
-from ..core import CastMember, ChatMessage, Macros, TurnCast
+from ..core import CastMember, ChatMessage, Macros, TurnCast, folded_collisions
 from ..database.models import (
     ActiveLorebookEntryRow,
     CharacterCardRow,
@@ -41,6 +42,26 @@ from .config import _build_writer_tools_blob
 from .predicates import agent_enabled, resolve_persona_id, world_proposal_active
 from .state import LorebookTurn, WorldProposalTurn
 from .workflow_bridge import _iterate_pre_pipeline_hooks
+
+logger = logging.getLogger(__name__)
+
+
+def _warn_folded_collisions(kind: str, fragments: Sequence[Mapping[str, Any]]) -> None:
+    """Flag global ids the creation check would now refuse but that predate it.
+
+    The model is shown one wire name for both, and a reply spelled that way is
+    read as the first of the pair; the exact spelling of either still lands on
+    its own fragment. Nothing is renamed on the user's behalf.
+    """
+    for first, later in folded_collisions(f["id"] for f in fragments):
+        logger.warning(
+            "%s fragments %r and %r differ only by case or separators; the model sees one name for both, "
+            "and a reply in that spelling is read as %r",
+            kind,
+            first,
+            later,
+            first,
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -104,14 +125,16 @@ async def _load_pipeline_context(conversation_id: str, *, abort_token: AbortToke
     # Card-embedded fragments merge into the global lists for this turn only
     # (the context is rebuilt per turn); on id collision the global wins.
     card_moods, card_interactive = await db.cast_embedded_fragments(card, cast)
-    mood_fragments = db.merge_fragments_by_id([f for f in await db.get_mood_fragments() if f.get("enabled", True)], card_moods)
+    global_moods = [f for f in await db.get_mood_fragments() if f.get("enabled", True)]
+    global_interactive = [df for df in await db.get_interactive_fragments() if df.get("enabled", True)]
+    _warn_folded_collisions("Mood", global_moods)
+    _warn_folded_collisions("Interactive", global_interactive)
+    mood_fragments = db.merge_fragments_by_id(global_moods, card_moods)
     # Prune active moods that reference disabled fragments.
     if director and director.get("active_moods"):
         enabled_ids = {f["id"] for f in mood_fragments}
         director["active_moods"] = [mood for mood in director["active_moods"] if mood in enabled_ids]
-    interactive_fragments = db.merge_fragments_by_id(
-        [df for df in await db.get_interactive_fragments() if df.get("enabled", True)], card_interactive
-    )
+    interactive_fragments = db.merge_fragments_by_id(global_interactive, card_interactive)
     phrase_bank = await db.get_phrase_bank()
     lorebook_entries = await db.get_active_lorebook_entries()
     worlds = await db.get_worlds()

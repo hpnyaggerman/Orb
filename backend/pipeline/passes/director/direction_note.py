@@ -143,6 +143,6 @@ async def direction_note_step(
         raw = json.dumps(resp, default=str)
         logger.info("Direction-note step output:\n%s", raw)
         raws.append(raw)
-        notes.extend(extract_direction_notes(parse_tool_calls(resp), group))
+        notes.extend(extract_direction_notes(parse_tool_calls(resp, fields=[df["id"] for df in group]), group))
 
     yield {"type": "done", "result": DirectionNoteResult(notes=notes, agent_raw="\n".join(raws))}

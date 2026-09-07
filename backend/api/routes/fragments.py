@@ -4,14 +4,13 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
 
+from ...core import match_folded
 from ...database import (
     create_interactive_fragment,
     create_mood_fragment,
     delete_interactive_fragment,
     delete_mood_fragment,
-    get_interactive_fragment,
     get_interactive_fragments,
-    get_mood_fragment,
     get_mood_fragments,
     update_interactive_fragment,
     update_mood_fragment,
@@ -26,6 +25,25 @@ from ..schemas import (
 router = APIRouter()
 
 
+def _taken_by(new_id: str, rows) -> str | None:
+    """The existing id that *new_id* would be read as, or ``None`` when it is free.
+
+    The model's reply is matched to fragment ids ignoring case and separators,
+    so an id that differs from an existing one only that way could never be
+    told apart from it and is refused at creation instead.
+    """
+    return match_folded(new_id, [row["id"] for row in rows])
+
+
+def _taken_detail(kind: str, new_id: str, taken_by: str) -> str:
+    if taken_by == new_id:
+        return f"{kind} with this ID already exists"
+    return (
+        f"{kind} ID '{new_id}' would be read as the existing fragment '{taken_by}': "
+        "IDs that differ only by case or separators are the same field"
+    )
+
+
 # Mood Fragments ──
 
 
@@ -36,9 +54,9 @@ async def api_list_mood_fragments():
 
 @router.post("/api/fragments")
 async def api_create_mood_fragment(data: MoodFragmentCreate):
-    existing = await get_mood_fragment(data.id)
-    if existing:
-        raise HTTPException(status_code=400, detail="Mood fragment with this ID already exists")
+    taken_by = _taken_by(data.id, await get_mood_fragments())
+    if taken_by is not None:
+        raise HTTPException(status_code=400, detail=_taken_detail("Mood fragment", data.id, taken_by))
     return await create_mood_fragment(data.model_dump())
 
 
@@ -67,9 +85,9 @@ async def api_list_interactive_fragments():
 
 @router.post("/api/interactive-fragments")
 async def api_create_interactive_fragment(data: InteractiveFragmentCreate):
-    existing = await get_interactive_fragment(data.id)
-    if existing:
-        raise HTTPException(status_code=400, detail="Interactive fragment with this ID already exists")
+    taken_by = _taken_by(data.id, await get_interactive_fragments())
+    if taken_by is not None:
+        raise HTTPException(status_code=400, detail=_taken_detail("Interactive fragment", data.id, taken_by))
     result = await create_interactive_fragment(data.model_dump())
     if not result:
         raise HTTPException(status_code=500, detail="Failed to create interactive fragment")

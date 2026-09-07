@@ -14,8 +14,9 @@ For a conversation, Orb combines:
 2. Enabled fragments from the character card
 
 Global fragments take priority when IDs conflict. In a group chat, the first card
-in the cast keeps an ID when two cards conflict. Card fragments are scene-wide, so
-a mood from one character can affect the next speaker too.
+in the cast keeps an ID when two cards conflict. IDs that differ only by case or
+separators count as the same ID. Card fragments are scene-wide, so a mood from
+one character can affect the next speaker too.
 
 Changing your global fragments affects the next turn. Card fragments remain in the
 card and are not copied into your global library.
@@ -30,7 +31,8 @@ card and are not copied into your global library.
 
 The editor uses the same fields and validation as the global fragment editor. An
 ID must match `[a-z0-9][a-z0-9_-]{0,63}`. A card cannot use an ID already used by
-one of your global fragments.
+one of your global fragments, or one that differs from it only by case or
+separators.
 
 ## Import and export
 
@@ -49,7 +51,7 @@ stopping the import.
 | More than 50 mood or 50 interactive fragments | Extra fragments are ignored |
 | Missing or invalid ID, or empty label | Fragment is dropped |
 | `enabled: false` | Fragment is skipped |
-| Duplicate IDs in one card | The first fragment is kept |
+| Duplicate IDs in one card, including IDs that differ only by case or separators | The first fragment is kept |
 | Unknown `field_type` | Uses `string` |
 | Unknown `direction_note_timing` | Uses `post_turn` |
 

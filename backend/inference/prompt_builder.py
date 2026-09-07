@@ -7,7 +7,7 @@ from typing import Any
 
 from ..core import ChatMessage, ContentPart, Macros, TurnCast, resolve_stored_random
 from .group_context import render_cast_section
-from .tool_registry import TOOLS
+from .tool_registry import TOOLS, wire_field
 
 
 def format_message_with_attachments(message: Mapping[str, Any], macros: Macros | None) -> ChatMessage:
@@ -314,7 +314,7 @@ def build_director_tool_prompt(
         # Scene context (progressive/interactive) before the mood options, mirroring
         # the per-fragment builder: settle the scene, then pick moods that fit it.
         progressive_lines = [
-            f"* [{df['id']}] ({df['description']}): {(progressive_state or {}).get(df['id'])}"
+            f"* [{wire_field(df['id'])}] ({df['description']}): {(progressive_state or {}).get(df['id'])}"
             for df in (interactive_fragments or [])
             if df.get("field_type") == "progressive" and (progressive_state or {}).get(df["id"])
         ]
@@ -332,8 +332,8 @@ def _render_decided(value: Any) -> str:
 
 def _moods_options_block(active_moods: Sequence[str], mood_fragments: Sequence[Mapping[str, Any]]) -> str:
     """The "previously active + available moods" block shared by both director prompts."""
-    moods = ", ".join(active_moods) or "none"
-    frags = "\n".join(f"* [{f['id']}] - use in case: {f['description']}" for f in mood_fragments)
+    moods = ", ".join(wire_field(m) for m in active_moods) or "none"
+    frags = "\n".join(f"* [{wire_field(f['id'])}] - use in case: {f['description']}" for f in mood_fragments)
     return f"Previously active moods: {moods}\n\nAvailable writing moods:\n{frags}"
 
 
@@ -374,7 +374,7 @@ def build_director_scene_step_prompt(
             parts.append("Scene direction decided this turn (pick moods that fit it):\n" + "\n".join(scene))
         parts.append(_moods_options_block(active_moods, mood_fragments))
     else:
-        fid = target_fragment["id"]
+        fid = wire_field(target_fragment["id"])
         hint = {"array": "list of strings", "progressive": "single value, evolves across turns"}.get(
             target_fragment["field_type"], "single value"
         )
@@ -436,7 +436,7 @@ def build_feedback_prompt(
     preamble = FEEDBACK_PREAMBLE + (REASONING_GUIDANCE if reasoning_on else "")
     parts = [preamble]
     if tool_schema is not None:
-        labels = {df["id"]: (df.get("injection_label") or "").strip() for df in feedback_fragments}
+        labels = {wire_field(df["id"]): (df.get("injection_label") or "").strip() for df in feedback_fragments}
         parts.append(_tool_call_instruction("give_feedback", tool_schema, labels=labels))
     # Close the [OOC: aside opened in FEEDBACK_PREAMBLE; the whole instruction is the aside.
     return "\n\n".join(parts) + "]"
@@ -500,7 +500,10 @@ def build_direction_note_prompt(
     if inj_block:
         parts.append(inj_block)
     if tool_schema is not None:
-        labels = {df["id"]: (df.get("injection_label") or df.get("label") or "").strip() for df in direction_note_fragments}
+        labels = {
+            wire_field(df["id"]): (df.get("injection_label") or df.get("label") or "").strip()
+            for df in direction_note_fragments
+        }
         parts.append(_tool_call_instruction("record_direction_note", tool_schema, labels=labels))
     # Close the [OOC: aside opened in DIRECTION_NOTE_PREAMBLE; the whole request is the aside,
     # so the bracket closes at the very end, not inside the preamble.

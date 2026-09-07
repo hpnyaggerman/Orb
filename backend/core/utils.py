@@ -2,7 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+import re
+from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 
 from .llm_types import ContentPart
@@ -69,3 +70,40 @@ def build_multimodal_content(text: str, attachments: Sequence[Mapping[str, Any]]
         url = f"data:{mime};base64,{b64}"
         parts.append({"type": "image_url", "image_url": {"url": url}})
     return parts
+
+
+_KEY_NOISE = re.compile(r"[^a-z0-9]")
+
+
+def fold_key(value: str) -> str:
+    """Reduce a fragment id or tool-argument key to its letters and digits, lowercased.
+
+    A fragment id reaches the model as a tool-schema property name and comes
+    back however the model or its server spells it: hyphens as underscores,
+    separators dropped, case changed. Two names with the same fold denote the
+    same field everywhere Orb compares such names, which is also why an id that
+    differs from an existing one only by case or separators is refused.
+    """
+    return _KEY_NOISE.sub("", value.lower())
+
+
+def match_folded(name: str, candidates: Iterable[str]) -> str | None:
+    """The candidate *name* denotes: an exact match, else the first whose fold equals its fold, else ``None``."""
+    pool = list(candidates)
+    if name in pool:
+        return name
+    wanted = fold_key(name)
+    return next((c for c in pool if fold_key(c) == wanted), None)
+
+
+def folded_collisions(ids: Iterable[str]) -> list[tuple[str, str]]:
+    """Pairs ``(first, later)`` of ids sharing a fold, each later id against the first one seen."""
+    first: dict[str, str] = {}
+    pairs: list[tuple[str, str]] = []
+    for fid in ids:
+        key = fold_key(fid)
+        if key in first:
+            pairs.append((first[key], fid))
+        else:
+            first[key] = fid
+    return pairs

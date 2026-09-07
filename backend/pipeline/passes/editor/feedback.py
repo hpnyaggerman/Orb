@@ -106,7 +106,7 @@ async def feedback_step(
     agent_raw = json.dumps(resp, default=str)
     logger.info("Feedback step output:\n%s", agent_raw)
 
-    values = extract_feedback_values(parse_tool_calls(resp))
+    values = extract_feedback_values(parse_tool_calls(resp, fields=[df["id"] for df in feedback_fragments]))
 
     yield {
         "type": "done",

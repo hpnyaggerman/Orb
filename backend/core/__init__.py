@@ -28,6 +28,9 @@ from .utils import (
     build_multimodal_content,
     estimate_tokens,
     extract_hyperparams,
+    fold_key,
+    folded_collisions,
+    match_folded,
     scrub_log,
 )
 
@@ -61,5 +64,8 @@ __all__ = [
     "build_multimodal_content",
     "estimate_tokens",
     "extract_hyperparams",
+    "fold_key",
+    "folded_collisions",
+    "match_folded",
     "scrub_log",
 ]

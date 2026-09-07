@@ -8,6 +8,8 @@ applies the same rule for its estimate.
 
 from __future__ import annotations
 
+import logging
+
 from backend.database import update_director_state
 from backend.pipeline.context import _load_pipeline_context
 
@@ -57,6 +59,36 @@ async def test_card_fragments_merge_into_pipeline_context(client, db):
     interactive = {f["id"]: f for f in ctx.interactive_fragments}
     assert interactive["card_trust"]["field_type"] == "progressive"
     assert interactive["card_trust"]["sort_order"] >= 10_000  # sorts after globals
+
+
+async def test_card_id_differing_only_by_separators_loses_to_the_global(client, db):
+    ext = {"orb": {"fragments": {"mood": [{"id": "collide_mood", "label": "Hijack", "prompt_text": "p"}]}}}
+    resp = await client.post(
+        "/api/fragments",
+        json={"id": "collide-mood", "label": "Global Mood", "description": "d", "prompt_text": "g"},
+    )
+    assert resp.status_code == 200
+    _, cid = await _make_card_conv(client, ext)
+    ctx = await _load_pipeline_context(cid)
+    assert ctx is not None
+    labels = {f["id"]: f["label"] for f in ctx.mood_fragments}
+    assert labels["collide-mood"] == "Global Mood"
+    assert "collide_mood" not in labels
+
+
+async def test_global_ids_that_fold_together_are_warned_about(client, db, caplog):
+    # Rows that predate the creation check: nothing is renamed, but the turn says so.
+    await db.execute(
+        "INSERT INTO interactive_fragments (id, label, description, injection_label) "
+        "VALUES ('plot-thread', 'A', 'd', 'A'), ('plot_thread', 'B', 'd', 'B')"
+    )
+    await db.commit()
+    card = (await client.post("/api/characters", json={"name": "Plain"})).json()
+    conv = (await client.post("/api/conversations", json={"character_card_id": card["id"]})).json()
+    with caplog.at_level(logging.WARNING, logger="backend.pipeline.context"):
+        ctx = await _load_pipeline_context(conv["id"])
+    assert ctx is not None
+    assert any("'plot-thread'" in r.getMessage() and "'plot_thread'" in r.getMessage() for r in caplog.records)
 
 
 async def test_conversation_without_card_fragments_unaffected(client, db):

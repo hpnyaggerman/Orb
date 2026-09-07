@@ -13,6 +13,7 @@ from ....core import (
     ChatMessage,
     build_multimodal_content,
     extract_hyperparams,
+    match_folded,
     resolve_inline,
 )
 from ....inference import (
@@ -29,6 +30,7 @@ from ....inference import (
     reasoning_cfg,
     render_direction_notes_block,
     resolve_mood_fragment_randoms,
+    wire_field,
 )
 from ...predicates import direction_note_to_director, direction_note_to_writer
 from . import progressive
@@ -132,16 +134,18 @@ def _step_schema(tool_schema: dict, keep: str) -> dict | None:
     Passed as the per-call ``json_schema`` decoding constraint so the model
     physically cannot fill any field but the step's target — text mode applies
     it to the grammar (prompt bytes and KV cache untouched); the chat transport
-    drops it and relies on the post-parse filter in the loop below.
+    drops it and relies on the post-parse filter in the loop below. *keep* is
+    the fragment id; the schema knows it by its wire form.
     """
     params = tool_schema["function"]["parameters"]
-    prop = params.get("properties", {}).get(keep)
+    wire = wire_field(keep)
+    prop = params.get("properties", {}).get(wire)
     if prop is None:
         return None
     return {
         "type": "object",
-        "properties": {keep: prop},
-        "required": [keep] if keep in (params.get("required") or []) else [],
+        "properties": {wire: prop},
+        "required": [wire] if wire in (params.get("required") or []) else [],
     }
 
 
@@ -166,12 +170,15 @@ class DirectorResult:
 def apply_tool_calls(
     tool_calls: list[dict],
     current_moods: list[str],
+    mood_ids: Sequence[str] = (),
 ) -> tuple[list[str], dict]:
     """Extract values from tool calls.
 
     Returns ``(moods, extra_fields)``. ``extra_fields`` holds all
     ``direct_scene`` args except moods. (Lorebook selection is handled separately
-    by the ``select_lorebook`` step, not this tool.)
+    by the ``select_lorebook`` step, not this tool.) A returned mood that differs
+    from one of *mood_ids* only by case or separators is read as that id, the way
+    argument keys are; one the ids do not cover passes through unchanged.
     """
     moods = list(current_moods)
     extra_fields: dict = {}
@@ -186,6 +193,7 @@ def apply_tool_calls(
             # up the set() union in ``director_stage``.
             raw_moods = args.get("moods")
             moods = [m for m in raw_moods if isinstance(m, str)] if isinstance(raw_moods, list) else []
+            moods = [match_folded(m, mood_ids) or m for m in moods]
             extra_fields = {k: v for k, v in args.items() if k != "moods" and keeps_director_value(k, v)}
 
     return (moods, extra_fields)
@@ -238,6 +246,10 @@ async def director_pass(
     # The tools blob is resolved once into the shared base; the director reads it
     # rather than rebuilding it, so it cannot drift from the writer/editor blobs.
     tool_schemas = list(base.tools)
+    # The names this pass reads back, by stored id; the schema and prompts cite
+    # their wire forms, and the parser folds whatever spelling comes back to these.
+    field_names = [df["id"] for df in interactive_fragments] + ["moods", SPEAKING_PLAN_FIELD]
+    mood_ids = [m["id"] for m in mood_fragments]
 
     logger.info(
         "Director pass: tools included=%s",
@@ -316,7 +328,7 @@ async def director_pass(
                     continue
                 last_raw = json.dumps(resp, default=str)
                 logger.info("Agent tool=direct_scene target=%s output:\n%s", target, last_raw)
-                parsed = parse_tool_calls(resp)
+                parsed = parse_tool_calls(resp, fields=field_names)
                 if not parsed:
                     logger.info("Agent tool=direct_scene target=%s: model skipped", target)
                     continue
@@ -334,7 +346,7 @@ async def director_pass(
                     # Reuse the shared unpacker so moods behave exactly as in the
                     # combined call; any fragment values it returns are dropped,
                     # each fragment being produced in its own call.
-                    active_moods, _ = apply_tool_calls(parsed, active_moods)
+                    active_moods, _ = apply_tool_calls(parsed, active_moods, mood_ids)
                 else:
                     args = next((tc.get("arguments", {}) for tc in parsed if tc.get("name") == "direct_scene"), {})
                     val = args.get(stage["id"])
@@ -380,9 +392,9 @@ async def director_pass(
             continue
         last_raw = json.dumps(resp, default=str)
         logger.info("Agent tool=%s output:\n%s", name, last_raw)
-        if parsed := parse_tool_calls(resp):
+        if parsed := parse_tool_calls(resp, fields=field_names):
             all_calls.extend(parsed)
-            active_moods, new_extra = apply_tool_calls(parsed, active_moods)
+            active_moods, new_extra = apply_tool_calls(parsed, active_moods, mood_ids)
             if new_extra:
                 extra_fields.update(new_extra)
         else:

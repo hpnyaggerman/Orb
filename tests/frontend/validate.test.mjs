@@ -2,11 +2,20 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  fragmentIdKey,
   validate,
   validateChatInput,
   validateConversationTitle,
   validateEditMessage,
 } from "../../frontend/validate.js";
+
+test("fragmentIdKey folds case and separators so near-duplicate ids compare equal", () => {
+  assert.equal(fragmentIdKey("User-Intent_Hypothesis"), "userintenthypothesis");
+  assert.equal(fragmentIdKey("user-intent"), fragmentIdKey("user_intent"));
+  assert.notEqual(fragmentIdKey("user-intent"), fragmentIdKey("user-intents"));
+  assert.equal(fragmentIdKey(null), "");
+  assert.equal(validate.fragmentIdKey, fragmentIdKey);
+});
 
 test("validateChatInput rejects empty / whitespace", () => {
   assert.equal(validateChatInput("").valid, false);

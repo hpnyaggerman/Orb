@@ -100,6 +100,20 @@ class TestBuildDirectSceneTool:
         for frag in SEED_INTERACTIVE_FRAGMENTS:
             assert frag["id"] in props
 
+    def test_property_is_the_wire_form_of_the_id(self):
+        frags = [
+            {
+                "id": "Plot-Summary",
+                "field_type": "string",
+                "required": True,
+                "description": "A summary.",
+                "injection_label": "Plot summary",
+            }
+        ]
+        params = build_direct_scene_tool(frags)["function"]["parameters"]
+        assert list(params["properties"]) == ["plot_summary", "moods"]
+        assert params["required"] == ["plot_summary"]
+
 
 # ── build_feedback_tool ──────────────────────────────────────────────────────
 
@@ -139,6 +153,14 @@ class TestBuildFeedbackTool:
     def test_required_fragment_listed(self):
         tool = build_feedback_tool([self._frag(required=True)])
         assert "next_actions" in tool["function"]["parameters"]["required"]
+
+    def test_property_and_prompt_label_use_the_wire_form(self):
+        frag = self._frag(id="next-actions", injection_label="Next actions")
+        tool = build_feedback_tool([frag])
+        assert list(tool["function"]["parameters"]["properties"]) == ["next_actions"]
+        prompt = build_feedback_prompt([frag], tool_schema=tool)
+        assert 'next_actions ("Next actions")' in prompt
+        assert "next-actions" not in prompt
 
     def test_empty_fragments_empty_schema(self):
         tool = build_feedback_tool([])
@@ -490,6 +512,34 @@ def test_ooc_preambles_close_their_bracket():
     for o in outs:
         assert o.startswith("[OOC:")
         assert o.endswith("]")
+
+
+def test_director_prompts_cite_wire_forms_of_ids():
+    # Every place a fragment or mood id reaches the model spells it the way the
+    # schema does: lowercase, hyphens as underscores.
+    moods = [{"id": "Dark-Mood", "description": "gloom"}]
+    combined = build_director_tool_prompt("direct_scene", "hi", ["Dark-Mood"], moods)
+    assert "[dark_mood]" in combined
+    assert "Previously active moods: dark_mood" in combined
+    assert "Dark-Mood" not in combined
+    step = build_director_scene_step_prompt(
+        "hi",
+        [],
+        moods,
+        target_fragment={"id": "user-intent", "field_type": "string", "description": "d", "injection_label": "U"},
+    )
+    assert "'user_intent'" in step
+    assert "user-intent" not in step
+    note = {"id": "world-facts", "injection_label": "World facts", "description": "x"}
+    notes_prompt = build_direction_note_prompt([], [note], tool_schema=build_direction_note_tool([note]))
+    assert 'world_facts ("World facts")' in notes_prompt
+    assert "world-facts" not in notes_prompt
+
+
+def test_apply_tool_calls_reads_mood_spellings_as_known_ids():
+    calls = [{"name": "direct_scene", "arguments": {"moods": ["Tense", "dark_mood", "unknown"]}}]
+    moods, _ = apply_tool_calls(calls, [], mood_ids=["tense", "dark-mood"])
+    assert moods == ["tense", "dark-mood", "unknown"]
 
 
 # build_direction_note_prompt: the [OOC: aside opened in the preamble must close at the end.

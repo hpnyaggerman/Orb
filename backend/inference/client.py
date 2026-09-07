@@ -9,6 +9,7 @@ from typing import Any
 
 import httpx
 
+from ..core import match_folded
 from . import endpoint_profiles, text_completion
 from .errors import llm_call_error
 from .gemma_tool_format import parse_gemma_tool_calls
@@ -1215,7 +1216,7 @@ def _first_json(text: str, open_ch: str, close_ch: str) -> Any | None:
         return None
 
 
-def _sanitize_args(obj):
+def _sanitize_args(obj: Any) -> Any:
     """Recursively strip tokenizer-artifact quote tokens (``<|"|>``) from string values."""
     if isinstance(obj, str):
         return obj.replace('<|"|>', "")
@@ -1226,7 +1227,26 @@ def _sanitize_args(obj):
     return obj
 
 
-def _make_tool_call(name: str, arguments) -> dict:
+def _canonical_args(name: str, arguments: dict, fields: Sequence[str]) -> dict:
+    """Rename argument keys to the *fields* they denote under ``fold_key``.
+
+    A key the caller already reads is kept. Otherwise the first field with the
+    same fold claims it, unless that field is also present exactly or was
+    already claimed by an earlier key: the exact spelling always wins, and two
+    variants of one field never overwrite each other.
+    """
+    out: dict = {}
+    for key, value in arguments.items():
+        target = match_folded(key, fields)
+        if target is None or target == key or target in arguments or target in out:
+            out[key] = value
+            continue
+        logger.info("Tool %s: argument %r read as %r", name, key, target)
+        out[target] = value
+    return out
+
+
+def _make_tool_call(name: str, arguments, fields: Sequence[str] | None = None) -> dict:
     """Build a normalized tool-call dictionary."""
     raw = arguments if isinstance(arguments, str) else None
     if raw is not None:
@@ -1243,16 +1263,23 @@ def _make_tool_call(name: str, arguments) -> dict:
             _preview(raw if raw is not None else repr(arguments)),
         )
         arguments = {}
-    return {"name": name, "arguments": _sanitize_args(arguments)}
+    clean: dict = _sanitize_args(arguments)
+    if fields:
+        clean = _canonical_args(name, clean, fields)
+    return {"name": name, "arguments": clean}
 
 
-def parse_tool_calls(message: dict) -> list[dict]:
+def parse_tool_calls(message: dict, fields: Sequence[str] | None = None) -> list[dict]:
     """Extract tool calls from a completion message.
 
     Tries, in order: the standard ``tool_calls`` array, Hermes-style
     ``<tool_call>...</tool_call>`` tags, Gemma 4 native
     ``<|tool_call>call:NAME{...}<tool_call|>`` tokens, then JSON embedded in
     the content body (common with some local servers).
+
+    *fields* are the argument names the caller will read. A returned key that
+    differs from one of them only by case or separators is renamed to it
+    (``core.fold_key``); the rest pass through untouched.
     """
     tool_calls = []
 
@@ -1260,7 +1287,7 @@ def parse_tool_calls(message: dict) -> list[dict]:
     if "tool_calls" in message and message["tool_calls"]:
         for tc in message["tool_calls"]:
             fn = tc.get("function", {})
-            tool_calls.append(_make_tool_call(fn.get("name", ""), fn.get("arguments", "{}")))
+            tool_calls.append(_make_tool_call(fn.get("name", ""), fn.get("arguments", "{}"), fields))
         return tool_calls
 
     # Fallback: try to parse JSON from content
@@ -1273,7 +1300,7 @@ def parse_tool_calls(message: dict) -> list[dict]:
         try:
             parsed = json.loads(match.group(1).strip())
             if isinstance(parsed, dict) and "name" in parsed:
-                tool_calls.append(_make_tool_call(parsed["name"], parsed.get("arguments", {})))
+                tool_calls.append(_make_tool_call(parsed["name"], parsed.get("arguments", {}), fields))
         except json.JSONDecodeError:
             pass
     if tool_calls:
@@ -1282,17 +1309,17 @@ def parse_tool_calls(message: dict) -> list[dict]:
     # Gemma 4 native <|tool_call>call:NAME{...}<tool_call|> tokens
     gemma_calls = parse_gemma_tool_calls(content)
     if gemma_calls:
-        return [_make_tool_call(c["name"], c["arguments"]) for c in gemma_calls]
+        return [_make_tool_call(c["name"], c["arguments"], fields) for c in gemma_calls]
 
     # Try to find JSON objects or arrays in the content
     for start_char, end_char in [("{", "}"), ("[", "]")]:
         parsed = _first_json(content, start_char, end_char)
         if isinstance(parsed, dict) and "name" in parsed:
-            tool_calls.append(_make_tool_call(parsed["name"], parsed.get("arguments", {})))
+            tool_calls.append(_make_tool_call(parsed["name"], parsed.get("arguments", {}), fields))
         elif isinstance(parsed, list):
             for item in parsed:
                 if isinstance(item, dict) and "name" in item:
-                    tool_calls.append(_make_tool_call(item["name"], item.get("arguments", {})))
+                    tool_calls.append(_make_tool_call(item["name"], item.get("arguments", {}), fields))
         if tool_calls:
             return tool_calls
 

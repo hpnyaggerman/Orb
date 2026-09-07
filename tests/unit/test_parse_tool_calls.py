@@ -1,8 +1,50 @@
+import json
+
 from backend.inference.client import parse_tool_calls
 
 OPEN = "<|tool_call>"
 CLOSE = "<tool_call|>"
 Q = '<|"|>'
+
+
+def _call(args: dict) -> dict:
+    return {"tool_calls": [{"function": {"name": "direct_scene", "arguments": json.dumps(args)}}]}
+
+
+# -- fields: keys are read as the names the caller will look up --------------
+
+
+def test_fields_remap_separator_and_case_variants():
+    fields = ["user-intent-hypothesis", "moods"]
+    for spelled in ("user_intent_hypothesis", "userintenthypothesis", "User-Intent-Hypothesis"):
+        parsed = parse_tool_calls(_call({spelled: "x"}), fields=fields)
+        assert parsed[0]["arguments"] == {"user-intent-hypothesis": "x"}, spelled
+
+
+def test_fields_keep_exact_and_unknown_keys():
+    parsed = parse_tool_calls(_call({"user-intent-hypothesis": "x", "other": 1}), fields=["user-intent-hypothesis"])
+    assert parsed[0]["arguments"] == {"user-intent-hypothesis": "x", "other": 1}
+
+
+def test_fields_exact_spelling_wins_over_a_variant():
+    parsed = parse_tool_calls(_call({"user_intent": "mangled", "user-intent": "exact"}), fields=["user-intent"])
+    assert parsed[0]["arguments"] == {"user_intent": "mangled", "user-intent": "exact"}
+
+
+def test_fields_first_variant_claims_the_field():
+    parsed = parse_tool_calls(_call({"user_intent": "a", "userintent": "b"}), fields=["user-intent"])
+    assert parsed[0]["arguments"] == {"user-intent": "a", "userintent": "b"}
+
+
+def test_without_fields_keys_pass_through():
+    assert parse_tool_calls(_call({"user_intent": "x"}))[0]["arguments"] == {"user_intent": "x"}
+
+
+def test_fields_apply_to_calls_parsed_out_of_content():
+    content = OPEN + "call:direct_scene{history_summary:" + Q + "x" + Q + "}" + CLOSE
+    assert parse_tool_calls({"content": content}, fields=["history-summary"]) == [
+        {"name": "direct_scene", "arguments": {"history-summary": "x"}}
+    ]
 
 
 def test_gemma_native_through_parse_tool_calls():

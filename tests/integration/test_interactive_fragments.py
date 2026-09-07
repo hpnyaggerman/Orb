@@ -48,6 +48,16 @@ async def test_create_duplicate_interactive_fragment_returns_400(client, db):
     assert resp.status_code == 400
 
 
+async def test_create_id_differing_only_by_separators_or_case_returns_400(client, db):
+    # The seeded user_intent already exists; the model would see one name for both.
+    for clashing in ("user-intent", "User_Intent", "userintent"):
+        resp = await client.post("/api/interactive-fragments", json={**_BASE_PAYLOAD, "id": clashing})
+        assert resp.status_code == 400, clashing
+        assert "user_intent" in resp.json()["detail"]
+    resp = await client.post("/api/interactive-fragments", json={**_BASE_PAYLOAD, "id": "user-intents"})
+    assert resp.status_code == 200
+
+
 async def test_create_interactive_fragment_with_array_type(client, db):
     payload = {**_BASE_PAYLOAD, "id": "custom-list", "field_type": "array"}
     resp = await client.post("/api/interactive-fragments", json=payload)

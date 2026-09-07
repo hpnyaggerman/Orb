@@ -16,7 +16,7 @@ to use short sentences during a tense scene.
 
 Each mood has:
 
-- **ID**: an internal name using letters, numbers, underscores, or hyphens
+- **ID**: an internal name using letters, numbers, underscores, or hyphens. The model sees it lowercased with hyphens as underscores, and its reply is matched back to the ID ignoring case and separators, so two IDs that differ only by case or separators are one field and cannot both exist
 - **Label**: the display name shown in the sidepanel
 - **Description**: when the Director should use the mood
 - **Prompt text**: instructions sent to the Writer while it is active

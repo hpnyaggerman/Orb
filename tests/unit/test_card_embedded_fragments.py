@@ -4,7 +4,7 @@ shapes the pipeline can consume."""
 
 from __future__ import annotations
 
-from backend.database import card_embedded_fragments
+from backend.database import card_embedded_fragments, merge_fragments_by_id
 
 
 def _card(frags):
@@ -115,6 +115,21 @@ def test_duplicate_ids_first_wins():
     )
     assert len(moods) == 1
     assert moods[0]["label"] == "First"
+
+
+def test_ids_differing_only_by_separators_are_duplicates():
+    # The model is shown one name for both, so the second can never be addressed.
+    moods, _ = card_embedded_fragments(
+        _card({"mood": [{"id": "dark-mood", "label": "First", "prompt_text": "p"}, {"id": "dark_mood", "label": "Second"}]})
+    )
+    assert [f["label"] for f in moods] == ["First"]
+
+
+def test_merge_treats_separator_variants_as_the_same_id():
+    merged = merge_fragments_by_id(
+        [{"id": "dark-mood", "label": "Global"}], [{"id": "dark_mood", "label": "Card"}, {"id": "other"}]
+    )
+    assert [f["id"] for f in merged] == ["dark-mood", "other"]
 
 
 def test_disabled_skipped():

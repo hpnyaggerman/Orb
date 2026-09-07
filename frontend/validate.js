@@ -24,6 +24,15 @@ const ALLOWED_IMAGE_MIMES = ["image/png", "image/jpeg", "image/webp", "image/gif
 const FRAGMENT_ID_REGEX = /^[a-z0-9][a-z0-9_-]*$/;
 const VALID_URL_REGEX = /^https?:\/\/.+$/;
 
+// Two fragment ids that differ only by case or separators are one field: the
+// backend reads the model's reply that way, so such a pair could never be told
+// apart. Mirrors fold_key in backend/core/utils.py.
+export function fragmentIdKey(id) {
+  return String(id ?? "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, "");
+}
+
 export function required(value, fieldName = "Field") {
   const trimmed = typeof value === "string" ? value.trim() : "";
   if (!trimmed) {
@@ -479,6 +488,7 @@ export const validate = {
   validateAlternateGreetings,
   validateMoodFragment,
   validateInteractiveFragment,
+  fragmentIdKey,
   validateSetting,
   validateUserProfile,
   validatePersona,

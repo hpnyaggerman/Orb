@@ -33,20 +33,31 @@ _DIRECT_SCENE_DESCRIPTION = (
 )
 
 
+def wire_field(fid: str) -> str:
+    """The name a fragment id takes on the wire: as a schema property and wherever prompt text cites it.
+
+    Lowercase with hyphens as underscores, the spelling models echo most
+    reliably. A reply is folded back to the stored id (``core.match_folded``),
+    so nothing ever has to invert this rename.
+    """
+    return fid.lower().replace("-", "_")
+
+
 def build_direct_scene_tool(
     interactive_fragments: Sequence[Mapping[str, Any]],
 ) -> dict:
     """Build the ``direct_scene`` tool schema from the enabled interactive fragments.
 
     Fragments add dynamic string/array parameters beyond the fixed ``moods``
-    field. Returns an OpenAI function-calling format dict. (Lorebook selection is
-    a separate concern handled by the standalone ``select_lorebook`` tool.)
+    field, each keyed by its id's wire form. Returns an OpenAI function-calling
+    format dict. (Lorebook selection is a separate concern handled by the
+    standalone ``select_lorebook`` tool.)
     """
     properties: dict = {}
     required: list[str] = []
 
     for df in interactive_fragments:
-        fid = df["id"]
+        fid = wire_field(df["id"])
         field_type = df["field_type"]
         if field_type == "array":
             prop = {
@@ -218,8 +229,8 @@ def _build_fragment_tool(name: str, description: str, fragments: Sequence[Mappin
     """Build a tool schema whose parameters are exactly one string per fragment.
 
     Shared by the fragment-driven tools: each fragment contributes one string
-    parameter keyed by its id, and there are no fixed parameters. Returns an
-    OpenAI function-calling format dict.
+    parameter keyed by its id's wire form, and there are no fixed parameters.
+    Returns an OpenAI function-calling format dict.
 
     These schemas ride the shared per-turn tools blob (via ``schema_overrides``)
     so their step can force ``tool_choice`` on the tool without a cache miss.
@@ -228,7 +239,7 @@ def _build_fragment_tool(name: str, description: str, fragments: Sequence[Mappin
     required: list[str] = []
 
     for df in fragments:
-        fid = df["id"]
+        fid = wire_field(df["id"])
         properties[fid] = {"type": "string", "description": df["description"]}
         if df.get("required"):
             required.append(fid)

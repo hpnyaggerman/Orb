@@ -41,6 +41,14 @@ async def test_create_duplicate_mood_fragment_returns_400(client, db):
     assert resp.status_code == 400
 
 
+async def test_create_mood_id_differing_only_by_separators_returns_400(client, db):
+    # The seeded talkative exists; talk_ative folds to the same key.
+    payload = {"id": "talk_ative", "label": "T", "description": "x", "prompt_text": "x"}
+    resp = await client.post("/api/fragments", json=payload)
+    assert resp.status_code == 400
+    assert "talkative" in resp.json()["detail"]
+
+
 async def test_update_mood_fragment_persists_to_db(client, db):
     payload = {
         "id": "upd-frag",
