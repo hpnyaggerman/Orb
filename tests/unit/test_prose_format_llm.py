@@ -13,7 +13,8 @@ import json
 
 import pytest
 
-from backend.inference.client import parse_tool_calls, strictify_schema
+from backend.inference.client import parse_tool_calls
+from backend.inference.schema import strictify_schema
 from backend.inference.text_completion import forced_schema, forced_tool_message
 from backend.workflows.prose_format_llm import ANALYZE_TOOL, PATCH_TOOL, REPORT_TOOL
 from backend.workflows.prose_format_llm.loop import run_enforcement_loop

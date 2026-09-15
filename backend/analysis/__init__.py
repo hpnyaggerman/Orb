@@ -9,7 +9,20 @@ from .detectors.phrase_repetition import PhraseResult
 from .detectors.slop_detector import DetectionResult
 from .detectors.structural_repetition import StructuralResult
 from .detectors.template_repetition import FlaggedTemplate, TemplateResult
-from .format_consistency import FormatDriftReport, normalize_to_baseline
+from .format_consistency import (
+    AxisStyle,
+    Dialogue,
+    FormatDriftReport,
+    Narration,
+    baseline_axes,
+    classify_axes,
+    narration_only,
+    normalize_to_baseline,
+    protected_runs,
+    spoken_lines,
+    stable_label,
+    vote_axes,
+)
 from .patching import (
     PatchError,
     PatchErrorKind,
@@ -41,7 +54,17 @@ __all__ = [
     "StructuralResult",
     "PhraseResult",
     "EchoResult",
+    "AxisStyle",
+    "Dialogue",
     "FormatDriftReport",
+    "Narration",
+    "baseline_axes",
+    "classify_axes",
+    "narration_only",
     "normalize_to_baseline",
+    "protected_runs",
+    "spoken_lines",
+    "stable_label",
+    "vote_axes",
     "split_narration_sentences",
 ]

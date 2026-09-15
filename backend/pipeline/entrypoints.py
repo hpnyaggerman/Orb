@@ -9,7 +9,8 @@ from typing import Any
 
 from .. import database as db
 from ..core import resolve_inline
-from ..inference import AbortToken, prefix_is_speaker_scoped, tail_carries_identity
+from ..inference import AbortToken
+from ..prompting import prefix_is_speaker_scoped, tail_carries_identity
 from .cast import parse_speaking_plan, plan_cue, round_robin_member
 from .config import _resolve_pipeline_config, _split_interactive_fragments
 from .context import (
@@ -151,10 +152,17 @@ async def _resolve_target_and_parent(
     Returns ``(target, user_msg)`` on success, or an error string if the
     message is missing, belongs to a different conversation, or is not an
     assistant message.
+
+    The three cases get three sentences: a client can hold a target id that the
+    view it was painted from no longer has (another tab deleted the message),
+    and a single opaque "invalid" leaves the reader unable to tell a stale id
+    from a mis-wired button.
     """
     target = await db.get_message_by_id(assistant_msg_id)
-    if not target or target["conversation_id"] != conversation_id or target["role"] != "assistant":
-        return "Invalid target message"
+    if not target or target["conversation_id"] != conversation_id:
+        return "That message is no longer in this conversation — reload it"
+    if target["role"] != "assistant":
+        return "Only an assistant reply can be regenerated"
     parent_id = target["parent_id"]
     parent = await db.get_message_by_id(parent_id) if parent_id else None
     if not parent:
@@ -322,7 +330,7 @@ async def _generate_group_exchange(
         phrase_bank=ctx.phrase_bank,
         schema_overrides=setup.schema_overrides,
     )
-    writer_fragments, _, direction_note_fragments = _split_interactive_fragments(ctx.interactive_fragments)
+    writer_fragments, _, direction_note_fragments, _ = _split_interactive_fragments(ctx.interactive_fragments)
     shared = TurnState(
         user_message=setup.macros.resolve_message(user_message),
         effective_msg=setup.macros.resolve_message(user_message),
@@ -769,8 +777,11 @@ async def handle_fork_edit(
 
         settings = ctx.settings
         original = await db.get_message_by_id(user_msg_id)
-        if not original or original["conversation_id"] != conversation_id or original["role"] != "user":
-            yield {"event": "error", "data": "Invalid target message"}
+        if not original or original["conversation_id"] != conversation_id:
+            yield {"event": "error", "data": "That message is no longer in this conversation — reload it"}
+            return
+        if original["role"] != "user":
+            yield {"event": "error", "data": "Only a user message can be edited into a fork"}
             return
 
         parent_id: int | None = original["parent_id"]

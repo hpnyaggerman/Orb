@@ -17,8 +17,8 @@ import {
   TURN_MODES,
   visibleGroups,
 } from "./group_cast.js";
+import { CLOSE_ICON, GRIP_ICON } from "./icons.js";
 import { closeModal, setModalCloseGuard, showModal, switchTab } from "./modal.js";
-import { SIDEBAR_CLOSE_ICON } from "./sidebar_icons.js";
 import { charactersView, notify, S } from "./state.js";
 import { $, avatarCell, avatarUrl, convUrl, esc, escAttr, toast } from "./utils.js";
 
@@ -203,7 +203,7 @@ function settingsPaneHtml(conv, rootId) {
     <div class="field"><label for="group-settings-context">Mode</label>
       <select id="group-settings-context">${contextModeOptions(S.groupCast.context_mode)}</select></div>
     <div class="field" id="group-settings-sheet-row"><label class="modal-checkbox-label"><input type="checkbox" id="group-settings-sheet-updates"${S.groupCast.sheet_updates ? " checked" : ""}> Propose sheet updates after each reply</label>
-      <p class="modal-hint">A character card describes turn one forever, so a long scene drifts away from it, e.g. change of appearance. After each exchange, each member who spoke is offered a rewritten sheet, which you apply or dismiss on the Cast tab.</p>
+      <p class="modal-hint">A character card describes turn one forever, so a long scene drifts away from it, e.g. change of appearance. After each exchange, each member who spoke is offered a rewritten sheet.</p>
       <p class="modal-hint">Costs one extra model call per member who spoke, per exchange.</p></div>
     <h3 class="modal-section">Reply behavior</h3>
     <div class="field"><label for="group-settings-mode">Mode</label>
@@ -283,7 +283,7 @@ function castRow(member, mode) {
   const draftable = canDraftProfile(member, mode);
   const proposals = proposalsFor(member.id);
   return `<div class="cast-row" data-roster-member-id="${escAttr(member.id || "")}" data-roster-card-id="${escAttr(member.character_card_id || "")}" data-roster-kind="${escAttr(member.member_kind || "character")}">
-    <button type="button" class="cast-drag" data-roster-drag title="Drag, or use the arrow keys, to reorder" aria-label="Reorder ${escAttr(name)}">⠿</button>
+    <button type="button" class="cast-drag" data-roster-drag title="Drag, or use the arrow keys, to reorder" aria-label="Reorder ${escAttr(name)}">${GRIP_ICON}</button>
     ${memberAvatar(member)}
     <input data-roster-name value="${escAttr(name)}" aria-label="Display name">
     <label class="cast-reply-toggle" title="Muted members stay in the scene but never take a turn"><input type="checkbox" data-roster-reply ${member.muted ? "" : "checked"}> Can reply</label>
@@ -748,6 +748,15 @@ export function consumeSpeakerOverride() {
 
 let _groupSearch = "";
 let _groupsExpanded = false;
+// The Groups section ships collapsed; it opens itself once for anyone who has groups.
+let _groupsSectionSettled = false;
+
+function setGroupsSectionCollapsed(collapsed) {
+  const header = $("groups-section-toggle");
+  if (!header) return;
+  header.querySelector(".arrow")?.classList.toggle("collapsed", collapsed);
+  header.nextElementSibling?.classList.toggle("collapsed", collapsed);
+}
 
 function _groupItemHtml({ rootId, root, shown, open, members }) {
   const names = (shown.group_member_names || []).filter(Boolean);
@@ -776,7 +785,7 @@ function _groupItemHtml({ rootId, root, shown, open, members }) {
         <span class="group-chat-details"><span class="group-chat-title">${esc(root.title)}</span><span class="group-chat-members">${esc(memberLine)}</span></span>
         ${countBadge}
       </button>
-      <button type="button" class="btn-icon group-chat-delete" data-group-delete-root-id="${escAttr(rootId)}" title="Delete group" aria-label="Delete group ${escAttr(root.title)}">${SIDEBAR_CLOSE_ICON}</button>
+      <button type="button" class="btn-icon group-chat-delete" data-group-delete-root-id="${escAttr(rootId)}" title="Delete group" aria-label="Delete group ${escAttr(root.title)}">${CLOSE_ICON}</button>
     </div>`;
 }
 
@@ -784,6 +793,11 @@ export function renderGroupList() {
   const list = $("group-chat-list");
   if (!list) return;
   const families = groupFamilies(S.conversations, S.activeConvId);
+
+  if (!_groupsSectionSettled && families.length) {
+    _groupsSectionSettled = true;
+    setGroupsSectionCollapsed(false);
+  }
 
   const searchWrap = $("group-search-wrap");
   if (searchWrap) {
@@ -892,6 +906,7 @@ export function initGroupSetup() {
     if (S.groupCast && event.target === event.currentTarget) showAvatarPopup();
   });
   $("groups-section-toggle")?.addEventListener("click", (event) => {
+    _groupsSectionSettled = true;
     event.currentTarget.querySelector(".arrow")?.classList.toggle("collapsed");
     event.currentTarget.nextElementSibling?.classList.toggle("collapsed");
   });

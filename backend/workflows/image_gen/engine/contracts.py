@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, TypedDict
 
-from ...errors import WorkflowUserFacingError
+from ...toolkit import WorkflowUserFacingError
 
 ProgressCallback = Callable[[str, Mapping[str, Any]], Awaitable[None] | None]
 
@@ -30,6 +31,33 @@ def recorded_edge(value: Any) -> int | None:
     and the hook grades a recorded one, and the copy that drifted first lost `> 0`.
     """
     return value if isinstance(value, int) and not isinstance(value, bool) and value > 0 else None
+
+
+def fold_seed_into(seed: int, low: int, high: int) -> int:
+    """`seed` folded into the inclusive range `[low, high]`, or unchanged where that
+    is not a range at all.
+
+    Backends disagree about how large a seed may be. A ComfyUI node declares
+    `min`/`max` in `/object_info`; a cloud style can carry a ceiling the user entered
+    after reading a provider's refusal. "Make this seed fit" is shared by both.
+
+    Folded rather than clamped: clamping would draw every out-of-range seed as the
+    same image, and folding is idempotent, so the seed Orb records still reproduces
+    this render when it is replayed through the same bound.
+    """
+    if high < low:
+        return seed
+    # Negative seeds are legal where a backend offers them and nobody wants them, so
+    # the fold starts at zero wherever that is still inside the range.
+    low = max(low, 0) if high >= 0 else low
+    if low <= seed <= high:
+        return seed
+    return low + (seed - low) % (high - low + 1)
+
+
+def ratio_distance(target: float, ratio: float | None) -> float:
+    """Return logarithmic distance between two aspect ratios."""
+    return abs(math.log(target) - math.log(ratio)) if ratio and ratio > 0 else math.inf
 
 
 class ImageBackendCapabilities(TypedDict):
@@ -68,6 +96,7 @@ class RenderTarget:
     reference_source: str = ""
     reference_capacity: int = 0
     reference_template: Mapping[str, Any] = field(default_factory=dict)
+    seed_max: int | None = None
 
 
 @dataclass(frozen=True)

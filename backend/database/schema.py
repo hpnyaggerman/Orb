@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS settings (
     character_library_view TEXT NOT NULL DEFAULT 'grid',
     character_library_sort TEXT NOT NULL DEFAULT 'time-added',
     show_editor_diff INTEGER NOT NULL DEFAULT 1,
+    show_chat_avatars INTEGER NOT NULL DEFAULT 0,
     editor_audit_toggles TEXT NOT NULL DEFAULT '{"banned_phrases":true,"repetitive_openers":true,"repetitive_templates":true,"contrastive_negation":true,"phrase_repetition":true,"structural_repetition":true,"anti_echo":true}',
     document_audit_enabled INTEGER NOT NULL DEFAULT 1,
     document_audit_autopatch INTEGER NOT NULL DEFAULT 0,
@@ -93,6 +94,7 @@ CREATE TABLE IF NOT EXISTS conversations (
 );
 
 CREATE INDEX IF NOT EXISTS idx_conversations_group_root ON conversations(group_root_id);
+CREATE INDEX IF NOT EXISTS idx_conversations_active_leaf ON conversations(active_leaf_id);
 
 CREATE TABLE IF NOT EXISTS character_cards (
     id TEXT PRIMARY KEY,
@@ -117,7 +119,17 @@ CREATE TABLE IF NOT EXISTS character_cards (
     updated_at TEXT NOT NULL,
     workflow_state TEXT DEFAULT NULL,
     persona_lock_id INTEGER REFERENCES user_personas(id) ON DELETE SET NULL,
-    extensions TEXT DEFAULT NULL
+    extensions TEXT DEFAULT NULL,
+    auto_tag_vocab_hash TEXT NOT NULL DEFAULT '',
+    auto_tag_card_updated_at TEXT NOT NULL DEFAULT '',
+    -- The duplicate finder's one cached signal: a 64-bit dHash of the decoded
+    -- avatar as 16 hex chars, '' when the card has no avatar or its bytes would
+    -- not decode. Avatar decoding is ~8.8 ms per card against 0.26s for every
+    -- text signal in a 2000-card library combined, so the text side is
+    -- recomputed on every scan and only this is stored. The stamp is
+    -- f"{DEDUPE_REVISION}:{updated_at}"; a mismatch means re-hash.
+    avatar_dhash TEXT NOT NULL DEFAULT '',
+    avatar_dhash_stamp TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS character_expressions (
@@ -165,6 +177,7 @@ CREATE TABLE IF NOT EXISTS messages (
 
 CREATE INDEX IF NOT EXISTS idx_messages_exchange ON messages(conversation_id, exchange_id);
 CREATE INDEX IF NOT EXISTS idx_messages_speaker ON messages(speaker_member_id);
+CREATE INDEX IF NOT EXISTS idx_messages_parent ON messages(parent_id);
 
 CREATE TABLE IF NOT EXISTS director_state (
     conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
@@ -202,6 +215,8 @@ CREATE TABLE IF NOT EXISTS conversation_logs (
     feedback TEXT NOT NULL DEFAULT '{}'
 );
 
+CREATE INDEX IF NOT EXISTS idx_conversation_logs_message ON conversation_logs(message_id);
+
 CREATE TABLE IF NOT EXISTS phrase_bank (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     variants TEXT NOT NULL,
@@ -214,6 +229,8 @@ CREATE TABLE IF NOT EXISTS user_personas (
     name TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
     avatar_color TEXT,
+    avatar_b64 TEXT DEFAULT NULL,
+    avatar_mime TEXT DEFAULT NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
@@ -244,6 +261,11 @@ CREATE TABLE IF NOT EXISTS workflow_attachments (
     active_sibling_id INTEGER REFERENCES workflow_attachments(id) ON DELETE SET NULL,
     recent_accesses TEXT DEFAULT NULL
 );
+
+CREATE INDEX IF NOT EXISTS idx_user_attachments_message ON user_attachments(message_id);
+CREATE INDEX IF NOT EXISTS idx_workflow_attachments_message ON workflow_attachments(message_id);
+CREATE INDEX IF NOT EXISTS idx_workflow_attachments_parent ON workflow_attachments(parent_attachment_id);
+CREATE INDEX IF NOT EXISTS idx_workflow_attachments_active_sibling ON workflow_attachments(active_sibling_id);
 
 CREATE TABLE IF NOT EXISTS endpoints (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -337,6 +359,7 @@ CREATE TABLE IF NOT EXISTS world_changesets (
 
 CREATE INDEX IF NOT EXISTS idx_changeset_world_status ON world_changesets(world_id, status);
 CREATE INDEX IF NOT EXISTS idx_changeset_source_asst ON world_changesets(source_assistant_message_id);
+CREATE INDEX IF NOT EXISTS idx_changeset_source_user ON world_changesets(source_user_message_id);
 
 CREATE TABLE IF NOT EXISTS member_sheet_proposals (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -373,6 +396,37 @@ CREATE TABLE IF NOT EXISTS documents (
     generated_spans TEXT NOT NULL DEFAULT '[]',
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS library_tags (
+    name TEXT PRIMARY KEY,
+    position INTEGER NOT NULL
+);
+
+-- Duplicate pairs the user has said to stop reporting.
+--
+-- Pairs, not groups: group identity is unstable -- one new import reshapes a
+-- group and any group key goes stale -- while a pair is stable forever.
+-- Dismissing a group of three writes its three pairs, and a fourth card joining
+-- later produces new undismissed pairs that correctly re-flag. card_a < card_b
+-- canonically, so a pair has exactly one row.
+--
+-- hash_a/hash_b are the two cards' body_hash at dismissal time. The dismissal
+-- lapses the moment either differs, which is "revisit only after meaningful
+-- changes" -- and because body_hash excludes tags and public profiles, an
+-- auto-tagging run cannot resurrect a dismissed pair.
+--
+-- ON DELETE CASCADE is load-bearing: connection.py issues PRAGMA foreign_keys=ON
+-- on every connection, so deleting a card reaps its dismissals instead of
+-- leaking them. (Contrast conversations.character_card_id, which deliberately
+-- has no FK so a dangling id can act as a relink marker.)
+CREATE TABLE IF NOT EXISTS duplicate_dismissals (
+    card_a TEXT NOT NULL REFERENCES character_cards(id) ON DELETE CASCADE,
+    card_b TEXT NOT NULL REFERENCES character_cards(id) ON DELETE CASCADE,
+    hash_a TEXT NOT NULL,
+    hash_b TEXT NOT NULL,
+    dismissed_at TEXT NOT NULL,
+    PRIMARY KEY (card_a, card_b)
 );
 
 """

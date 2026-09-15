@@ -7,17 +7,19 @@ from typing import Any
 
 from ..core import ChatMessage, Macros
 from ..database.models import PhraseGroup
-from ..features.prose_rewriter import ProseRewriteConfig
-from ..features.prose_rewriter import resolve_config as resolve_prose_rewrite
 from ..inference import (
     CachedBase,
     LLMClient,
-    build_direction_note_tool,
-    enabled_schemas,
 )
+from ..prompting.tool_catalog import enabled_schemas
+from ..prompting.tool_schemas import build_direction_note_tool
 from ..workflows.enablement import disabled_workflow_tool_names
 from .passes.director import build_direct_scene_override
-from .passes.editor import _feedback_active, build_feedback_override
+from .passes.editor import (
+    _feedback_active,
+    build_feedback_override,
+    post_processing_active,
+)
 from .passes.editor.length_guard import (
     LengthGuard,
     apply_length_guard_tools,
@@ -67,12 +69,6 @@ def _resolve_pipeline_config(
     length_guard: LengthGuard | None = resolve_length_guard(settings, agent_on)
     enabled_tools = apply_length_guard_tools(enabled_tools, length_guard)
 
-    # No `agent_on` conjunction, unlike every other editor feature above: the
-    # prose rewriter is a local model gated only by its own Local ML toggle,
-    # its selected variant being on disk, and a llama-server binary resolving.
-    # It contributes no tool schema, so the cached prefix is untouched.
-    prose_rewrite: ProseRewriteConfig | None = resolve_prose_rewrite(settings)
-
     # In dual-model mode the writer's KV cache is disjoint; skip tool schemas there.
     dual_model = is_dual_model(agent_client)
     writer_enabled_tools = {} if dual_model else enabled_tools
@@ -113,7 +109,6 @@ def _resolve_pipeline_config(
         audit_enabled=audit_enabled,
         length_guard=length_guard,
         do_edit=audit_enabled or length_guard is not None,
-        prose_rewrite=prose_rewrite,
         writer_lane=writer_lane,
         agent_lane=agent_lane,
     )
@@ -121,17 +116,24 @@ def _resolve_pipeline_config(
 
 def _split_interactive_fragments(
     fragments: Sequence[Mapping[str, Any]],
-) -> tuple[list[Mapping[str, Any]], list[Mapping[str, Any]], list[Mapping[str, Any]]]:
-    """Split interactive fragments into writer, feedback, and direction-note groups.
+) -> tuple[
+    list[Mapping[str, Any]],
+    list[Mapping[str, Any]],
+    list[Mapping[str, Any]],
+    list[Mapping[str, Any]],
+]:
+    """Split interactive fragments into writer, feedback, direction-note, and post-processing groups.
 
     Feedback-type fragments surface to the user via the post-writer feedback step;
-    direction-note-type fragments feed the direction-note step; all others shape the
-    ``direct_scene`` tool and Scene Direction block. The three groups are disjoint.
+    direction-note-type fragments feed the direction-note step; post-processing
+    fragments edit the completed draft; all others shape the ``direct_scene`` tool
+    and Scene Direction block. The four groups are disjoint.
     """
-    writer = [df for df in fragments if df.get("field_type") not in ("feedback", "direction_note")]
+    writer = [df for df in fragments if df.get("field_type") not in ("feedback", "direction_note", "post_processing")]
     feedback = [df for df in fragments if df.get("field_type") == "feedback"]
     direction_note_fragments = [df for df in fragments if df.get("field_type") == "direction_note"]
-    return writer, feedback, direction_note_fragments
+    post_processing = [df for df in fragments if df.get("field_type") == "post_processing"]
+    return writer, feedback, direction_note_fragments, post_processing
 
 
 def _build_writer_tools_blob(
@@ -144,7 +146,9 @@ def _build_writer_tools_blob(
     grouped: bool = False,
 ) -> dict:
     """Build the tool schemas shared by cached calls."""
-    writer_fragments, feedback_fragments, direction_note_fragments = _split_interactive_fragments(interactive_fragments)
+    writer_fragments, feedback_fragments, direction_note_fragments, post_processing_fragments = _split_interactive_fragments(
+        interactive_fragments
+    )
     direct_scene = build_direct_scene_override(writer_fragments, grouped=grouped)
     # Per-fragment mode fills one field per call, so requiredness on the shared blob
     # is meaningless -- and a non-empty `required` contradicts the "Fill ONLY X, leave
@@ -160,6 +164,8 @@ def _build_writer_tools_blob(
     if _feedback_active(settings, feedback_fragments, agent_on=agent_enabled(settings)):
         overrides["give_feedback"] = build_feedback_override(feedback_fragments)
         enabled_tools["give_feedback"] = True
+    if post_processing_active(post_processing_fragments, agent_on=agent_enabled(settings)):
+        enabled_tools["editor_search_replace"] = True
     if direction_note_recording_active(settings, direction_note_fragments, agent_on=agent_enabled(settings)):
         overrides["record_direction_note"] = build_direction_note_tool(direction_note_fragments)
         enabled_tools["record_direction_note"] = True

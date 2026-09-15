@@ -6,14 +6,13 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
-from ..core import ChatMessage, ContentPart, Macros
-from ..features.lorebook import (
+from ..core import ChatMessage, ContentPart, Macros, joined_delta
+from ..inference import CachedBase, LLMClient
+from ..prompting.lorebook import (
     AGENTIC_LOREBOOK_SCAN_DEPTH,
     LOREBOOK_SCAN_DEPTH,
     compute_lorebook_block,
 )
-from ..features.prose_rewriter import ProseRewriteConfig
-from ..inference import CachedBase, LLMClient
 from .passes.editor.length_guard import LengthGuard
 
 
@@ -49,10 +48,6 @@ class _PipelineConfig:
     audit_enabled: bool
     length_guard: LengthGuard | None
     do_edit: bool
-    # Local prose rewriter (Editor pass, pre-audit). Non-None means enabled;
-    # deliberately independent of ``agent_on`` — it is a local model on its own
-    # Local ML toggle, not one of the remote Agent passes.
-    prose_rewrite: ProseRewriteConfig | None
     # The two call surfaces for the turn. ``writer_lane`` runs the writer pass;
     # ``agent_lane`` runs director + editor. In single-model mode they are the
     # same object by construction (see :class:`ModelLane`).
@@ -135,7 +130,8 @@ class TurnState:
     writer_lorebook_block: str = ""
 
     resp_text: str = ""
-    # Writer text before local rewriting, editing, or post-pipeline workflows.
+    # Post-Editor text retained before secondary workflows change the visible
+    # reply. ``writer_draft`` is the legacy persistence/API name for this source.
     writer_draft: str = ""
     writer_content: str | list[ContentPart] = ""
     reasoning_director: str = ""
@@ -159,6 +155,13 @@ class TurnState:
             elif isinstance(value, dict):
                 value = dict(value)
             setattr(self, name, value)
+
+    def add_reasoning(self, pass_name: str, event: Mapping[str, Any]) -> str:
+        """Append one pass delta and return the exact text to stream."""
+        buffer = f"reasoning_{pass_name}"
+        delta = joined_delta(getattr(self, buffer), event)
+        setattr(self, buffer, getattr(self, buffer) + delta)
+        return delta
 
     def as_result_event_data(self) -> dict:
         """Return the stable field subset for the ``_result`` SSE event."""

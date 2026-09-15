@@ -1,5 +1,6 @@
 import { api } from "./api.js";
 import { initDragReorder } from "./drag_reorder.js";
+import { GRIP_ICON } from "./icons.js";
 import { closeModal, closeSubModal, confirmDelete, showModal, showSubModal } from "./modal.js";
 import { S } from "./state.js";
 import { $, boolFlag, esc, escAttr, escHandlerArg, toast } from "./utils.js";
@@ -53,17 +54,17 @@ function _moodFragFormHtml(d, isEdit) {
   return `
     <div class="field-row">
       <div class="field"><label>ID <span style="font-size:10px;color:var(--text-muted)">(For tool-calling)</span></label>
-        <input id="frag-id" value="${escAttr(d.id)}" ${isEdit ? "disabled" : ""} placeholder="e.g. dramatic"></div>
+        <input id="frag-id" value="${escAttr(d.id)}" ${isEdit ? "disabled" : ""} placeholder="terse"></div>
       <div class="field"><label>Label <span style="font-size:10px;color:var(--text-muted)">(For display only)</span></label>
         <input id="frag-label" value="${escAttr(d.label)}" placeholder="Terse"></div>
     </div>
-    <div class="field"><label>Description <span style="font-size:10px;color:var(--text-muted)">(tells the Director when to activate — sent in its tool schema)</span></label>
-      <input id="frag-desc" value="${escAttr(d.description)}" placeholder="Short, clipped sentences. Minimal description."></div>
+    <div class="field"><label>Description <span style="font-size:10px;color:var(--text-muted)">(tells the Director when to activate)</span></label>
+      <input id="frag-desc" value="${escAttr(d.description)}" placeholder="The scene is finalizing and deserves a spontaneous haiku."></div>
     <div class="field"><label>Prompt Text <span style="font-size:10px;color:var(--text-muted)">(injected into the writer context when this mood is active)</span></label>
-      <textarea id="frag-text" rows="4" placeholder="Write tersely. Short sentences. No flowery language.">${esc(d.prompt_text)}</textarea></div>
+      <textarea id="frag-text" rows="4" placeholder="Write the reply like a haiku, strictly following haiku format (5-7-5).">${esc(d.prompt_text)}</textarea></div>
     <div class="field">
       <label>Negative Prompt <span style="font-size:10px;color:var(--text-muted)">(injected if this fragment is removed next turn)</span></label>
-      <textarea id="frag-neg" rows="3" placeholder="Stop using short, clipped sentences.">${esc(d.negative_prompt || "")}</textarea>
+      <textarea id="frag-neg" rows="3" placeholder="Stop writing like it's a haiku.">${esc(d.negative_prompt || "")}</textarea>
     </div>`;
 }
 
@@ -171,7 +172,7 @@ export function renderInteractiveFragments() {
       const { disabled: featureDisabled, title: itemTitle } = _featureGate(f);
       return `
     <div class="fragment-item${featureDisabled ? " frag-feature-disabled" : ""}" data-id="${escAttr(f.id)}" title="${escAttr(itemTitle)}" onclick="showInteractiveFragmentModal('${escHandlerArg(f.id)}')">
-      <button type="button" class="frag-drag-handle" title="Drag, or use the arrow keys, to reorder" aria-label="Reorder ${escAttr(f.label)}" onclick="event.stopPropagation()">⋮⋮</button>
+      <button type="button" class="frag-drag-handle" title="Drag, or use the arrow keys, to reorder" aria-label="Reorder ${escAttr(f.label)}" onclick="event.stopPropagation()">${GRIP_ICON}</button>
       <div style="flex:1; min-width:0;">
         <span class="frag-label">${esc(f.label)}</span>${userBadge}
       </div>
@@ -226,7 +227,7 @@ const INTERACTIVE_FRAGMENT_EXAMPLES = {
     injection_label: "e.g. Pacing",
     description: "Set the pace of the narration, e.g. 'slow', 'fast', 'time-skip'",
     inj_hint: "sent to the writer",
-    desc_hint: "tells the Director what to set — sent in its tool schema",
+    desc_hint: "tells the Director what this is about",
   },
   array: {
     id: "e.g. plot_threads",
@@ -234,7 +235,7 @@ const INTERACTIVE_FRAGMENT_EXAMPLES = {
     injection_label: "e.g. Active Threads",
     description: "List the active plot threads, e.g. 'unresolved rivalry', 'looming deadline'",
     inj_hint: "sent to the writer",
-    desc_hint: "tells the Director what to list — sent in its tool schema",
+    desc_hint: "tells the Director what this is about",
   },
   progressive: {
     id: "e.g. trust",
@@ -252,7 +253,7 @@ const INTERACTIVE_FRAGMENT_EXAMPLES = {
     description:
       "A lasting note the director records and keeps on this branch, e.g. 'where the story is heading and the established facts that pin it'",
     inj_hint: "sent to the writer",
-    desc_hint: "tells the Director what to record — sent in its tool schema",
+    desc_hint: "tells the Director what to record",
   },
   feedback: {
     id: "e.g. next_actions",
@@ -261,7 +262,16 @@ const INTERACTIVE_FRAGMENT_EXAMPLES = {
     description:
       "A short out-of-character note shown to you after each reply, e.g. 'suggest what the player could do or say next'",
     inj_hint: "shown to you",
-    desc_hint: "tells the model what to write — sent in its tool schema",
+    desc_hint: "tells the Editor what this is about",
+  },
+  post_processing: {
+    id: "e.g. tighten_dialogue",
+    label: "e.g. Tighten Dialogue",
+    injection_label: "e.g. Tighten Dialogue",
+    description:
+      "Rewrite spoken dialogue to be shorter and more natural. Preserve meaning and characterization; do not change narration.",
+    inj_hint: "sent to the Editor",
+    desc_hint: "editing instruction followed by the Editor",
   },
 };
 
@@ -283,6 +293,10 @@ export function updateInteractiveFragmentExample(fieldType) {
   setHint("interactive-frag-desc-hint", ex.desc_hint);
   const timingRow = document.getElementById("interactive-frag-timing-row");
   if (timingRow) timingRow.style.display = fieldType === "direction_note" ? "" : "none";
+  const requiredRow = document.getElementById("interactive-frag-required-row");
+  if (requiredRow) requiredRow.style.display = fieldType === "post_processing" ? "none" : "";
+  const required = document.getElementById("interactive-frag-required");
+  if (required && fieldType === "post_processing") required.checked = false;
 }
 
 function _interactiveFragFormHtml(d, isEdit) {
@@ -304,6 +318,7 @@ function _interactiveFragFormHtml(d, isEdit) {
           <option value="progressive" ${d.field_type === "progressive" ? "selected" : ""}>progressive</option>
           <option value="feedback" ${d.field_type === "feedback" ? "selected" : ""}>feedback (note to you)</option>
           <option value="direction_note" ${d.field_type === "direction_note" ? "selected" : ""}>direction note (persists)</option>
+          <option value="post_processing" ${d.field_type === "post_processing" ? "selected" : ""}>post-processing (edits reply)</option>
         </select>
       </div>
     </div>
@@ -316,7 +331,7 @@ function _interactiveFragFormHtml(d, isEdit) {
     </div>
     <div class="field"><label>Description <span id="interactive-frag-desc-hint" style="font-size:10px;color:var(--text-muted)">(${esc(ex.desc_hint)})</span></label>
       <textarea id="interactive-frag-desc" rows="4" placeholder="${escAttr(ex.description)}">${esc(d.description)}</textarea></div>
-    <div class="field-row">
+    <div class="field-row" id="interactive-frag-required-row" style="${d.field_type === "post_processing" ? "display:none" : ""}">
       <div class="field" style="align-self:flex-end;padding-bottom:4px">
         <label class="modal-checkbox-label">
           <input type="checkbox" id="interactive-frag-required" ${d.required ? "checked" : ""}> Required
@@ -326,12 +341,13 @@ function _interactiveFragFormHtml(d, isEdit) {
 }
 
 function _readInteractiveFragForm() {
+  const fieldType = document.getElementById("interactive-frag-type").value;
   return {
     id: document.getElementById("interactive-frag-id").value.trim(),
     label: document.getElementById("interactive-frag-label").value.trim(),
     description: document.getElementById("interactive-frag-desc").value.trim(),
-    field_type: document.getElementById("interactive-frag-type").value,
-    required: document.getElementById("interactive-frag-required").checked,
+    field_type: fieldType,
+    required: fieldType === "post_processing" ? false : document.getElementById("interactive-frag-required").checked,
     injection_label: document.getElementById("interactive-frag-inj-label").value.trim(),
     direction_note_timing: document.getElementById("interactive-frag-timing-select").value,
   };
@@ -409,18 +425,23 @@ function _interactiveTypeBadge(f) {
     ? ` <span class="frag-type-badge" title="Feedback fragment">F</span>`
     : f.field_type === "direction_note"
       ? ` <span class="frag-type-badge" title="Direction-note fragment">D</span>`
-      : "";
+      : f.field_type === "post_processing"
+        ? ` <span class="frag-type-badge" title="Post-processing fragment">P</span>`
+        : "";
 }
 
 function _featureGate(f) {
   const feedbackOff = f.field_type === "feedback" && !S.feedbackEnabled;
   const noteOff = f.field_type === "direction_note" && !S.directionNotesRecord;
+  const postProcessingOff = f.field_type === "post_processing" && !S.agentEnabled;
   const title = feedbackOff
     ? "Editor Feedback feature is disabled — enable it in Agents panel to use this fragment"
     : noteOff
       ? "Direction Notes recording is off -- turn on Writing in the Agents panel to use this fragment"
-      : f.description || "";
-  return { disabled: feedbackOff || noteOff, title };
+      : postProcessingOff
+        ? "Agent is disabled -- enable it to use this post-processing fragment"
+        : f.description || "";
+  return { disabled: feedbackOff || noteOff || postProcessingOff, title };
 }
 
 function _cardMoodSidepanelHtml() {

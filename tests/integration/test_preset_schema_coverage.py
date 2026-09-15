@@ -10,6 +10,7 @@ that drives the generic engine across every domain at once.
 
 from __future__ import annotations
 
+import base64
 import importlib
 import json
 import sqlite3
@@ -438,6 +439,7 @@ SIGNATURE_TABLES = frozenset(
     {
         "character_cards",
         "character_expressions",
+        "library_tags",
         "user_personas",
         "conversations",
         "group_members",
@@ -467,6 +469,12 @@ SIGNATURE_ALLOWLIST = frozenset(
         "direction_notes",
         "user_attachments",
         "workflow_attachments",
+        # Local review state for the duplicate finder: "I looked at this exact
+        # pair of cards and chose to keep both". Every row names two card ids and
+        # stamps their body hashes, so it is meaningful only against this
+        # install's library -- a preset applied elsewhere would carry dismissals
+        # for pairs that do not exist there.
+        "duplicate_dismissals",
     }
 )
 
@@ -537,6 +545,11 @@ def _signature(path: str) -> dict:
                 "SELECT wc.summary, m.content, wc.source_conversation_id, wc.source_character_label "
                 "FROM world_changesets wc LEFT JOIN messages m ON wc.source_assistant_message_id = m.id"
             ),
+            # The library's curated vocabulary, plus the tags and tagger stamps
+            # that live on the cards themselves. Compared through the card's name,
+            # like expressions above, because the round-trip is free to renumber ids.
+            "library_tags": q("SELECT name, position FROM library_tags"),
+            "auto_tags": q("SELECT name, tags, auto_tag_vocab_hash, auto_tag_card_updated_at FROM character_cards"),
             "personas": q("SELECT name, description FROM user_personas"),
             "phrase_bank": q("SELECT variants, kind, pattern FROM phrase_bank"),
             "fragments": q("SELECT id, label FROM mood_fragments"),
@@ -633,6 +646,15 @@ async def test_full_round_trip_is_identity_modulo_surrogate_ids(client, db_path)
             "INSERT INTO documents (id, title, content, generated_spans, created_at, updated_at) "
             "VALUES ('doc-1', 'Draft', 'once upon a time', '[[10,16]]', '2026-01-01', '2026-01-01')"
         )
+        # The library's tag vocabulary plus one card carrying a tagger answer: a
+        # root in the characters domain whose names the cards' own tags column
+        # references, so the round-trip has to carry both halves.
+        seed.execute("INSERT INTO library_tags (name, position) VALUES ('Fantasy', 0), ('Romance', 1)")
+        seed.execute(
+            "UPDATE character_cards SET tags = '[\"Fantasy\"]', "
+            "auto_tag_vocab_hash = 'hash-1', auto_tag_card_updated_at = '2026-01-01' WHERE id = ?",
+            (locked,),
+        )
         seed.commit()
     finally:
         seed.close()
@@ -663,7 +685,10 @@ async def test_full_round_trip_is_identity_modulo_surrogate_ids(client, db_path)
 
     after = _signature(path)
     assert after == before, {k: (before[k], after[k]) for k in before if before[k] != after[k]}
-    assert summary["chats"] == 1 and summary["characters"] == 2 and summary["configs"] == 1
+    # "characters" sums the row counts of every root in the domain: two cards plus
+    # the two curated vocabulary tags (character_expressions rides along as a
+    # cascade child and is not counted).
+    assert summary["chats"] == 1 and summary["characters"] == 4 and summary["configs"] == 1
 
     # And the committed state has no dangling foreign keys.
     conn = sqlite3.connect(path)
@@ -961,3 +986,17 @@ async def test_no_secret_canary_leaks_in_exports(client, db_path):
     blob = open(presets._library_path(name), "rb").read()
     leaked_keys = [c.decode() for c in api_key_canaries if c in blob]
     assert leaked_keys == [], leaked_keys
+
+
+async def test_persona_avatar_never_ships_without_the_configs_domain(client, db_path):
+    canary = base64.b64encode(b"LEAK-CANARY-user_personas-avatar_b64").decode().encode()
+    resp = await client.post(
+        "/api/user-personas",
+        json={"name": "Pictured", "avatar_b64": canary.decode(), "avatar_mime": "image/png"},
+    )
+    assert resp.status_code == 200
+
+    for domain in [d for d in presets.ALL_DOMAINS if d != "configs"]:
+        name = (await client.post("/api/presets/export", json={"domains": [domain], "strip_keys": False})).json()["name"]
+        blob = open(presets._library_path(name), "rb").read()
+        assert canary not in blob, domain

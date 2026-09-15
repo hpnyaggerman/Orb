@@ -1,5 +1,6 @@
 import { api } from "./api.js";
 import { renderInspector } from "./chat.js";
+import { CLOSE_ICON } from "./icons.js";
 import { showConfirmModal } from "./modal.js";
 import { filterModelChoices, mergeModelChoices } from "./model_catalog.js";
 import { S } from "./state.js";
@@ -43,7 +44,7 @@ const SETTING_FIELDS = [
   { k: "shared_system_prompt", l: "System Prompt (global)", t: "textarea" },
   { k: "system_prompt", l: "System Prompt (model)", t: "textarea" },
   { k: "temperature", l: "Temperature", t: "number", s: "0.05", mn: "0", mx: "2" },
-  { k: "max_tokens", l: "Max Tokens", t: "number", s: "64", mn: "64", mx: "8192" },
+  { k: "max_tokens", l: "Max Tokens", t: "number", s: "64", mn: "64", mx: "32768" },
   { k: "top_p", l: "Top P", t: "number", s: "0.05", mn: "0", mx: "1" },
   { k: "min_p", l: "Min P", t: "number", s: "0.01", mn: "0", mx: "1" },
   { k: "top_k", l: "Top K", t: "number", s: "1", mn: "0", mx: "200" },
@@ -60,14 +61,17 @@ const SETTING_FIELDS = [
 
 const FIELD_GROUPS = [
   { l: "Prompts", cls: " ep-chat-only", keys: ["shared_system_prompt", "system_prompt"] },
-  { l: "Sampling", open: true, keys: ["temperature", "max_tokens", "top_p", "min_p", "top_k", "repetition_penalty"] },
+  { l: "Sampling", keys: ["temperature", "max_tokens", "top_p", "min_p", "top_k", "repetition_penalty"] },
   { l: "Advanced", keys: ["reasoning_effort", "extra_headers", "extra_body"] },
 ];
 
 const AGENT_MODEL_HYPERPARAM_KEYS = [
   "agent_shared_system_prompt",
   "agent_temperature",
+  "agent_max_tokens",
   "agent_top_p",
+  "agent_min_p",
+  "agent_top_k",
   "agent_repetition_penalty",
   "agent_reasoning_effort",
   "agent_reasoning_effort_param",
@@ -92,7 +96,10 @@ const AGENT_SETTING_FIELDS = [
   { k: "agent_proxy", l: "Agent Proxy", t: "text", ph: "socks5://127.0.0.1:1080" },
   { k: "agent_shared_system_prompt", l: "Agent System Prompt (global)", t: "textarea" },
   { k: "agent_temperature", l: "Agent Temperature", t: "number", s: "0.05", mn: "0", mx: "2" },
+  { k: "agent_max_tokens", l: "Agent Max Tokens", t: "number", s: "64", mn: "64", mx: "32768" },
   { k: "agent_top_p", l: "Agent Top P", t: "number", s: "0.05", mn: "0", mx: "1" },
+  { k: "agent_min_p", l: "Agent Min P", t: "number", s: "0.01", mn: "0", mx: "1" },
+  { k: "agent_top_k", l: "Agent Top K", t: "number", s: "1", mn: "0", mx: "200" },
   { k: "agent_repetition_penalty", l: "Agent Rep. Penalty", t: "number", s: "0.05", mn: "1", mx: "2" },
   { k: "agent_reasoning_effort", l: "Agent Reasoning Effort", t: "reasoning_effort" },
   { k: "agent_extra_headers", l: "Agent Extra Request Headers", t: "textarea", ph: "X-Provider: deepinfra" },
@@ -238,7 +245,7 @@ export function renderEndpoints() {
     for (const g of FIELD_GROUPS) {
       const members = g.keys.map((k) => byKey.get(p + k)).filter(Boolean);
       if (!members.length) continue;
-      html += `<details class="ep-group${g.cls || ""}"${g.open ? " open" : ""}>
+      html += `<details class="ep-group${g.cls || ""}">
         <summary>${g.l}</summary>
         ${members.map((f) => renderField(f, isAgent)).join("")}
       </details>`;
@@ -540,7 +547,7 @@ function initCombobox(rootEl, getItems, { isAgent = false, searchable = false, l
         const deleteHtml =
           id == null
             ? ""
-            : `<button class="cb-delete-btn" title="Delete" onclick="event.stopPropagation(); deleteComboboxItem(this, '${type}', ${id}${agentArg})">×</button>`;
+            : `<button class="cb-delete-btn" title="Delete" onclick="event.stopPropagation(); deleteComboboxItem(this, '${type}', ${id}${agentArg})">${CLOSE_ICON}</button>`;
         return `
               <div class="cb-option${i === activeIdx ? " active" : ""}" data-value="${escAttr(value)}"${idAttrs} data-type="${escAttr(type)}">
                 <span class="cb-option-text">${highlightMatch(value, q)}</span>
@@ -557,7 +564,11 @@ function initCombobox(rootEl, getItems, { isAgent = false, searchable = false, l
     list.innerHTML = optionHtml + statusHtml;
     list.querySelectorAll(".cb-option").forEach((el, i) => {
       el.onmousedown = (e) => {
-        if (e.target.classList.contains("cb-delete-btn")) return;
+        // The delete button wraps an inline SVG, so a click on the X targets the
+        // icon rather than the button -- match with closest(), not the target's
+        // own class, or mousedown selects the row and re-renders the list out
+        // from under the button before its click can fire.
+        if (e.target.closest(".cb-delete-btn")) return;
         e.preventDefault();
         selectVal(el.dataset.value);
       };

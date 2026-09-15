@@ -60,6 +60,10 @@ markdown_extensions:
       emoji_index: !!python/name:material.extensions.emoji.twemoji
       emoji_generator: !!python/name:material.extensions.emoji.to_svg
 
+# Internal working docs: tracked in-repo, not published to the site.
+exclude_docs: |
+  plans/
+
 plugins:
   - search
 
@@ -67,6 +71,7 @@ nav:
   - Home: index.md
   - Getting Started: getting-started.md
   - Architecture:
+      - LLM Endpoint Routing: architecture/endpoints.md
       - KV Cache Reuse: architecture/kv-cache.md
       - SSE Turn Stream: architecture/sse-stream.md
       - Secondary Workflows: architecture/secondary-workflow.md
@@ -96,6 +101,8 @@ nav:
       - App and data:
           - Card-Embedded Fragments: features/card-fragments.md
           - Fetch Cards from Internet: features/fetch-cards.md
+          - Library Auto-tagging: features/library-auto-tagging.md
+          - Library Duplicate Finder: features/library-duplicate-finder.md
           - Backups and Presets: features/backups-presets.md
           - Persona Pinning: features/persona-pinning.md
           - Character Expressions: features/character-expressions.md
@@ -108,6 +115,6 @@ nav:
               - ComfyUI Setup: multimedia/comfyui-setup.md
               - Cloud Image Setup: multimedia/cloud-image-setup.md
               - Image Generation: multimedia/image-generation.md
-              - Reference Image Setup: multimedia/reference-images.md
+              - Krea 2 Edit Workflow: multimedia/krea2-edit-workflow.md
           - Text-to-Speech: multimedia/tts.md
   - Contributing: contributing.md

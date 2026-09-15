@@ -1,11 +1,12 @@
 import { api } from "./api.js";
 import { renderInspectorSecondary, renderMessages } from "./chat.js";
+import { CLOSE_ICON } from "./icons.js";
 import { renderInteractiveFragments } from "./library_fragments.js";
 import { closeModal, confirmDelete, showModal, showSubConfirmModal } from "./modal.js";
 import { closeUtilityPanel, isUtilityPanelOpen, openUtilityPanel } from "./panels.js";
 import { initComboboxes, loadAgentModelConfigs, loadEndpoints, renderEndpoints } from "./settings_models.js";
 import { loadPersonas, updateUserBtn } from "./settings_personas.js";
-import { effectiveWorkflowEnabled, S } from "./state.js";
+import { effectiveWorkflowEnabled, localMlReady, S } from "./state.js";
 import { $, esc, escAttr, formatBytes, toast } from "./utils.js";
 import { validate } from "./validate.js";
 
@@ -100,6 +101,9 @@ export async function loadSettings() {
   if (typeof S.settings.show_editor_diff === "number") S.showEditorDiff = S.settings.show_editor_diff !== 0;
   else if (typeof S.settings.show_editor_diff === "boolean") S.showEditorDiff = S.settings.show_editor_diff;
 
+  if (typeof S.settings.show_chat_avatars === "number") S.showChatAvatars = S.settings.show_chat_avatars !== 0;
+  else if (typeof S.settings.show_chat_avatars === "boolean") S.showChatAvatars = S.settings.show_chat_avatars;
+
   if (S.settings.editor_audit_toggles && typeof S.settings.editor_audit_toggles === "object")
     S.editorAuditToggles = { ...S.editorAuditToggles, ...S.settings.editor_audit_toggles };
 
@@ -148,18 +152,28 @@ export function renderSettings() {
     <div class="tool-card ${S.hideUntilBaked ? "tool-on" : ""}">
       <div class="tool-card-header">
         <span class="tool-card-name">Hide until baked</span>
-        <label class="tog" onclick="event.stopPropagation()">
-          <input type="checkbox" ${S.hideUntilBaked ? "checked" : ""} onchange="toggleHideUntilBaked(this.checked)">
+        <label class="tog" data-setting-stop>
+          <input type="checkbox" ${S.hideUntilBaked ? "checked" : ""} data-setting-toggle="hideUntilBaked">
           <span class="tog-slider"></span>
         </label>
       </div>
       <div class="tool-card-desc">Hide replies until completion.</div>
     </div>
+    <div class="tool-card ${S.showChatAvatars ? "tool-on" : ""}">
+      <div class="tool-card-header">
+        <span class="tool-card-name">Show avatars in chat</span>
+        <label class="tog" data-setting-stop>
+          <input type="checkbox" ${S.showChatAvatars ? "checked" : ""} data-setting-toggle="showChatAvatars">
+          <span class="tog-slider"></span>
+        </label>
+      </div>
+      <div class="tool-card-desc">Show the speaker's portrait beside each message.</div>
+    </div>
     <div class="tool-card ${S.preventPromptOverrides ? "tool-on" : ""}">
       <div class="tool-card-header">
         <span class="tool-card-name">Prevent prompt overrides</span>
-        <label class="tog" onclick="event.stopPropagation()">
-          <input type="checkbox" ${S.preventPromptOverrides ? "checked" : ""} onchange="togglePreventPromptOverrides(this.checked)">
+        <label class="tog" data-setting-stop>
+          <input type="checkbox" ${S.preventPromptOverrides ? "checked" : ""} data-setting-toggle="preventPromptOverrides">
           <span class="tog-slider"></span>
         </label>
       </div>
@@ -174,23 +188,63 @@ export function renderSettings() {
     </div>
   `;
   $("cleanup-btn").addEventListener("click", showCleanupModal);
+  wireSettingsToggles($("settings-form"));
   loadLocalMLSection();
+}
+
+const SETTING_TOGGLES = {
+  hideUntilBaked: toggleHideUntilBaked,
+  showChatAvatars: toggleShowChatAvatars,
+  preventPromptOverrides: togglePreventPromptOverrides,
+};
+
+function wireSettingsToggles(el) {
+  if (el.dataset.togglesWired) return;
+  el.dataset.togglesWired = "1";
+  el.addEventListener("click", (ev) => {
+    if (ev.target.closest("[data-setting-stop]")) ev.stopPropagation();
+  });
+  el.addEventListener("change", (ev) => {
+    const input = ev.target.closest("[data-setting-toggle]");
+    if (input) SETTING_TOGGLES[input.dataset.settingToggle]?.(input.checked);
+  });
 }
 
 const LOCAL_ML_LABELS = {
   autocomplete: "Input Autocomplete",
   slop_classifier: "AI-Slop Classifier",
   emotion_classifier: "Character Expressions",
-  pov_classifier: "Image POV",
+  pov_classifier: "Auto-POV",
+  markup_classifier: "Markup Classifier",
   prose_rewriter: "Prose Rewriter",
 };
 const LOCAL_ML_DESCS = {
   autocomplete: "Autocomplete input as you type.",
   slop_classifier: "Unlock AI slop scorer.",
-  emotion_classifier: "Track a character's mood with expression images in the avatar popup.",
-  pov_classifier: "Auto POV for image-gen.",
-  prose_rewriter: "Locally rewrite prose, automatically or on demand.",
+  emotion_classifier: "Track a character's mood with expression images.",
+  pov_classifier: "For image-gen and format consistency.",
+  markup_classifier: "For more accurate format consistency.",
+  prose_rewriter: "Local engine for Prose Rewriter.",
 };
+
+/** Publish the fetched status and repaint the surfaces that gate on it.
+ *
+ * Same wiring as Editor Feedback graying out feedback fragments: the owning
+ * card writes shared state and re-renders the dependent surface, which reads
+ * the gate at render time. Repaint only when a gate actually flipped, so a
+ * routine status refresh never wipes a half-typed field in the tools panel.
+ */
+function publishLocalMlFeatures(features) {
+  const before = mlReadySignature();
+  S.localMlFeatures = features || {};
+  if (mlReadySignature() !== before) renderToolsPanel();
+}
+
+const mlReadySignature = () =>
+  Object.keys(S.localMlFeatures)
+    .sort()
+    .map((f) => `${f}:${localMlReady(f) ? 1 : 0}`)
+    .join(",");
 
 async function loadLocalMLSection({ expectLoad = false } = {}) {
   stopMlStateWatch();
@@ -203,6 +257,7 @@ async function loadLocalMLSection({ expectLoad = false } = {}) {
     el.innerHTML = '<div class="tool-card-desc">Could not load Local ML status.</div>';
     return;
   }
+  publishLocalMlFeatures(st.features);
   if (!st.deps_ok) {
     const names = Object.keys(st.features)
       .map((f) => `<li>${esc(LOCAL_ML_LABELS[f] || f)}</li>`)
@@ -282,10 +337,10 @@ function batchSizeControl(f, info) {
       ([value, label]) => `<option value="${value}" ${info.batch_size === value ? "selected" : ""}>${label}</option>`,
     )
     .join("");
-  return `<div class="ml-batch">
+  return `<div class="ml-batch setting-row">
     <label for="${id}">Parallel</label>
     <select class="tool-card-select" id="${id}" data-ml-act="batch-size" data-ml-feature="${escAttr(f)}">${options}</select>
-    <div>Lower values use less VRAM (~140–190 MB per slot).</div>
+    <div>~140–190 MB VRAM per parallel slot.</div>
   </div>`;
 }
 
@@ -301,8 +356,8 @@ function variantRow(f, v, selected, ready) {
        <label class="ml-variant-name" for="${rid}">${label}</label>`
       : `<span class="ml-variant-name">${label}</span>`;
   const act = v.present
-    ? `<button class="btn btn-xs btn-danger ml-variant-act" title="Delete" aria-label="Delete ${label}"
-               data-ml-act="delete" ${attrs}>×</button>`
+    ? `<button class="btn btn-xs btn-danger btn-square ml-variant-act" title="Delete" aria-label="Delete ${label}"
+               data-ml-act="delete" ${attrs}>${CLOSE_ICON}</button>`
     : `<button class="btn btn-xs ml-variant-act" data-ml-act="download" ${attrs}
                ${ready ? "" : 'disabled title="Download the llama.cpp runtime first"'}>Download</button>`;
   return `<div class="ml-variant${on ? " ml-variant-on" : ""}">
@@ -354,6 +409,7 @@ async function pollMlStates() {
   } catch (_e) {
     return; // a dropped poll costs nothing; the next render re-reads
   }
+  publishLocalMlFeatures(st.features); // a download finishing here flips a gate too
   for (const [f, info] of Object.entries(st.features)) {
     const el = $(`local-ml-state-${f}`);
     if (!el) continue;
@@ -540,6 +596,7 @@ export async function setAgentEnabled(on) {
   S.agentEnabled = on;
   $("tools-panel-btn").style.opacity = on ? "1" : "0.5";
   renderToolsPanel();
+  renderInteractiveFragments();
   await persistSettings({ enable_agent: on });
 }
 
@@ -625,6 +682,13 @@ export async function toggleHideUntilBaked(on) {
   renderMessages();
   renderSettings();
   await persistSettings({ hide_streaming_until_baked: on });
+}
+
+export async function toggleShowChatAvatars(on) {
+  S.showChatAvatars = on;
+  renderMessages();
+  renderSettings();
+  await persistSettings({ show_chat_avatars: on });
 }
 
 export async function togglePreventPromptOverrides(on) {
@@ -808,7 +872,7 @@ export function renderToolsPanel() {
         <span class="tog-slider"></span>
       </label>
     </div>
-    <div class="tool-card-desc">Reigns the model's response length by word count. MAX PARAGRAPHS is suggested to the AI in rewrite pass.</div>
+    <div class="tool-card-desc">Reigns the final response length by word count. MAX PARAGRAPHS is suggested to the Writer in rewrite pass.</div>
     ${lgConfig}
   </div>`;
 
@@ -830,7 +894,7 @@ export function renderToolsPanel() {
     <div class="tool-card-header">
       <span class="tool-card-name">Direction Notes</span>
     </div>
-    <div class="dn-config">
+    <div class="dn-config setting-row">
       <label>Recording</label>
       <label class="tog" onclick="event.stopPropagation()">
         <input type="checkbox" ${dnRecord ? "checked" : ""} onchange="setDirectionNotesRecord(this.checked)">
@@ -844,7 +908,7 @@ export function renderToolsPanel() {
         <option value="both" ${dnInject === "both" ? "selected" : ""}>Director and writer</option>
       </select>
     </div>
-    <div class="tool-card-desc">Lets the AI keep lasting notes as the story unfolds. <b>Recording</b> saves them; <b>Injection</b> feeds saved notes back to the director, writer, or both.</div>
+    <div class="tool-card-desc">Lets the Agent keep lasting notes as the story unfolds. <b>Recording</b> saves them; <b>Injection</b> feeds saved notes back to the director, writer, or both.</div>
   </div>`;
 
   const divider = (label) => `<div class="tools-divider"><span>${label}</span></div>`;
@@ -912,7 +976,7 @@ export function showAddPhraseGroupModal(editId = null, group = null) {
   const variantRow = (v = "") => `
     <div class="variant-row">
       <input type="text" class="variant-input" value="${escAttr(v)}" placeholder="e.g., a mix of">
-      <button class="btn btn-xs btn-danger" onclick="removeVariantRow(this)">×</button>
+      <button class="btn btn-xs btn-danger btn-square" onclick="removeVariantRow(this)" title="Remove" aria-label="Remove variant">${CLOSE_ICON}</button>
     </div>`;
 
   const variantsHtml = variants.map((v) => variantRow(v)).join("");
@@ -999,7 +1063,7 @@ window.addVariantRow = () => {
   row.className = "variant-row";
   row.innerHTML = `
     <input type="text" class="variant-input" placeholder="e.g., a mix of">
-    <button class="btn btn-xs btn-danger" onclick="removeVariantRow(this)">×</button>
+    <button class="btn btn-xs btn-danger btn-square" onclick="removeVariantRow(this)" title="Remove" aria-label="Remove variant">${CLOSE_ICON}</button>
   `;
   container.appendChild(row);
   const input = row.querySelector(".variant-input");

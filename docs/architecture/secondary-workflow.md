@@ -4,7 +4,8 @@ A workflow is an optional feature that plugs into Orb without adding feature
 logic to the core turn pipeline. It is a Python record in a process-local
 registry, plus any hooks, state, attachments, and frontend code it needs.
 
-Built-in examples are `tts`, `image_gen`, and `format_consistency`.
+Built-in examples are `prose_rewriter`, `tts`, `image_gen`, and
+`format_consistency`.
 
 ## What a workflow can do
 
@@ -30,12 +31,22 @@ chrome. The workflow owns its feature logic.
 | `backend/workflows/registry.py` | Workflow records, subscriptions, lookups, and state access |
 | `backend/workflows/contracts.py` | Hook types, context dataclasses, and `ToolSpec` |
 | `backend/workflows/toolkit.py` | Stable imports for workflow authors |
+| `backend/prompting/tool_catalog.py` | Ordered tool lookup and workflow-tool registration |
 | `backend/workflows/attachment_cache.py` | Attachment storage, variants, budget, and eviction |
 | `backend/workflows/__init__.py` | Built-in registration and hook subscriptions |
 | `backend/pipeline/workflow_bridge.py` | Pipeline hook dispatch and attachment staging |
 | `backend/api/routes/workflows.py` | Workflow and attachment routes |
 
 Each workflow has a directory such as `backend/workflows/tts/`.
+
+Code under `backend/workflows/<id>/` is a plug-in slice. It may import its own
+package and `backend.workflows.toolkit`, but not other framework modules,
+application layers, or peer workflows. Root modules directly under
+`backend/workflows/` are host adapters and own the integration with prompting,
+inference, persistence, and the pipeline. The toolkit must be consumed through
+explicit names in its literal `__all__`; wildcard imports, importing the module
+object, and private names are rejected. The backend layer checker enforces this
+boundary.
 
 ### Frontend
 
@@ -70,6 +81,11 @@ Workflow(
 `id` is the boundary key used in URLs, JSON, tools, and static module paths.
 Tool names must be unique and must agree across `ToolSpec.name`, the schema,
 and `tool_choice`.
+
+Workflow tools append after the fixed built-in tool order. Re-registering an
+existing tool replaces its contract without changing its position; removing a
+tool on workflow replacement removes it through the framework-owned catalog
+API. The catalog itself is not part of the plug-in API.
 
 Registration follows this shape:
 
@@ -125,7 +141,7 @@ framework.
 | Context | Provides | Notes |
 |---|---|---|
 | `PreCtx` | Conversation, history, current user text, settings, prefix, tool map, client, cache tracker | `turn_scratch` is shared with PostCtx |
-| `PostCtx` | Conversation, final history, effective user text, Director output, merged tools, prefix, client, cache tracker | May stage a draft, state, or attachment |
+| `PostCtx` | Conversation, final history, effective user text, Director output, merged tools, prefix, client, cache tracker, resolved Agent execution target (`agent_client`, `agent_model_name`) | May stage a draft, state, or attachment |
 | `OnDemandCtx` | Conversation, history, current user text, settings, client, character | Trigger actions |
 | `RegenCtx` | Conversation, message and attachment ids, pre-anchor history, settings, client, character | Attachment regeneration |
 | `RerollGenCtx` | Conversation, message and attachment ids, settings, client, prior consumption metadata, `replay` | Shared by reroll and rehydrate |
@@ -148,10 +164,12 @@ read-modify-write operations.
 | `workflow_config` | Workflow | `workflow_config_lock()` |
 | Attachments | Root attachment group | Framework's root lock |
 
-The required import surface is `backend.workflows.toolkit`. It provides the LLM
-client and prompt helpers, read-only database queries, state getters/setters,
-`forced_tool_call`, attachment insertion, and the workflow locks. Mutating core
-database helpers are intentionally not exposed to workflows.
+The primary runtime import surface is `backend.workflows.toolkit`. Hook contexts
+carry the LLM clients; the toolkit provides semantic host operations, read-only
+database queries, state getters/setters, `forced_tool_call`, attachment
+insertion, and workflow locks. Raw prompting, inference, and tool-catalog
+objects are intentionally not exposed to plug-ins. Mutating core database
+helpers are also excluded.
 
 ## A workflow inside a turn
 
@@ -163,7 +181,12 @@ PRE_PIPELINE hooks
         ↓
 Director → Writer → Editor
         ↓
+retain post-Editor draft
+        ↓
 POST_PIPELINE hooks
+  Prose Rewriter (-20)
+  Format Consistency (-10)
+  later text/artifact hooks (0+)
         ↓
 persist assistant message, state, and attachments
         ↓
@@ -172,12 +195,17 @@ SSE done
 
 Pre-hooks can add system blocks, enable tools, or emit public events. Post-hooks
 can replace the draft, set message state, stage attachments, or emit public
-events. Hooks run in subscription priority order. A hook failure is isolated so
-the main reply and other workflows can continue.
+events. Hooks run in subscription priority order. The Prose Rewriter is a
+registered post-hook; its negative priority puts it before Format Consistency
+and artifact workflows. Its standard workflow toggle controls automatic runs,
+while Local ML owns engine availability, model selection, and runtime lifecycle.
+A hook failure is isolated so the main reply and other workflows can continue.
 
 Use `forced_tool_call` for a one-shot tool call. Pass the context's prefix,
 enabled tools, schema overrides, client, and cache tracker so the call follows
-the same prompt and cache rules as the main turn.
+the same prompt and cache rules as the main turn. Its `token_floor` is what the
+call needs to answer in full; the Agent lane's configured `max_tokens` raises it
+when that endpoint has more room, and never lowers it below the floor.
 
 Public hook events pass through to SSE. Core events and names beginning with
 `_` are reserved. A useful custom event is `phase_status` with a channel that
@@ -222,8 +250,18 @@ POST /api/conversations/{cid}/messages/{mid}/workflow-attachments/{aid}/reroll-g
 POST /api/conversations/{cid}/messages/{mid}/workflow-attachments/{aid}/rehydrate
 POST /api/conversations/{cid}/messages/{mid}/workflow-attachments/{aid}/activate
 POST /api/conversations/{cid}/messages/{mid}/workflow-attachments/{aid}/delete
+GET  /api/conversations/{cid}/messages/{mid}/workflow-attachments/{aid}/in-flight
 POST /api/conversations/{cid}/workflow-attachments/access
 ```
+
+`in-flight` reports `{"in_flight": bool}` for the attachment's canonical root:
+whether a request still holds the group's lock. Regenerate, reroll-gen,
+rehydrate, and delete hold that lock for their whole duration and release it
+only after their write commits, so `false` means nothing in flight can still
+change the group. It exists for a client whose own connection died mid-render,
+which otherwise cannot tell a running render from one the server already failed.
+A single `false` does not prove failure -- a queued request has not reached the
+lock yet -- so clients confirm it across consecutive polls.
 
 The manifest returns workflow identity and config form metadata. Config is a
 full replacement; a workflow's `config_normalizer` owns its valid shape and is

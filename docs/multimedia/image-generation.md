@@ -56,7 +56,7 @@ and image files. A ComfyUI connection without an imported workflow cannot render
 3. Select **Test connection** to load the provider's models.
 4. Assign the connection to a style.
 5. Choose a model, resolution, and any supported quality or reference-image options.
-6. Select **Save** and accept the privacy confirmation.
+6. Select **Save**.
 
 Testing does not generate an image or charge for one. The provider's model,
 resolution, quality, and reference-image settings belong to the style, so styles
@@ -106,18 +106,20 @@ the style's Resolution field to appear.
 
 ## Reference images
 
-Reference images are off by default. Set the source on a style.
+Reference images are off by default. Set the source on a style to use a recent
+chat image, character references, or both. Character references come from the
+characters in the scene.[^group-reference-selection]
 
 | Source | Cloud provider | ComfyUI |
 |---|---|---|
-| **Previous image, else character references** | Latest image in the chat; otherwise character references | Latest image in the chat; otherwise the reply speaker's character reference |
-| **Previous image in the chat** | Latest image in the chat | Latest image in the chat |
-| **Character references** | One image per character in the scene | The reply speaker's reference copied to each `Load Image` node |
-| **Character references and the previous image** | Character references, then the latest chat image | Speaker's reference, then the previous image as fallback |
+| **Previous image, else character references** | One previous image; if none exists, character references up to the provider's capacity | The previous image fills every mapped `Load Image` node; if none exists, available character references fill the mapped nodes |
+| **Previous image in the chat** | One previous image | The previous image fills every mapped `Load Image` node |
+| **Character references** | One image per character up to the provider's capacity | One character reference per mapped node; surplus required nodes reuse a character reference |
+| **Character references and the previous image** | Character references and then the previous image, up to the provider's capacity | Character references and then the previous image fill the mapped nodes while space remains |
 
 ### Character reference images
 
-1. Open a conversation with the character.
+1. Open a conversation that contains the character.
 2. Open **Image Generation** settings and select **This Character Only**.
 3. Choose a PNG, JPEG, or WebP under **Reference image**.
 4. Select **Save**.
@@ -128,27 +130,22 @@ avatar.
 ### ComfyUI reference inputs
 
 Orb fills the **Load Image** nodes already present in the workflow. It does not
-add nodes. Every Load Image node receives the same source image, so a workflow
-that needs two different inputs must express that distinction itself.
+add nodes. With character references enabled, it fills the nodes with separate
+character references when they are available. If the workflow has more Load
+Image nodes than available references, the extra nodes reuse one reference so
+required inputs remain valid.
 
 With **Reference image** set to **Off**, ComfyUI uses the filenames stored in the
 workflow. Those files must exist on the ComfyUI server.
 
-### References in a group chat
-
-For a cloud provider, Orb sends at most one reference per character in the current
-round, in cast order. The reply's speaker is included first. The provider may
-limit the number of images; remaining characters are described in the prompt.
-
-For ComfyUI, every Load Image node receives the reply speaker's reference. Orb
-does not guess which node represents which character.
-
-Orb considers the user message and replies in the current round up to the reply
-you selected. It does not include later replies in the round. It looks back at
-most 30 branch messages for a previous image.
-
 Reference uploads must be PNG, JPEG, or WebP. Cloud references are limited to 4 MB
 after preparation. A provider may accept fewer references or refuse to use them.
+
+[^group-reference-selection]: In a group chat, Orb considers characters who have
+    replied in the current round through the selected reply. With scene analysis
+    enabled, it excludes characters that are not in the resulting scene. If more
+    characters remain than the backend has reference slots, the rest are described
+    in the prompt. Orb supports up to four reference slots per render.
 
 ## Make an image
 
@@ -234,7 +231,7 @@ The camera setting is next to the style picker and applies globally:
 Orb uses the explicit picker choice first. In Auto mode it uses the classifier,
 then falls back to third-person when the text is unclear or the classifier is off.
 
-To enable the classifier, open **Settings → Local ML**, download **Image POV**,
+To enable the classifier, open **Settings → Local ML**, download **Auto-POV**,
 and leave it enabled. It runs locally on the CPU.
 
 ## Analyze complex scenes
@@ -250,6 +247,11 @@ for each new image or regeneration. Reroll uses the stored prompt and skips it.
 complex scene or writes the image prompt. It applies to both prompt steps and can
 increase token use. Stable thinking settings generally give better prompt-cache
 reuse.
+
+Each prompt step has its own reply budget, and the Agent endpoint's configured
+**Max Tokens** raises it when that setting is higher — room a thinking model can
+spend before it answers. A lower setting is left to the writing it was chosen for:
+it never shrinks a prompt step below what the step needs to finish.
 
 ## Troubleshooting
 

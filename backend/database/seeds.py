@@ -171,6 +171,20 @@ SEED_INTERACTIVE_FRAGMENTS = [
         "enabled": False,
         "direction_note_timing": "post_turn",
     },
+    {
+        "id": "humanize_dialogue",
+        "label": "Humanize Dialogue",
+        "description": (
+            "Rewrite spoken dialogue to sound human: more casual, and natural. Remove slop and filler. "
+            "Preserve meaning, characterization, subtext, tone, plot facts, and dialogue markup. Change dialogue only; do not "
+            "rewrite narration or add new events."
+        ),
+        "field_type": "post_processing",
+        "required": False,
+        "injection_label": "Humanize Dialogue",
+        "sort_order": 7,
+        "enabled": False,
+    },
 ]
 
 DEFAULT_ENABLED_TOOLS = {
@@ -202,6 +216,7 @@ DEFAULT_SETTINGS = {
     "character_library_view": "grid",
     "character_library_sort": "time-added",
     "show_editor_diff": 1,
+    "show_chat_avatars": 0,
     "editor_audit_toggles": {
         "banned_phrases": True,
         "repetitive_openers": True,

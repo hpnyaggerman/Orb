@@ -11,6 +11,7 @@ import {
   ICON_REGEN,
   renderMessages,
   setMessages,
+  swipeNavHtml,
   updateContextCounter,
 } from "./chat_core.js";
 import { renderTurnError } from "./chat_error.js";
@@ -31,9 +32,10 @@ import {
   optimisticDropDirectionNotesFrom,
   renderDirectionNotesPanel,
 } from "./direction_notes_panel.js";
-import { restNotice, unansweredHint } from "./group_cast.js";
+import { restNotice, speakerAvatarCell, unansweredHint } from "./group_cast.js";
 import { consumeSpeakerOverride, refreshSheetProposals, renderGroupCast } from "./group_setup.js";
 import { refreshCharacters } from "./library.js";
+import { renderMessageDiffHtml, renderMessageHtml } from "./message_html.js";
 import { isUtilityPanelOpen } from "./panels.js";
 import { ensurePersonaPinned } from "./settings_personas.js";
 import { sseEvents, streamPost, unescapeSSE } from "./sse.js";
@@ -42,8 +44,6 @@ import {
   $,
   convUrl,
   esc,
-  formatProse,
-  formatProseWithDiff,
   notifyError,
   pinStreamingMessage,
   resolvePlaceholders,
@@ -88,6 +88,38 @@ export function setGenerationPhase(phase) {
   el.querySelector(".gen-dot").className = `gen-dot${S.generationPhase === "refining" ? " spin" : ""}`;
 }
 
+// Coalesce expensive full-body renders to one paint per animation frame.
+
+let _paintFrame = 0;
+let _paintPending = null;
+let _paintedHtml = "";
+
+function paintStreamingBody(text) {
+  _paintPending = text;
+  if (_paintFrame) return;
+  _paintFrame = requestAnimationFrame(() => {
+    _paintFrame = 0;
+    const pending = _paintPending;
+    _paintPending = null;
+    const body = S.streamingBodyEl;
+    if (!body || pending === null) return;
+    const html = renderMessageHtml(pending, { streaming: true });
+    if (html !== _paintedHtml) {
+      _paintedHtml = html;
+      body.innerHTML = html;
+    }
+    scrollToBottom();
+  });
+}
+
+/** Cancel a queued streaming paint. */
+function cancelStreamingPaint() {
+  if (_paintFrame) cancelAnimationFrame(_paintFrame);
+  _paintFrame = 0;
+  _paintPending = null;
+  _paintedHtml = "";
+}
+
 function smoothUpdateBody(el, newHtml, onComplete) {
   if (!el || el.innerHTML === newHtml) return;
   const prev = el.offsetHeight;
@@ -116,6 +148,7 @@ function smoothUpdateBody(el, newHtml, onComplete) {
 }
 
 function finalizeStreamingDiv(lastMsg) {
+  cancelStreamingPaint();
   const body = S.streamingBodyEl;
   if (!body) return false;
   const div = body.closest(".message");
@@ -127,8 +160,8 @@ function finalizeStreamingDiv(lastMsg) {
 
   const bodyHtml =
     S.pendingRefineDiff && S.showEditorDiff
-      ? formatProseWithDiff(S.pendingRefineDiff.ops)
-      : formatProse(resolvePlaceholders(lastMsg.content));
+      ? renderMessageDiffHtml(S.pendingRefineDiff.ops)
+      : renderMessageHtml(resolvePlaceholders(lastMsg.content));
   smoothUpdateBody(body, bodyHtml, () => scrollToBottom(true));
   if ((S.workflowTextEffects.length || S.workflowClickHandlers.length) && !(S.pendingRefineDiff && S.showEditorDiff)) {
     _applyWorkflowTextSegments(body, lastMsg);
@@ -139,21 +172,9 @@ function finalizeStreamingDiv(lastMsg) {
     tb.innerHTML = buildMsgToolbar(lastMsg);
   }
 
-  const bc = lastMsg.branch_count || 1;
-  if (bc > 1) {
-    const bi = lastMsg.branch_index || 0;
-    const roleEl = div.querySelector(".msg-role");
-    if (roleEl && !roleEl.querySelector(".swipe-nav")) {
-      roleEl.insertAdjacentHTML(
-        "beforeend",
-        `<span class="swipe-nav">
-        <button onclick="event.stopPropagation();switchBranch(${lastMsg.prev_branch_id})" ${!lastMsg.prev_branch_id ? "disabled" : ""}>◀</button>
-        <span class="swipe-counter">${bi + 1}/${bc}</span>
-        <button onclick="event.stopPropagation();switchBranch(${lastMsg.next_branch_id})" ${!lastMsg.next_branch_id ? "disabled" : ""}>▶</button>
-      </span>`,
-      );
-    }
-  }
+  const nav = swipeNavHtml(lastMsg);
+  const roleEl = nav ? div.querySelector(".msg-role") : null;
+  if (roleEl && !roleEl.querySelector(".swipe-nav")) roleEl.insertAdjacentHTML("beforeend", nav);
 
   return true;
 }
@@ -175,10 +196,12 @@ export function stopGeneration() {
   }
 }
 
-export function createStreamingDiv(name = null) {
+export function createStreamingDiv(name = null, memberId = null) {
+  cancelStreamingPaint();
   const div = document.createElement("div");
   div.className = "message assistant";
-  div.innerHTML = `<div class="msg-role">${esc(name || getCharName())}</div>
+  const avatar = S.showChatAvatars ? speakerAvatarCell({ role: "assistant", speaker_member_id: memberId }) : "";
+  div.innerHTML = `${avatar}<div class="msg-role">${esc(name || getCharName())}</div>
     <div class="msg-body" id="streaming-body">
       <span class="typing-indicator"><span></span><span></span><span></span></span>
     </div>
@@ -191,25 +214,27 @@ export function createStreamingDiv(name = null) {
   return div;
 }
 
-function patchParentUserMessage(assistantMsg) {
-  if (!assistantMsg?.parent_id || S.hasMultipleTabs) return;
-  const userDiv = document.querySelector(`.message.user[data-msg-id="${assistantMsg.parent_id}"]`);
-  if (!userDiv) return;
-  const regenBtn = userDiv.querySelector('.msg-toolbar [title="Regenerate"]');
-  if (regenBtn) regenBtn.setAttribute("onclick", `regenerate(${assistantMsg.id})`);
+// The user's bubble is on screen before the server has an id for it. The SSE ack
+// and the post-stream sync both promote that same node, so the promotion — id,
+// toolbar, and any content the server rewrote — is written once.
+function adoptPendingUserMessage(msg, content = null) {
+  const div = document.querySelector('.message.user[data-msg-id="null"]');
+  if (!div) return;
+  div.setAttribute("data-msg-id", msg.id);
+  const tb = div.querySelector(".msg-toolbar");
+  if (tb) tb.innerHTML = buildMsgToolbar(msg);
+  if (content === null) return;
+  const body = div.querySelector(".msg-body");
+  if (body) body.innerHTML = renderMessageHtml(resolvePlaceholders(content));
 }
 
 function patchPendingUserMessage(pendingMsg) {
   const freshMsg = S.messages.find((m) => m.role === "user" && m.id && m.content === pendingMsg.content);
-  if (!freshMsg) return;
-  const div = document.querySelector('.message.user[data-msg-id="null"]');
-  if (!div) return;
-  div.setAttribute("data-msg-id", freshMsg.id);
-  const tb = div.querySelector(".msg-toolbar");
-  if (tb) tb.innerHTML = buildMsgToolbar(freshMsg);
+  if (freshMsg) adoptPendingUserMessage(freshMsg);
 }
 
 export async function afterStream() {
+  cancelStreamingPaint();
   const wasGroupExchange = S.currentExchangeId != null;
   const groupExchangeId = S.currentExchangeId;
   const inFlightSpeaker = S.currentSpeaker;
@@ -328,7 +353,6 @@ export async function afterStream() {
 
   if (finalized) {
     if (pendingUserMsg) patchPendingUserMessage(pendingUserMsg);
-    patchParentUserMessage(lastMsg);
     updateContextCounter();
     const ct = $("chat-messages");
     if (ct.querySelectorAll(".message[data-msg-id]").length < S.messages.length) {
@@ -407,7 +431,7 @@ export async function processSSEStream(resp, container, holder, signal) {
         S.currentExchangeId = parsed.exchange_id;
         S.currentSpeaker = parsed;
         resetSpeakerTurnState();
-        holder.el = createStreamingDiv(parsed.name);
+        holder.el = createStreamingDiv(parsed.name, parsed.member_id);
         if (!S.hideUntilBaked) container.appendChild(holder.el);
         onTurnStart();
         renderGroupCast();
@@ -435,15 +459,18 @@ export async function processSSEStream(resp, container, holder, signal) {
       }
       fullResponse += unescapeSSE(data);
       S.streamingContent = rewrittenResponse || fullResponse;
-      if (S.streamingBodyEl) S.streamingBodyEl.innerHTML = formatProse(rewrittenResponse || fullResponse);
-      scrollToBottom();
+      if (S.streamingBodyEl) paintStreamingBody(rewrittenResponse || fullResponse);
+      else scrollToBottom();
     };
     const onRewrite = (text) => {
+      cancelStreamingPaint(); // the rewrite replaces the body outright
       rewrittenResponse = text;
       S.streamingContent = text;
       if (S.streamingBodyEl) {
         const html =
-          S.pendingRefineDiff && S.showEditorDiff ? formatProseWithDiff(S.pendingRefineDiff.ops) : formatProse(text);
+          S.pendingRefineDiff && S.showEditorDiff
+            ? renderMessageDiffHtml(S.pendingRefineDiff.ops)
+            : renderMessageHtml(text);
         smoothUpdateBody(S.streamingBodyEl, html, scrollToBottom);
       } else {
         scrollToBottom();
@@ -634,16 +661,8 @@ function handleSSEEvent(event, data, _container, msgDiv, onToken, onRewrite) {
             ta.selectionStart = ta.selectionEnd = ta.value.length;
           }
         } else {
-          const div = document.querySelector('.message.user[data-msg-id="null"]');
-          if (div) {
-            div.setAttribute("data-msg-id", realId);
-            const tb = div.querySelector(".msg-toolbar");
-            if (tb) tb.innerHTML = buildMsgToolbar({ id: realId, role: "user" });
-            if (resolved !== null && resolved !== prevContent) {
-              const body = div.querySelector(".msg-body");
-              if (body) body.innerHTML = formatProse(resolvePlaceholders(resolved));
-            }
-          }
+          const rewritten = resolved !== null && resolved !== prevContent ? resolved : null;
+          adoptPendingUserMessage({ id: realId, role: "user" }, rewritten);
         }
       } catch (_) {}
       break;
@@ -843,6 +862,19 @@ export async function sendMessage() {
       afterDone: ensurePersonaPinned,
     },
   );
+}
+
+// The regenerate button on a user row lands here, and picks its target now
+// rather than at paint time: the reply may have been deleted or swiped to
+// another branch since the row was drawn (buildMsgToolbar). With no reply left
+// under the message, regenerating it means continuing from it.
+export async function regenerateFromUser(userMsgId) {
+  const reply = S.messages.find((m) => m.role === "assistant" && m.id && m.parent_id === userMsgId);
+  if (reply) {
+    await regenerate(reply.id);
+    return;
+  }
+  await continueFromUser();
 }
 
 export async function regenerate(msgId) {

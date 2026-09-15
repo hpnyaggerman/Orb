@@ -6,7 +6,7 @@ import copy
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from .contracts import ImageGenerationError
+from .contracts import ImageGenerationError, fold_seed_into
 
 OPTIONAL_SLOTS = ("negative", "width", "height")
 
@@ -48,9 +48,9 @@ def reference_slots(slots: Mapping[str, Any]) -> list[Mapping[str, Any]]:
 def enabled_references(slots: Mapping[str, Any], source: str) -> list[Mapping[str, Any]]:
     """The slots this render will fill: all of them, or none.
 
-    One source for the whole graph, because a character has one reference image. Every
-    `LoadImage` the graph declares is handed that same picture -- which is what a
-    workflow built around two of them was always for.
+    One source policy for the whole graph. The render planner assigns separate
+    characters to separate `LoadImage` slots in a group round, while reusing the
+    primary character for surplus required slots in a smaller scene.
 
     A style with no source is the same render as the old "Not used": each `LoadImage`
     keeps whatever filename the workflow was exported with, and nothing about the
@@ -134,6 +134,48 @@ def declared_inputs(info: Mapping[str, Any]) -> dict[str, Any]:
         if isinstance(values, Mapping):
             declared.update(values)
     return declared
+
+
+def seed_input(graph: Mapping[str, Any], slots: Mapping[str, Any]) -> tuple[str, str] | None:
+    """The node class and input name the seed slot points at, or None when it does
+    not resolve. Read-only, like `_slot_inputs`: a graph that cannot answer this
+    renders with the seed exactly as asked."""
+    slot = slots.get("seed")
+    if not isinstance(slot, (list, tuple)) or len(slot) != 2:
+        return None
+    node = graph.get(str(slot[0]))
+    class_type = node.get("class_type") if isinstance(node, Mapping) else None
+    return (class_type, str(slot[1])) if isinstance(class_type, str) and class_type else None
+
+
+def _declared_bound(value: Any) -> int | None:
+    """One declared `min`/`max` as an int, or None where the node declares something
+    else. `bool` is an `int` at runtime but is never a seed bound, so it reads as
+    "undeclared" rather than as 0 or 1."""
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def fit_seed(seed: int, info: Mapping[str, Any], input_name: str) -> int:
+    """`seed` folded into the range the seed node declares, or unchanged where it
+    declares none.
+
+    Seed nodes disagree about how large a seed may be -- KSampler takes the whole
+    2**64, rgthree's Seed node stops at 2**50 -- and ComfyUI rejects the entire
+    prompt over one out-of-range widget, naming a number the user never chose. Each
+    node class declares its own bound in `/object_info`, so read it from there rather
+    than keeping a list of which nodes are small.
+
+    A cloud provider has no `/object_info` equivalent. Its bound is entered explicitly
+    on the style after the provider reports it; both paths end in `fold_seed_into`.
+    """
+    spec = declared_inputs(info).get(input_name)
+    options = spec[1] if isinstance(spec, (list, tuple)) and len(spec) > 1 else None
+    if not isinstance(options, Mapping):
+        return seed
+    low, high = _declared_bound(options.get("min")), _declared_bound(options.get("max"))
+    if low is None or high is None:
+        return seed
+    return fold_seed_into(seed, low, high)
 
 
 def _input_slot(graph: Mapping[str, Any], slot: Any, role: str) -> tuple[dict, str]:

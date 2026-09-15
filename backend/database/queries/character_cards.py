@@ -88,7 +88,14 @@ async def get_character_card(card_id: str, include_avatar: bool = False) -> Char
 # fragment ids become LLM tool-schema property names, and some backends
 # enforce a strict charset/length on those.
 _CARD_FRAGMENT_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
-_INTERACTIVE_FIELD_TYPES = {"string", "array", "progressive", "feedback", "direction_note"}
+_INTERACTIVE_FIELD_TYPES = {
+    "string",
+    "array",
+    "progressive",
+    "feedback",
+    "direction_note",
+    "post_processing",
+}
 
 
 def _card_fragment_entries(raw: Any) -> list[dict]:
@@ -344,8 +351,20 @@ async def update_character_card(card_id: str, data: dict) -> CharacterCardRow | 
         sets, vals = _build_set_clause(allowed, data)
         # JSON fields
         if "tags" in data:
+            encoded_tags = json.dumps(data["tags"])
+            # The edit form submits the current tag list even when only another
+            # field changed. SQLite evaluates every SET expression against the
+            # pre-update row, so these CASEs revoke ownership only for a real tag
+            # change, not for that routine round-trip.
+            sets.extend(
+                [
+                    "auto_tag_vocab_hash = CASE WHEN tags = ? THEN auto_tag_vocab_hash ELSE '' END",
+                    "auto_tag_card_updated_at = CASE WHEN tags = ? THEN auto_tag_card_updated_at ELSE '' END",
+                ]
+            )
+            vals.extend([encoded_tags, encoded_tags])
             sets.append("tags = ?")
-            vals.append(json.dumps(data["tags"]))
+            vals.append(encoded_tags)
         if "alternate_greetings" in data:
             sets.append("alternate_greetings = ?")
             vals.append(json.dumps(data["alternate_greetings"]))
@@ -471,6 +490,61 @@ async def get_character_usage(card_id: str) -> dict[str, int]:
         )
     row = rows[0]
     return {"solo": int(row[0]), "active_groups": int(row[1]), "historical_groups": int(row[2])}
+
+
+async def get_card_activity(card_ids: Sequence[str]) -> dict[str, dict[str, int | str | None]]:
+    """Return conversation counts and most-recent use for a set of cards.
+
+    This is a general card query rather than duplicate-finder plumbing: the
+    compare surface needs it today, and a future field-level merge will need the
+    same keeper-selection evidence.  Group participation includes historical
+    slots because a card can matter to old conversation context even after it
+    stopped being active in a group.
+    """
+    ids = list(dict.fromkeys(card_id for card_id in card_ids if card_id))
+    if not ids:
+        return {}
+    placeholders = ", ".join("?" for _ in ids)
+    async with get_db() as db:
+        rows = list(
+            await db.execute_fetchall(
+                f"""SELECT c.id,
+                           (SELECT COUNT(*) FROM conversations AS solo
+                            WHERE solo.character_card_id = c.id) AS solo,
+                           (SELECT COUNT(DISTINCT gm.conversation_id) FROM group_members AS gm
+                            WHERE gm.character_card_id = c.id AND gm.active = 1) AS active_groups,
+                           (SELECT COUNT(DISTINCT gm.conversation_id) FROM group_members AS gm
+                            WHERE gm.character_card_id = c.id AND gm.active = 0) AS historical_groups,
+                           (SELECT COUNT(DISTINCT gm.conversation_id) FROM group_members AS gm
+                            WHERE gm.character_card_id = c.id) AS groups,
+                           (SELECT MAX(used_at) FROM (
+                                SELECT COALESCE(solo.last_accessed_at, solo.updated_at, solo.created_at) AS used_at
+                                FROM conversations AS solo WHERE solo.character_card_id = c.id
+                                UNION ALL
+                                SELECT COALESCE(grouped.last_accessed_at, grouped.updated_at, grouped.created_at) AS used_at
+                                FROM group_members AS gm
+                                JOIN conversations AS grouped ON grouped.id = gm.conversation_id
+                                WHERE gm.character_card_id = c.id
+                            )) AS last_used_at
+                    FROM character_cards AS c
+                    WHERE c.id IN ({placeholders})""",  # nosec B608 -- placeholders arise only from a local id list
+                ids,
+            )
+        )
+    result: dict[str, dict[str, int | str | None]] = {}
+    for row in rows:
+        solo = int(row["solo"])
+        active_groups = int(row["active_groups"])
+        historical_groups = int(row["historical_groups"])
+        groups = int(row["groups"])
+        result[str(row["id"])] = {
+            "solo": solo,
+            "active_groups": active_groups,
+            "historical_groups": historical_groups,
+            "total": solo + groups,
+            "last_used_at": str(row["last_used_at"]) if row["last_used_at"] is not None else None,
+        }
+    return result
 
 
 async def resolve_char_context(

@@ -1,3 +1,6 @@
+import { messageBody } from "./utils.js";
+import { segmentBody } from "./workflow_segmentation.js";
+
 const SANCTIONED_VARIANTS = new Set(["highlight", "underline", "pulse"]);
 
 let _active = null;
@@ -10,6 +13,9 @@ export function startTextEffect({ msgId, effectId, grain = "word", variant = "hi
     variant = "highlight";
   }
   const token = ++_seq;
+  // Rendering no longer segments every bubble on the off-chance an effect runs,
+  // so an effect segments the one message it is about to paint.
+  segmentBody(messageBody(msgId));
   _active = { token, msgId, variant, grain: grain === "sentence" ? "sentence" : "word", lastUnit: null };
   return {
     markActive(unitIndex) {
@@ -32,7 +38,7 @@ export function clearTextEffect() {
 
 function _paint(unitIndex, on) {
   if (unitIndex == null || !_active) return;
-  const body = document.querySelector(`#chat-messages .message[data-msg-id="${_active.msgId}"] .msg-body`);
+  const body = messageBody(_active.msgId);
   if (!body) return;
   const attr = _active.grain === "sentence" ? "data-sent" : "data-seg";
   const cls = `fx-${_active.variant}`;

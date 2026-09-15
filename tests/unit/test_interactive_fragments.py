@@ -3,20 +3,25 @@
 from __future__ import annotations
 
 from backend.database import SEED_INTERACTIVE_FRAGMENTS
-from backend.inference import (
-    build_direct_scene_tool,
+from backend.pipeline.passes.director import apply_tool_calls
+from backend.pipeline.passes.director.direction_note_prompts import (
     build_direction_note_prompt,
-    build_direction_note_tool,
+)
+from backend.pipeline.passes.director.prompts import (
     build_director_scene_step_prompt,
     build_director_tool_prompt,
+)
+from backend.pipeline.passes.editor import extract_feedback_values
+from backend.pipeline.passes.editor.prompts import (
     build_editor_prompt,
     build_feedback_prompt,
-    build_feedback_tool,
-    build_style_injection,
-    compute_style_injection_block,
 )
-from backend.pipeline.passes.director import apply_tool_calls
-from backend.pipeline.passes.editor import extract_feedback_values
+from backend.prompting import build_style_injection, compute_style_injection_block
+from backend.prompting.tool_schemas import (
+    build_direct_scene_tool,
+    build_direction_note_tool,
+    build_feedback_tool,
+)
 
 # ── build_direct_scene_tool ──────────────────────────────────────────────────
 
@@ -98,7 +103,10 @@ class TestBuildDirectSceneTool:
         tool = build_direct_scene_tool(SEED_INTERACTIVE_FRAGMENTS)
         props = tool["function"]["parameters"]["properties"]
         for frag in SEED_INTERACTIVE_FRAGMENTS:
-            assert frag["id"] in props
+            if frag["field_type"] == "post_processing":
+                assert frag["id"] not in props
+            else:
+                assert frag["id"] in props
 
 
 # ── build_feedback_tool ──────────────────────────────────────────────────────
@@ -364,7 +372,7 @@ class TestBuildStyleInjection:
     def test_deactivated_mood_without_negative_prompt_skipped(self):
         deactivated = [{"id": "grounded", "prompt_text": "Be realistic.", "negative_prompt": ""}]
         result = build_style_injection([], deactivated=deactivated, interactive_fragments=[], extra_fields={})
-        assert result == "**Scene Direction**"
+        assert result == "**Scene Guidance**"
 
     def test_sort_order_respected(self):
         frags = [
@@ -474,7 +482,14 @@ class TestSeedInteractiveFragments:
 
     def test_field_type_is_valid(self):
         for frag in SEED_INTERACTIVE_FRAGMENTS:
-            assert frag["field_type"] in ("string", "array", "progressive", "feedback", "direction_note"), frag["id"]
+            assert frag["field_type"] in (
+                "string",
+                "array",
+                "progressive",
+                "feedback",
+                "direction_note",
+                "post_processing",
+            ), frag["id"]
 
 
 # build_director/editor/feedback preambles open [OOC: -- their builders must close it.

@@ -1,9 +1,8 @@
 """Unit tests for text-completion mode.
 
 The leaf (backend/inference/text_completion.py) is pure, so most tests need no
-HTTP mocking. The handful of client-level tests patch LLMClient's three HTTP
-seams (_apply_template, _fetch_chat_template, _stream_completion) — no sockets,
-no httpx faking.
+HTTP mocking. Client-level tests supply explicit reasoning profiles and patch
+the render/stream seams. Discovery has its own captured-render tests.
 """
 
 from __future__ import annotations
@@ -11,6 +10,7 @@ from __future__ import annotations
 import httpx
 import pytest
 
+from backend.inference import reasoning_format as rf
 from backend.inference import text_completion as tc
 from backend.inference.client import (
     LLMClient,
@@ -20,13 +20,14 @@ from backend.inference.client import (
 )
 from backend.inference.retry import RetryPolicy
 
-GEMMA_OPEN, GEMMA_CLOSE, GEMMA_DISABLE = tc._GEMMA4
+GEMMA_OPEN, GEMMA_CLOSE = rf.GEMMA_TAGS
+GEMMA_DISABLE = "<|channel>thought\n<channel|>"
 
 
 # ── Splitter ────────────────────────────────────────────────────────────────
 
 
-def _run(splitter: tc.ThinkSplitter, chunks: list[str]) -> tuple[str, str]:
+def _run(splitter: tc.Splitter, chunks: list[str]) -> tuple[str, str]:
     """Feed *chunks* + flush; return (reasoning, content) concatenations."""
     reasoning, content = [], []
     for ch in chunks:
@@ -40,7 +41,7 @@ def _run(splitter: tc.ThinkSplitter, chunks: list[str]) -> tuple[str, str]:
 def test_splitter_gemma_open_tag_split_across_three_chunks():
     # The live-observed split: '<|channel>' + 'thought' + '\n' arrive separately.
     r, c = _run(
-        tc.ThinkSplitter(tc._GEMMA4),
+        tc.ThinkSplitter(rf.GEMMA_TAGS),
         ["<|channel>", "thought", "\n", "The user", " said hi", "<channel|>", "Hello", "!"],
     )
     assert r == "The user said hi"
@@ -48,126 +49,59 @@ def test_splitter_gemma_open_tag_split_across_three_chunks():
 
 
 def test_splitter_gemma_close_tag_split_across_chunks():
-    r, c = _run(tc.ThinkSplitter(tc._GEMMA4), [GEMMA_OPEN, "abc", "<channel", "|>Hi"])
+    r, c = _run(tc.ThinkSplitter(rf.GEMMA_TAGS), [GEMMA_OPEN, "abc", "<channel", "|>Hi"])
     assert r == "abc"
     assert c == "Hi"
 
 
 def test_splitter_think_pair():
-    r, c = _run(tc.ThinkSplitter(tc._THINK), ["<think>", "reason", "</think>", "answer"])
+    r, c = _run(tc.ThinkSplitter(rf.THINK_TAGS), ["<think>", "reason", "</think>", "answer"])
     assert r == "reason"
     assert c == "answer"
 
 
 def test_splitter_already_open_starts_in_reasoning():
     # Qwen3: prompt pre-opened <think>, so the stream has no leading open tag.
-    r, c = _run(tc.ThinkSplitter(tc._THINK, already_open=True), ["reason", "</think>", "answer"])
+    r, c = _run(tc.ThinkSplitter(rf.THINK_TAGS, already_open=True), ["reason", "</think>", "answer"])
     assert r == "reason"
     assert c == "answer"
 
 
 def test_splitter_non_thinking_passthrough():
     # Empty tags → everything is content, from the first byte.
-    r, c = _run(tc.ThinkSplitter(tc._NONE), ["hello ", "world"])
+    r, c = _run(tc.ThinkSplitter(rf.NO_TAGS), ["hello ", "world"])
     assert r == ""
     assert c == "hello world"
 
 
 def test_splitter_reasoning_on_but_no_channel_is_all_content():
     # Model never opens a thought channel despite reasoning-on → all content.
-    r, c = _run(tc.ThinkSplitter(tc._GEMMA4), ["Just ", "answering."])
+    r, c = _run(tc.ThinkSplitter(rf.GEMMA_TAGS), ["Just ", "answering."])
     assert r == ""
     assert c == "Just answering."
 
 
 def test_splitter_flush_drains_mid_reasoning_tail_as_reasoning():
     # Truncated mid-span with a held partial close tag → flushed as reasoning.
-    r, c = _run(tc.ThinkSplitter(tc._GEMMA4), [GEMMA_OPEN, "text", "<chan"])
+    r, c = _run(tc.ThinkSplitter(rf.GEMMA_TAGS), [GEMMA_OPEN, "text", "<chan"])
     assert r == "text<chan"
     assert c == ""
 
 
 def test_splitter_flush_drains_pre_state_tail_as_content():
     # A never-completed open tag at EOS is provisional content.
-    r, c = _run(tc.ThinkSplitter(tc._GEMMA4), ["<|chan"])
+    r, c = _run(tc.ThinkSplitter(rf.GEMMA_TAGS), ["<|chan"])
     assert r == ""
     assert c == "<|chan"
 
 
-# ── Tag sniff ordering ────────────────────────────────────────────────────────
-
-
-def test_think_tags_channel_wins_over_think():
-    assert tc.think_tags_from_template("...<|channel>thought... <think>...") == tc._GEMMA4
-
-
-def test_think_tags_think_pair():
-    assert tc.think_tags_from_template("...<think>...</think>...") == tc._THINK
-
-
-def test_think_tags_none_for_non_thinking():
-    assert tc.think_tags_from_template("plain jinja no markers") == tc._NONE
-
-
-def test_think_tags_minimax_namespaced_pair():
-    assert tc.think_tags_from_template("...<mm:think>...</mm:think>...") == tc._MINIMAX
-
-
-def test_think_tags_novel_namespace_derived():
-    # The tag-pair family generalizes: any <ns:think> yields its own triple.
-    assert tc.think_tags_from_template("...<seed:think>...") == (
-        "<seed:think>",
-        "</seed:think>",
-        "<seed:think>\n\n</seed:think>\n\n",
-    )
-
-
-def test_think_tags_hunyuan_format_constructed():
-    # Hunyuan builds the tag from a namespace var rather than writing it
-    # literally; the sniff must resolve `.format(HYTK)` to see the real bytes.
-    raw = "{%- set HYTK = ':opensource' %}{%- set think_begin_token = '<think{}>'.format(HYTK) %}{{ think_begin_token }}"
-    assert tc.think_tags_from_template(raw) == (
-        "<think:opensource>",
-        "</think:opensource>",
-        "<think:opensource>\n\n</think:opensource>\n\n",
-    )
-
-
-def test_think_tags_thinking_and_thought_variants():
-    assert tc.think_tags_from_template("...<thinking>...")[0:2] == ("<thinking>", "</thinking>")
-    assert tc.think_tags_from_template("...<thought>...")[0:2] == ("<thought>", "</thought>")
-
-
-def test_think_tags_prose_word_does_not_match():
-    # Bare words without the tag brackets are not a reasoning span.
-    assert tc.think_tags_from_template("think about thought and thinking") == tc._NONE
+# ── Namespaced stream markers ────────────────────────────────────────────────
 
 
 def test_splitter_minimax_pair():
-    r, c = _run(tc.ThinkSplitter(tc._MINIMAX), ["<mm:think>", "reason", "</mm:think>", "answer"])
+    r, c = _run(tc.ThinkSplitter(rf.MINIMAX_TAGS), ["<mm:think>", "reason", "</mm:think>", "answer"])
     assert r == "reason"
     assert c == "answer"
-
-
-async def test_get_think_tags_re_sniffs_every_call():
-    # Never cached: the tags belong to the loaded model, not the URL. A GGUF
-    # swapped behind a live endpoint must be picked up on the very next call --
-    # a stale triple means the close tag never matches, the whole reply is
-    # classified as reasoning, and the turn persists an empty message.
-    templates = ["<think>...</think>", "<|channel>thought here"]  # Qwen, then a swap to Gemma
-
-    async def fetch():
-        return templates.pop(0)
-
-    assert await tc.get_think_tags("rootA", fetch) == tc._THINK
-    assert await tc.get_think_tags("rootA", fetch) == tc._GEMMA4
-
-
-async def test_get_think_tags_failed_sniff_falls_back_to_none():
-    async def fetch():
-        return ""  # /props failed → empty
-
-    assert await tc.get_think_tags("rootB", fetch) == tc._NONE
 
 
 # ── Param remap ──────────────────────────────────────────────────────────────
@@ -410,6 +344,33 @@ def test_reasoning_enabled_reads_reasoning_cfg():
 # ── Client-level wiring (patched HTTP seams) ──────────────────────────────────
 
 
+def _format(props: str) -> rf.ReasoningFormat:
+    """Explicit protocol fixtures for transport tests; discovery is tested separately."""
+    if "to=self" in props:
+        return rf.ReasoningFormat(
+            status="known",
+            channel=True,
+            controls=rf.ReasoningControls(
+                " to=self<|message|>",
+                " to=user<|message|>",
+                "<|eom|><|start|>assistant to=user<|message|>",
+            ),
+        )
+    if "<|channel>thought" in props:
+        return rf.ReasoningFormat(
+            status="known",
+            tags=rf.GEMMA_TAGS,
+            controls=rf.ReasoningControls(GEMMA_OPEN, GEMMA_DISABLE, GEMMA_CLOSE),
+        )
+    if "<think>" in props:
+        return rf.ReasoningFormat(
+            status="known",
+            tags=rf.THINK_TAGS,
+            controls=rf.ReasoningControls("<think>\n", "<think>\n\n</think>\n\n", "\n</think>\n\n"),
+        )
+    return rf.ReasoningFormat()
+
+
 def _text_client() -> LLMClient:
     return LLMClient("http://x/v1", completion_mode="text")
 
@@ -428,8 +389,8 @@ def _wired_text_client(template="P", props="", pieces=("x",), captured=None, fin
         captured["ctk"] = chat_template_kwargs
         return template(msgs, chat_template_kwargs) if callable(template) else template
 
-    async def fake_props(root):
-        return props
+    async def fake_format(root):
+        return _format(props)
 
     async def fake_stream(url, body):
         captured["body"] = body
@@ -445,7 +406,7 @@ def _wired_text_client(template="P", props="", pieces=("x",), captured=None, fin
         }
 
     client._apply_template = fake_apply  # type: ignore[method-assign]
-    client._fetch_chat_template = fake_props  # type: ignore[method-assign]
+    client._reasoning_format = fake_format  # type: ignore[method-assign]
     client._stream_completion = fake_stream  # type: ignore[method-assign]
     return client
 
@@ -620,7 +581,7 @@ async def test_chat_transport_drops_grammar():
 
 
 async def test_complete_text_apply_template_error_falls_back_to_chat():
-    client = _text_client()
+    client = _wired_text_client()
     captured = {}
 
     async def boom(root, msgs, chat_template_kwargs=None):
@@ -780,37 +741,425 @@ async def test_reasoning_prefill_preserves_retry_window():
 
 def test_splitter_trims_template_padding_after_close_tag():
     # Qwen renders "</think>\n\n"; the blank line must not open the reply.
-    r, c = _run(tc.ThinkSplitter(tc._THINK, already_open=True), ["reason", "</think>", "\n\n", "Sarah smiled."])
+    r, c = _run(tc.ThinkSplitter(rf.THINK_TAGS, already_open=True), ["reason", "</think>", "\n\n", "Sarah smiled."])
     assert r == "reason"
     assert c == "Sarah smiled."
 
 
 def test_splitter_trims_when_padding_shares_the_close_chunk():
-    r, c = _run(tc.ThinkSplitter(tc._THINK, already_open=True), ["reason</think>\n\nSarah smiled."])
+    r, c = _run(tc.ThinkSplitter(rf.THINK_TAGS, already_open=True), ["reason</think>\n\nSarah smiled."])
     assert c == "Sarah smiled."
 
 
 def test_splitter_keeps_newlines_inside_the_reply():
     # Only the start of the content run is trimmed.
-    r, c = _run(tc.ThinkSplitter(tc._THINK, already_open=True), ["r", "</think>", "\n\nLine one.\n\nLine two.\n"])
+    r, c = _run(tc.ThinkSplitter(rf.THINK_TAGS, already_open=True), ["r", "</think>", "\n\nLine one.\n\nLine two.\n"])
     assert c == "Line one.\n\nLine two.\n"
 
 
 def test_splitter_trims_pre_state_content_run():
     # Non-thinking output (model never opens a span) still starts clean.
-    r, c = _run(tc.ThinkSplitter(tc._GEMMA4), ["\n\n", "Just answering."])
+    r, c = _run(tc.ThinkSplitter(rf.GEMMA_TAGS), ["\n\n", "Just answering."])
     assert c == "Just answering."
 
 
 def test_splitter_keeps_the_continuation_space_on_a_prefilled_call():
     # Doc mode's open assistant turn: the leading space joins "He" to "saw".
-    r, c = _run(tc.ThinkSplitter(tc._GEMMA4, trim_lead=False), [" saw", " a banana."])
+    r, c = _run(tc.ThinkSplitter(rf.GEMMA_TAGS, trim_lead=False), [" saw", " a banana."])
     assert c == " saw a banana."
 
 
 def test_splitter_retrims_after_a_late_open_tag():
     # Provisional pre-span whitespace is a false start: the trim re-arms so the
     # real reply after the close is still clean.
-    r, c = _run(tc.ThinkSplitter(tc._THINK), ["\n", "<think>", "cot", "</think>", "\n\nReply."])
+    r, c = _run(tc.ThinkSplitter(rf.THINK_TAGS), ["\n", "<think>", "cot", "</think>", "\n\nReply."])
     assert r == "cot"
     assert c == "Reply."
+
+
+# ── Routed-channel reasoning (Onyx ATEM / Muse Glimmer) ─────────────────────
+
+# Captured from Muse-Glimmer-30B's template and completion stream.
+ONYX_TEMPLATE = (
+    "{%- if message.get('reasoning_content') -%}"
+    "{{- '<|start|>assistant to=self<|message|>' + message['reasoning_content'] + '<|eom|>' -}}"
+    "{%- endif -%}"
+)
+ONYX_LIVE = " to=self<|message|>Name one color.\n\nProbably just Blue.<|start|>assistant to=user<|message|>Blue"
+
+
+def test_channel_splitter_one_token_at_a_time():
+    # Every marker arrives split, which is the real streaming case.
+    r, c = _run(tc.ChannelSplitter(), list(ONYX_LIVE))
+    assert r == "Name one color.\n\nProbably just Blue."
+    assert c == "Blue"
+
+
+def test_channel_splitter_eom_closes_the_thought():
+    # The template renders <|eom|> between messages; the model may emit it too.
+    r, c = _run(tc.ChannelSplitter(), [" to=self<|message|>cot<|eom|>", "<|start|>assistant to=user<|message|>Hi"])
+    assert r == "cot"
+    assert c == "Hi"
+
+
+def test_channel_splitter_reply_without_a_thought_channel():
+    # The model may route straight to the user; the header is still scaffolding.
+    r, c = _run(tc.ChannelSplitter(), [" to=user<|message|>", "Blue"])
+    assert r == ""
+    assert c == "Blue"
+
+
+def test_channel_splitter_header_split_across_chunks():
+    r, c = _run(tc.ChannelSplitter(), [" to=", "self<|mess", "age|>", "cot", "<|start|>assist", "ant to=user<|mes", "sage|>Hi"])
+    assert r == "cot"
+    assert c == "Hi"
+
+
+def test_channel_splitter_holds_back_a_shared_marker_prefix():
+    # Shared marker prefixes must remain buffered across chunks.
+    r, c = _run(tc.ChannelSplitter(), [" to=self<|message|>cot<|", "eom|><|start|>assistant to=user<|message|>Hi"])
+    assert r == "cot"
+    assert c == "Hi"
+
+
+def test_channel_splitter_drops_a_truncated_header():
+    # An incomplete header after a resolved message is scaffolding.
+    r, c = _run(tc.ChannelSplitter(), [" to=self<|message|>cot<|start|>assistant to=us"])
+    assert r == "cot"
+    assert c == ""
+
+
+def test_channel_splitter_rescues_a_stream_that_never_opens_a_header():
+    # Preserve a headerless opening stream instead of losing its reply.
+    r, c = _run(tc.ChannelSplitter(), ["Hello there, ", "no routing header at all."])
+    assert r == ""
+    assert c == "Hello there, no routing header at all."
+
+
+def test_channel_splitter_rescue_does_not_fire_for_a_primed_start():
+    # A primed splitter still drops a later incomplete header.
+    r, c = _run(tc.ChannelSplitter(start="content"), ["Hi<|start|>assistant to=us"])
+    assert (r, c) == ("", "Hi")
+
+
+def test_channel_splitter_starts_mid_reply_for_a_prefill():
+    # A prefilled reply continues without another header.
+    r, c = _run(tc.ChannelSplitter(start="content", trim_lead=False), [" saw", " a banana."])
+    assert r == ""
+    assert c == " saw a banana."
+
+
+def test_channel_splitter_starts_mid_thought_for_a_reasoning_prefill():
+    r, c = _run(tc.ChannelSplitter(start="reasoning"), [" and so", "<|start|>assistant to=user<|message|>Hi"])
+    assert r == " and so"
+    assert c == "Hi"
+
+
+def test_channel_splitter_trims_the_reply_run_only():
+    r, c = _run(
+        tc.ChannelSplitter(), [" to=self<|message|>cot<|start|>assistant to=user<|message|>\n\nLine one.\n\nLine two.\n"]
+    )
+    assert c == "Line one.\n\nLine two.\n"
+
+
+def test_make_splitter_dispatches_on_the_format():
+    channel = _format(ONYX_TEMPLATE)
+    assert isinstance(tc.make_splitter(channel), tc.ChannelSplitter)
+    pair = _format("<think></think>")
+    assert isinstance(tc.make_splitter(pair), tc.ThinkSplitter)
+
+
+def test_make_splitter_start_reasoning_opens_a_tag_pair_span():
+    pair = _format("<think></think>")
+    r, c = _run(tc.make_splitter(pair, start="reasoning"), ["cot</think>Hi"])
+    assert (r, c) == ("cot", "Hi")
+
+
+# ── Routed-channel reasoning through the transport ──────────────────────────
+
+
+async def test_complete_text_channel_splits_reasoning_from_the_reply():
+    captured: dict = {}
+    client = _wired_text_client(
+        template="<|start|>assistant",
+        props=ONYX_TEMPLATE,
+        pieces=[" to=self<|message|>", "Pick a color.", "<|start|>assistant to=user<|message|>", "Blue"],
+        captured=captured,
+    )
+    events = await _drain(client.complete(messages=[{"role": "user", "content": "hi"}], model="m"))
+    message = events[-1]["message"]
+    assert message["reasoning_content"] == "Pick a color."
+    assert message["content"] == "Blue"
+    assert [e["delta"] for e in events if e["type"] == "content"] == ["Blue"]
+    # Reasoning on: the model writes its own header, so the prompt is untouched.
+    assert captured["prompt"] == "<|start|>assistant"
+
+
+async def test_complete_text_channel_reasoning_off_opens_the_reply_channel():
+    captured: dict = {}
+    client = _wired_text_client(
+        template="<|start|>assistant",
+        props=ONYX_TEMPLATE,
+        pieces=["Blue"],
+        captured=captured,
+    )
+    events = await _drain(client.complete(messages=[{"role": "user", "content": "hi"}], model="m", **reasoning_cfg(False)))
+    # Channel templates need an explicit reply header when reasoning is off.
+    assert captured["prompt"] == "<|start|>assistant to=user<|message|>"
+    assert events[-1]["message"]["content"] == "Blue"
+    assert "reasoning_content" not in events[-1]["message"]
+
+
+async def test_complete_text_tag_pair_reasoning_off_leaves_the_prompt_to_the_template():
+    captured: dict = {}
+    client = _wired_text_client(template="PROMPT", props="<think></think>", pieces=["Blue"], captured=captured)
+    await _drain(client.complete(messages=[{"role": "user", "content": "hi"}], model="m", **reasoning_cfg(False)))
+    assert captured["prompt"] == "PROMPT"
+    assert captured["ctk"] == {"enable_thinking": False, "thinking": False}
+
+
+async def test_complete_text_channel_forced_call_opens_the_reply_channel():
+    # A grammar owns every token, so the model cannot write its own routing
+    # header; without one the JSON opens where the template expects that header.
+    captured: dict = {}
+    tools = [{"type": "function", "function": {"name": "rate", "parameters": {"type": "object"}}}]
+    client = _wired_text_client(template="<|start|>assistant", props=ONYX_TEMPLATE, pieces=['{"a":1}'], captured=captured)
+    await _drain(
+        client.complete(
+            messages=[{"role": "user", "content": "hi"}],
+            model="m",
+            tools=tools,
+            tool_choice={"type": "function", "function": {"name": "rate"}},
+            **reasoning_cfg(True),
+        )
+    )
+    assert captured["prompt"] == "<|start|>assistant to=user<|message|>"
+
+
+async def test_complete_text_channel_forced_call_yields_to_a_reasoning_prefill():
+    # The thought channel is already open and is free text, so the JSON belongs
+    # inside it -- exactly as a forced call on a tag-pair model behaves.
+    captured: dict = {}
+    tools = [{"type": "function", "function": {"name": "rate", "parameters": {"type": "object"}}}]
+    client = _wired_text_client(template="<|start|>assistant", props=ONYX_TEMPLATE, pieces=['{"a":1}'], captured=captured)
+    await _drain(
+        client.complete(
+            messages=[{"role": "user", "content": "hi"}],
+            model="m",
+            tools=tools,
+            tool_choice={"type": "function", "function": {"name": "rate"}},
+            **reasoning_cfg(True, "Weigh it"),
+        )
+    )
+    assert captured["prompt"] == "<|start|>assistant to=self<|message|>Weigh it"
+
+
+async def test_complete_text_tag_pair_forced_call_never_gains_a_channel_header():
+    # The reply-channel header is a channel-shape byte and a tag-pair model must
+    # never gain one. It closes its span with the template's own disable pair.
+    captured: dict = {}
+    tools = [{"type": "function", "function": {"name": "rate", "parameters": {"type": "object"}}}]
+    client = _wired_text_client(template="PROMPT", props="<think></think>", pieces=['{"a":1}'], captured=captured)
+    await _drain(
+        client.complete(
+            messages=[{"role": "user", "content": "hi"}],
+            model="m",
+            tools=tools,
+            tool_choice={"type": "function", "function": {"name": "rate"}},
+            **reasoning_cfg(True),
+        )
+    )
+    assert captured["prompt"] == "PROMPT<think>\n\n</think>\n\n"
+    assert "to=user" not in captured["prompt"]
+
+
+async def test_complete_text_channel_prefill_keeps_the_prompt_tail():
+    captured: dict = {}
+    client = _wired_text_client(
+        template=lambda msgs, ctk: "<|start|>assistant to=user<|message|>He",
+        props=ONYX_TEMPLATE,
+        pieces=[" saw a banana."],
+        captured=captured,
+    )
+    events = await _drain(
+        client.complete(messages=[{"role": "user", "content": "hi"}], model="m", prefill="He", **reasoning_cfg(False))
+    )
+    # The trailing assistant turn already opened the reply channel: no disable
+    # bytes on top, and the continuation space survives.
+    assert captured["prompt"] == "<|start|>assistant to=user<|message|>He"
+    assert events[-1]["message"]["content"] == " saw a banana."
+
+
+async def test_complete_text_channel_reasoning_prefill_opens_the_thought_channel():
+    captured: dict = {}
+    client = _wired_text_client(
+        template="<|start|>assistant",
+        props=ONYX_TEMPLATE,
+        pieces=[" so blue.", "<|start|>assistant to=user<|message|>Blue"],
+        captured=captured,
+    )
+    events = await _drain(
+        client.complete(messages=[{"role": "user", "content": "hi"}], model="m", **reasoning_cfg(True, prefill="Calm colors"))
+    )
+    assert captured["prompt"] == "<|start|>assistant to=self<|message|>Calm colors"
+    message = events[-1]["message"]
+    assert message["reasoning_content"] == "Calm colors so blue."
+    assert message["content"] == "Blue"
+
+
+async def test_complete_text_channel_headerless_stream_still_yields_the_reply():
+    # A channel model that skips its routing header must not persist an empty
+    # turn; the reply survives even though the split had nothing to key on.
+    client = _wired_text_client(
+        template="<|start|>assistant",
+        props=ONYX_TEMPLATE,
+        pieces=["Blue is ", "a fine color."],
+    )
+    events = await _drain(client.complete(messages=[{"role": "user", "content": "hi"}], model="m"))
+    message = events[-1]["message"]
+    assert message["content"] == "Blue is a fine color."
+    assert "reasoning_content" not in message
+
+
+async def test_render_prompt_reproduces_the_transports_reply_channel_bytes():
+    # The doc-mode auditor re-derives a past generation's prompt to extend it;
+    # a byte of drift here is a KV-cache miss on every audited turn.
+    captured: dict = {}
+    client = _wired_text_client(template="<|start|>assistant", props=ONYX_TEMPLATE, captured=captured)
+    await _drain(client.complete(messages=[{"role": "user", "content": "hi"}], model="m", **reasoning_cfg(False)))
+    rendered = await client.render_prompt([{"role": "user", "content": "hi"}], reasoning=False)
+    assert rendered == captured["prompt"]
+
+
+async def test_render_prompt_skips_the_sniff_for_a_prefilled_call():
+    # A prefill can never need the disable bytes, so it must not pay for /props.
+    client = _wired_text_client(template="<|start|>assistant to=user<|message|>He", props=ONYX_TEMPLATE)
+
+    async def must_not_run(root):
+        raise AssertionError("/props fetched for a prefilled render")
+
+    client._reasoning_format = must_not_run  # type: ignore[method-assign]
+    assert await client.render_prompt([{"role": "user", "content": "hi"}], prefill="He") == (
+        "<|start|>assistant to=user<|message|>He"
+    )
+
+
+# ── Grammar-constrained calls close the reasoning span ──────────────────────
+
+
+async def _forced(props: str, template: str, captured: dict) -> None:
+    """Run one grammar-forced call against *template* on a *props* model."""
+    tools = [{"type": "function", "function": {"name": "rate", "parameters": {"type": "object"}}}]
+    client = _wired_text_client(template=template, props=props, pieces=['{"a":1}'], captured=captured)
+    await _drain(
+        client.complete(
+            messages=[{"role": "user", "content": "hi"}],
+            model="m",
+            tools=tools,
+            tool_choice={"type": "function", "function": {"name": "rate"}},
+            **reasoning_cfg(True),
+        )
+    )
+
+
+async def test_complete_text_tag_pair_forced_call_closes_the_thought_span():
+    # The grammar forbids the open tag, so a template that leaves that tag to the
+    # model asks for thinking it cannot do. Measured on Gemma 4 31B, the model
+    # degenerates instead (3000 tokens of one repeated word) unless the span is
+    # closed for it here.
+    captured: dict = {}
+    await _forced("<|channel>thought", "PROMPT", captured)
+    assert captured["prompt"] == "PROMPT" + GEMMA_DISABLE
+
+
+async def test_complete_text_forced_call_closes_a_pre_opened_span():
+    # Qwen3.8's generation prompt opens <think> itself. The JSON is legal inside
+    # an open span but reads as scratch work: a median 67 argument characters
+    # against 765 once closed. The rewrite lands on the template's own
+    # reasoning-off tail rather than doubling the open tag.
+    captured: dict = {}
+    await _forced("<think>...</think>", "PROMPT<think>\n", captured)
+    assert captured["prompt"] == "PROMPT<think>\n\n</think>\n\n"
+
+
+async def test_complete_text_non_thinking_forced_call_appends_nothing():
+    captured: dict = {}
+    await _forced("plain jinja no markers", "PROMPT", captured)
+    assert captured["prompt"] == "PROMPT"
+
+
+# ── Reasoning effort rides the text-mode render ─────────────────────────────
+
+
+def _effort_client(effort: str, captured: dict, refuse: tuple[str, ...] = ()) -> LLMClient:
+    """Text client whose /apply-template refuses the levels in *refuse*."""
+    client = _wired_text_client(template="P", props="<think></think>", captured=captured)
+    client.reasoning_effort = effort
+    real = client._apply_template
+
+    async def apply(root, msgs, chat_template_kwargs=None):
+        captured.setdefault("attempts", []).append(chat_template_kwargs)
+        if chat_template_kwargs and chat_template_kwargs.get("reasoning_effort") in refuse:
+            raise httpx.HTTPStatusError("500", request=httpx.Request("POST", "http://x"), response=httpx.Response(500))
+        return await real(root, msgs, chat_template_kwargs)
+
+    client._apply_template = apply  # type: ignore[method-assign]
+    return client
+
+
+async def test_render_prompt_sends_the_configured_reasoning_effort():
+    # Without this the level is dropped on the floor in text mode: the chat
+    # transport writes it into a request body this transport never sends.
+    captured: dict = {}
+    await _effort_client("low", captured).render_prompt([{"role": "user", "content": "hi"}], reasoning=True)
+    assert captured["ctk"] == {"enable_thinking": True, "thinking": True, "reasoning_effort": "low"}
+
+
+async def test_render_prompt_omits_reasoning_effort_when_reasoning_is_off():
+    captured: dict = {}
+    await _effort_client("low", captured).render_prompt([{"role": "user", "content": "hi"}], reasoning=False)
+    assert captured["ctk"] == {"enable_thinking": False, "thinking": False}
+
+
+async def test_render_prompt_omits_a_custom_reasoning_effort():
+    # 'custom' names a request-body field, which a chat template cannot read.
+    captured: dict = {}
+    client = _effort_client("custom", captured)
+    client.reasoning_effort_param, client.reasoning_effort_value = "think_budget", "512"
+    await client.render_prompt([{"role": "user", "content": "hi"}], reasoning=True)
+    assert captured["ctk"] == {"enable_thinking": True, "thinking": True}
+
+
+async def test_render_prompt_retries_without_a_refused_reasoning_effort():
+    # Qwen3.8 accepts only low/medium/xhigh and raises on the rest, so three of
+    # the six levels Orb's picker offers render as HTTP 500. Dropping the effort
+    # keeps the call in the text transport instead of losing it to chat.
+    captured: dict = {}
+    client = _effort_client("high", captured, refuse=("high",))
+    assert await client.render_prompt([{"role": "user", "content": "hi"}], reasoning=True) == "P"
+    assert captured["attempts"] == [
+        {"enable_thinking": True, "thinking": True, "reasoning_effort": "high"},
+        {"enable_thinking": True, "thinking": True},
+    ]
+
+
+async def test_render_prompt_reraises_a_failure_that_is_not_about_effort():
+    # No effort to drop → the caller's chat-transport fallback still owns this.
+    captured: dict = {}
+    client = _effort_client("", captured)
+
+    async def always_fail(root, msgs, chat_template_kwargs=None):
+        raise httpx.HTTPStatusError("500", request=httpx.Request("POST", "http://x"), response=httpx.Response(500))
+
+    client._apply_template = always_fail  # type: ignore[method-assign]
+    with pytest.raises(httpx.HTTPStatusError):
+        await client.render_prompt([{"role": "user", "content": "hi"}], reasoning=True)
+
+
+async def test_complete_text_effort_render_stays_in_the_text_transport():
+    # End-to-end: a refused level must not drop the turn to the chat transport.
+    captured: dict = {}
+    client = _effort_client("high", captured, refuse=("high",))
+    events = await _drain(client.complete(messages=[{"role": "user", "content": "hi"}], model="m", **reasoning_cfg(True)))
+    assert events[-1]["message"]["content"] == "x"
+    assert captured["prompt"] == "P"

@@ -31,7 +31,7 @@ messages.
 |---|---|---|
 | Director | OOC instruction and the current user message | A forced `direct_scene` tool call |
 | Writer | Selected lore, scene direction, and the user message | Streaming prose |
-| Editor | The Writer request, the draft, and an audit instruction | Patches or a rewritten draft |
+| Editor | The Writer request, the evolving draft, and an edit instruction | Audit fixes, post-processing patches, or feedback |
 
 The Editor extends the Writer request instead of rebuilding a new conversation.
 Its first call can therefore reuse the Writer's history and draft; later ReAct
@@ -48,6 +48,11 @@ The system prompt and history are assembled once in
 `backend/pipeline/config.py` and held in an immutable `CachedBase` from
 `backend/inference/cached_call.py`. Passes call `base.complete(...)`; they do
 not assemble their own prefix.
+
+Deterministic message and context construction lives in `backend/prompting/`.
+Pass-specific instruction prose lives beside its pass under
+`backend/pipeline/passes/`; provider and cache execution remain in
+`backend/inference/`.
 
 The system prompt includes stable card, persona, scenario, constant lore, and
 scene instructions. History is shared byte-for-byte, including attachment
@@ -78,6 +83,30 @@ not call a tool. The pass selects its behavior with `tool_choice`:
 - Director and Editor force one tool.
 - Writer uses `tool_choice="none"` so it writes prose.
 - Workflow tools add their schemas to the same per-turn list.
+
+`backend/prompting/tool_catalog.py` owns the list. Built-ins are emitted in the
+explicit `BUILTIN_TOOL_ORDER`; workflow tools append in registration order, and
+re-registering one preserves its position. Schema property order and compact,
+insertion-order-preserving JSON bytes are part of the cache contract.
+
+`forced_tool_call` appends the forced schema when the per-turn map does not
+already carry it, and an appended schema is a diverging tools region: it renders
+ahead of history, so it evicts the whole conversation from the server's prefix
+cache rather than costing only its own bytes. A call that forces a tool therefore
+has to pick a side. Either it rides the turn's lane, and the tool must be in the
+map **before** `_resolve_pipeline_config` freezes it into a `CachedBase` — what
+`apply_length_guard_tools` does for `editor_rewrite`, what active
+post-processing fragments do for `editor_search_replace`, and what a workflow would do
+by yielding `enable_tools` from a pre-pipeline hook. Or it rides its own lane, and
+shares nothing with the turn: its own short prefix, and `enabled_tools=None` so
+`forced_tool_call` ships the forced tool alone. What it cannot do is force a tool
+against the turn's blob without being in it.
+
+The second option is usually cheaper when the call is closed over its explicit
+input. `format_consistency`'s voice rewrite restates one draft and does not need
+the conversation; sending the history would only add prompt cost. Servers can
+retain multiple cached sequences, so this short lane can coexist with the
+conversation lane.
 
 Inference servers may render only the forced tool, or no tools for `none`. As a
 result, the three passes can share the conversation body without sharing the
@@ -112,7 +141,9 @@ For a user message such as `I draw my sword`:
 1. Build the base from the system prompt and prior history.
 2. Ask the Director for scene direction.
 3. Ask the Writer for prose, adding direction and selected lore to the tail.
-4. If needed, extend that request with the draft and let the Editor apply fixes.
+4. If needed, extend that request with the draft and let the Editor apply audit
+   fixes, then each post-processing fragment in order.
+5. Run Feedback and secondary workflows against the resulting draft.
 
 The first three calls may have different tool-rendered lanes, but each call
 keeps its own reusable prefix. The Editor's follow-up calls extend the prompt it
@@ -130,6 +161,19 @@ turn N+1: system + history + user N + assistant N + director request
 That shared beginning is why a long conversation does not require a complete
 prefill on every call. A group exchange follows the same rule as speakers add
 their replies; lore activation itself remains frozen until the next exchange.
+
+## Batch lanes
+
+A few passes are not conversation turns at all: the library auto-tagger sends one
+call per card, and every call carries the same system message and the same tools
+blob, with only the card's text moving. That is a prefix shared across the whole
+run rather than across a conversation, and it is why the run is sequential —
+parallel requests land in separate llama.cpp slots with separate KV caches, so
+the instruction block gets paid for once per slot instead of once per run.
+
+The test-time checker knows about these: a batch pass groups its calls by the
+pass name instead of by the conversation, or N calls would land in N groups of
+one and be skipped. See ``_BATCH_PASSES`` in ``tests/integration/_llm_mock.py``.
 
 ## Reasoning can create another lane
 
@@ -153,9 +197,26 @@ The local values cannot know where a provider's template renders tools, so they
 are kept separate. A high message overlap with a low provider hit can indicate
 different tool rendering or reasoning lanes.
 
-The tracker compares a call with the previous call of the same kind in the
-conversation, which makes the first call of a new turn useful rather than an
-unhelpful zero baseline.
+The tracker compares a call with the previous call **on its own lane**, falling
+back to the last same-label call of the previous turn — which makes the first call
+of a new turn useful rather than an unhelpful zero baseline.
+
+A tracker lane is `(server, model, shape)`. Server and model identify the physical
+cache owner, matching the first two fields used by the test-time checker. Shape is
+empty for the shared conversation prompt and has a stable name for an
+intentionally independent rendered prefix. For example, format consistency's
+self-contained voice rewrite records `format_consistency:voice_rewrite`, so a
+group exchange's next Director call skips that short prefix and compares with the
+last conversation call instead. `forced_tool_call` accepts this as
+`cache_shape` and passes it to the tracker.
+
+The shape is a semantic discriminator, not a fingerprint of the current message
+or tools bytes. Calls in one intended family must remain comparable so an
+accidental change still appears in the report. Keying on the model name alone is
+also insufficient: dual-model runs the writer and the agent on different servers,
+and the two routinely answer to the same name. When a turn spans more than one
+lane the report prints a `lanes:` legend and tags each row, so a pass with no
+predecessor reads as "first call on its lane" rather than as a broken prefix.
 
 ## In short
 

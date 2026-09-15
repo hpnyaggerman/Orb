@@ -5,21 +5,22 @@ import {
   _renderWorkflowArtifacts,
   _renderWorkflowRejection,
 } from "./chat_workflow.js";
-import { sceneEmptyStateHtml, speakerLabel } from "./group_cast.js";
+import { reconcileChildren } from "./dom_reconcile.js";
+import { sceneEmptyStateHtml, speakerAvatarCell, speakerLabel } from "./group_cast.js";
+import { CHEVRON_LEFT_ICON, CHEVRON_RIGHT_ICON, EDIT_ICON_PATHS } from "./icons.js";
+import { renderMessageDiffHtml, renderMessageHtml } from "./message_html.js";
 import { preserveScrollDistance } from "./scroll_follow.js";
-import { EDIT_ICON_PATHS } from "./sidebar_icons.js";
 import { effectiveWorkflowEnabled, S, subscribe } from "./state.js";
 import { requestSendPermission } from "./tabLock.js";
 import {
   $,
+  attachmentDataUrl,
   avatarCell,
   avatarUrl,
   esc,
   escAttr,
   escHandlerArg,
   formatBytes,
-  formatProse,
-  formatProseWithDiff,
   resolvePlaceholders,
 } from "./utils.js";
 import { segmentBody } from "./workflow_segmentation.js";
@@ -81,16 +82,10 @@ export const ICON_CHEVRON = `<svg viewBox="0 0 24 24" fill="none" stroke="curren
 export const ICON_FORK = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><line x1="6" y1="3" x2="6" y2="15"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg>`;
 export const ICON_NOTE = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" width="15" height="15"><path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z"/><path d="M14 3v6h6"/><path d="M12 18v-5"/><path d="M9.5 15.5h5"/></svg>`;
 
-export function buildMsgToolbar(m, childByParent = null) {
+export function buildMsgToolbar(m) {
   const isAssistant = m.role === "assistant";
   const isGreeting = isAssistant && !m.parent_id;
-  const childAssistant = isAssistant
-    ? null
-    : childByParent
-      ? childByParent.get(m.id) || null
-      : S.messages.find((c) => c.parent_id === m.id && c.role === "assistant");
-  const regenTargetId = isAssistant ? m.id : childAssistant?.id;
-  const canRegen = !isGreeting && (isAssistant || !!childAssistant || !!m.id);
+  const canRegen = !isGreeting && (isAssistant || !!m.id);
 
   const editBtn = `<button onclick="${m.id ? `startEdit(${m.id})` : `startEditPending()`}" title="Edit">${ICON_EDIT}</button>`;
 
@@ -99,11 +94,20 @@ export function buildMsgToolbar(m, childByParent = null) {
       ? `<button onclick="startForkEdit(${m.id})" title="Edit &amp; Fork">${ICON_FORK}</button>`
       : "";
 
+  // A user row resolves its target when the button is clicked, not when the row
+  // is painted. The reply it regenerates can be deleted or swiped to another
+  // branch without the row's own markup changing, and the reconciler then keeps
+  // the node as it stands -- a baked id would outlive the message it names.
+  const regenAction = isAssistant
+    ? m.id
+      ? `regenerate(${m.id})`
+      : `continueFromUser()`
+    : `regenerateFromUser(${m.id})`;
   const regenBtn = isGreeting
     ? ""
     : !canRegen
       ? `<button disabled>${ICON_REGEN}</button>`
-      : `<button onclick="${regenTargetId ? `regenerate(${regenTargetId})` : `continueFromUser()`}" title="Regenerate">${ICON_REGEN}</button>`;
+      : `<button onclick="${regenAction}" title="Regenerate">${ICON_REGEN}</button>`;
 
   const superRegenBtn =
     isAssistant && m.id && !isGreeting
@@ -121,7 +125,7 @@ export function buildMsgToolbar(m, childByParent = null) {
     (m.content || "").trim() &&
     S.settings?.local_ml_config?.prose_rewriter?.variant &&
     S.settings?.local_ml_enabled?.prose_rewriter !== false;
-  const proseRewriteTitle = m.has_writer_draft ? "Rewrite original Writer draft" : "Rewrite this message";
+  const proseRewriteTitle = m.has_writer_draft ? "Rewrite saved pre-rewriter draft" : "Rewrite this message";
   const proseRewriteBtn = canProseRewrite
     ? `<button class="msg-btn-prose-rewrite" onclick="rewriteMessageProse(${m.id})" title="${proseRewriteTitle}"${S.proseRewriteMsgId ? " disabled" : ""}>${ICON_PROSE_REWRITE}</button>`
     : "";
@@ -174,15 +178,18 @@ function renderUserAttachments(userAtts) {
   if (!userAtts || userAtts.length === 0) return "";
   const items = userAtts
     .map((att) => {
-      const b64 = att.b64 || att.data_b64 || "";
-      const mime = att.mime || att.mime_type || "image/jpeg";
-      const filename = att.filename || "image";
-      const size = att.size || 0;
+      // The API takes the filename and MIME the client sent, so both are
+      // untrusted and both land inside an attribute: escAttr, never esc. A
+      // filename that closes the attribute early would otherwise write an
+      // event handler onto the image.
+      const src = escAttr(attachmentDataUrl(att.mime || att.mime_type || "image/jpeg", att.b64 || att.data_b64 || ""));
+      const filename = escAttr(att.filename || "image");
+      const size = Number.isFinite(att.size) && att.size > 0 ? att.size : 0;
       return `
     <div class="attachment-item">
-      <img loading="lazy" decoding="async" src="data:${mime};base64,${b64}" alt="${esc(filename)}">
+      <img loading="lazy" decoding="async" src="${src}" alt="${filename}">
       <div class="attachment-info">
-        <div class="attachment-name">${esc(filename)}</div>
+        <div class="attachment-name">${filename}</div>
         <div class="attachment-size">${formatBytes(size)}</div>
       </div>
     </div>
@@ -282,114 +289,155 @@ export function ensureIndexInWindow(idx) {
   return false;
 }
 
-export function renderMessages(forceBottom = false) {
-  const ct = $("chat-messages");
-  let renderedMsgs = null;
-  ct.classList.add("measuring-render");
-  try {
-    preserveScrollDistance(
-      () => ct,
-      50,
-      () => {
-        let streamingEl = null;
-        let badgeEl = null;
-        if (S.isStreaming) {
-          streamingEl = S.streamingBodyEl?.closest(".message") ?? null;
-          badgeEl = document.getElementById("active-director-badge");
-        }
-        if (!S.activeConvId) {
-          ct.innerHTML =
-            '<div class="empty-state"><div class="icon" id="home-greeting-icon">📜</div><div id="home-greeting">Select a character to begin</div><div class="stats-grid" id="home-stats-grid"></div></div>';
-          renderHomeStats();
-        } else if (!S.messages.length) {
-          ct.innerHTML = S.groupCast
-            ? sceneEmptyStateHtml()
-            : '<div class="empty-state"><div class="icon">📜</div><div>Start writing to begin the scene</div></div>';
-        } else {
-          let msgs = S.messages;
-          if (S.isStreaming && S.streamCutoffIndex != null) {
-            msgs = S.messages.slice(0, S.streamCutoffIndex);
-          }
-          const start = Math.min(Math.max(S.renderWindowStart | 0, 0), msgs.length);
-          if (start > 0) msgs = msgs.slice(start);
-          renderedMsgs = msgs;
-          const childByParent = new Map();
-          for (const c of S.messages) {
-            if (c.role === "assistant" && c.parent_id != null && !childByParent.has(c.parent_id)) {
-              childByParent.set(c.parent_id, c);
-            }
-          }
-          ct.innerHTML = msgs
-            .map((m) => {
-              const isForkEditing = S.forkEditMsgId !== null && S.forkEditMsgId === m.id;
-              const isEditing =
-                (S.editingMsgId !== null && S.editingMsgId === m.id) ||
-                (!m.id && S.editingPendingUserMsg) ||
-                isForkEditing;
-              const bc = m.branch_count || 1;
-              const bi = m.branch_index || 0;
-              const branchHtml =
-                bc > 1
-                  ? `
-        <span class="swipe-nav">
-          <button onclick="event.stopPropagation();switchBranch(${m.prev_branch_id})" ${!m.prev_branch_id ? "disabled" : ""}>◀</button>
+// The branch pager. finalizeStreamingDiv grafts this onto the bubble it just
+// baked instead of repainting the list, so both paths build it from here.
+export function swipeNavHtml(m) {
+  const bc = m.branch_count || 1;
+  if (bc <= 1) return "";
+  const bi = m.branch_index || 0;
+  return `<span class="swipe-nav">
+          <button onclick="event.stopPropagation();switchBranch(${m.prev_branch_id})" ${!m.prev_branch_id ? "disabled" : ""} title="Previous branch" aria-label="Previous branch">${CHEVRON_LEFT_ICON}</button>
           <span class="swipe-counter">${bi + 1}/${bc}</span>
-          <button onclick="event.stopPropagation();switchBranch(${m.next_branch_id})" ${!m.next_branch_id ? "disabled" : ""}>▶</button>
-        </span>`
-                  : "";
-              const toolbar = isEditing ? "" : `<div class="msg-toolbar">${buildMsgToolbar(m, childByParent)}</div>`;
-              const taId = m.id ? `edit-textarea-${m.id}` : `edit-textarea-pending`;
-              const editActions = isForkEditing
-                ? `<button class="btn btn-sm" onclick="cancelForkEdit()">Cancel</button>
-            <button class="btn btn-sm btn-accent" onclick="saveForkEdit(${m.id})">Fork</button>`
-                : `<button class="btn btn-sm" onclick="${m.id ? `cancelEdit()` : `cancelEditPending()`}">Cancel</button>
-            <button class="btn btn-sm btn-accent" onclick="${m.id ? `saveEdit(${m.id},'${m.role}')` : `saveEditPending()`}">Save</button>`;
-              const body = isEditing
-                ? `
+          <button onclick="event.stopPropagation();switchBranch(${m.next_branch_id})" ${!m.next_branch_id ? "disabled" : ""} title="Next branch" aria-label="Next branch">${CHEVRON_RIGHT_ICON}</button>
+        </span>`;
+}
+
+function _messageHtml(m, avatars) {
+  const isForkEditing = S.forkEditMsgId !== null && S.forkEditMsgId === m.id;
+  const isEditing =
+    (S.editingMsgId !== null && S.editingMsgId === m.id) || (!m.id && S.editingPendingUserMsg) || isForkEditing;
+  const branchHtml = swipeNavHtml(m);
+  const toolbar = isEditing ? "" : `<div class="msg-toolbar">${buildMsgToolbar(m)}</div>`;
+  const taId = m.id ? `edit-textarea-${m.id}` : `edit-textarea-pending`;
+  const [cancelCall, commitCall, commitLabel] = isForkEditing
+    ? [`cancelForkEdit()`, `saveForkEdit(${m.id})`, "Fork"]
+    : m.id
+      ? [`cancelEdit()`, `saveEdit(${m.id},'${m.role}')`, "Save"]
+      : [`cancelEditPending()`, `saveEditPending()`, "Save"];
+  const editActions = `<button class="btn btn-sm" onclick="${cancelCall}">Cancel</button>
+            <button class="btn btn-sm btn-accent" onclick="${commitCall}">${commitLabel}</button>`;
+  const body = isEditing
+    ? `
         <div class="msg-edit-area">
           <textarea id="${taId}" rows="5">${esc(m.content)}</textarea>
           <div class="msg-edit-actions">
             ${editActions}
           </div>
         </div>`
-                : `<div class="msg-body">${
-                    S.pendingRefineDiff?.msgId && m.id === S.pendingRefineDiff.msgId && S.showEditorDiff
-                      ? formatProseWithDiff(S.pendingRefineDiff.ops)
-                      : formatProse(resolvePlaceholders(m.content))
-                  }</div>`;
-              const attachmentsHtml = renderUserAttachments(m.user_attachments);
-              const workflowArtifactsHtml = _renderWorkflowArtifacts(m);
-              const rejectionHtml = _renderWorkflowRejection(m);
-              const proposalsHtml = messageProposalsHtml(m);
-              const isProseRewriting = !!m.id && m.id === S.proseRewriteMsgId;
-              const rewritingHtml = isProseRewriting
-                ? `<span class="msg-rewriting"><span class="dot"></span>Rewriting prose…</span>`
-                : "";
-              return `<div class="message ${m.role}${isProseRewriting ? " prose-rewriting" : ""}" data-msg-id="${m.id}">
-        <div class="msg-role">${esc(speakerLabel(m))} ${branchHtml}${rewritingHtml}</div>
+    : `<div class="msg-body">${
+        S.pendingRefineDiff?.msgId && m.id === S.pendingRefineDiff.msgId && S.showEditorDiff
+          ? renderMessageDiffHtml(S.pendingRefineDiff.ops)
+          : renderMessageHtml(resolvePlaceholders(m.content))
+      }</div>`;
+  const attachmentsHtml = renderUserAttachments(m.user_attachments);
+  const workflowArtifactsHtml = _renderWorkflowArtifacts(m);
+  const rejectionHtml = _renderWorkflowRejection(m);
+  const proposalsHtml = messageProposalsHtml(m);
+  const isProseRewriting = !!m.id && m.id === S.proseRewriteMsgId;
+  const rewritingHtml = isProseRewriting
+    ? `<span class="msg-rewriting"><span class="dot"></span>Rewriting prose…</span>`
+    : "";
+  return `<div class="message ${m.role}${isProseRewriting ? " prose-rewriting" : ""}" data-msg-id="${m.id}">
+        ${avatars ? speakerAvatarCell(m) : ""}<div class="msg-role">${esc(speakerLabel(m))} ${branchHtml}${rewritingHtml}</div>
         ${body}${attachmentsHtml}${workflowArtifactsHtml}${rejectionHtml}${proposalsHtml}${toolbar}
       </div>`;
-            })
-            .join("");
-        }
-        if (badgeEl) ct.appendChild(badgeEl);
-        if (streamingEl && !S.hideStreamingBox && !S.hideUntilBaked) ct.appendChild(streamingEl);
-        renderTurnError(ct);
-      },
-      { forceBottom },
-    );
-  } finally {
-    for (const messageEl of ct.querySelectorAll(".message")) {
-      messageEl.style.containIntrinsicSize = `auto ${messageEl.offsetHeight}px`;
-    }
-    ct.classList.remove("measuring-render");
+}
+
+function syncStreamingAvatar(el, avatars) {
+  const cell = el.querySelector(":scope > .msg-avatar");
+  if (avatars && !cell) {
+    const msg = { role: "assistant", speaker_member_id: S.currentSpeaker?.member_id ?? null };
+    el.insertAdjacentHTML("afterbegin", speakerAvatarCell(msg));
+  } else if (!avatars && cell) {
+    cell.remove();
   }
+}
+
+// content-visibility hides an off-screen bubble's real height, so a node has to
+// be forced visible before it can be measured. Batch the whole set: add the
+// class to every node, read every height, then write. Interleaving a read and a
+// write per node costs one forced layout per message instead of one in total.
+function _measureIntrinsicSizes(nodes) {
+  if (!nodes.length) return;
+  for (const el of nodes) el.classList.add("msg-measuring");
+  const heights = nodes.map((el) => el.offsetHeight);
+  for (let i = 0; i < nodes.length; i++) {
+    // A render while the chat pane is hidden measures everything as 0. Leave the
+    // stylesheet's placeholder in place rather than pinning the bubble to zero.
+    if (heights[i] > 0) nodes[i].style.containIntrinsicSize = `auto ${heights[i]}px`;
+    nodes[i].classList.remove("msg-measuring");
+  }
+}
+
+export function renderMessages(forceBottom = false) {
+  const ct = $("chat-messages");
+  let renderedMsgs = null;
+  const avatars = S.showChatAvatars;
+  ct.dataset.avatars = avatars ? "on" : "off";
+  preserveScrollDistance(
+    () => ct,
+    50,
+    () => {
+      let streamingEl = null;
+      let badgeEl = null;
+      if (S.isStreaming) {
+        streamingEl = S.streamingBodyEl?.closest(".message") ?? null;
+        badgeEl = document.getElementById("active-director-badge");
+      }
+      if (!S.activeConvId) {
+        ct.innerHTML =
+          '<div class="empty-state"><div class="icon" id="home-greeting-icon">📜</div><div id="home-greeting">Select a character to begin</div><div class="stats-grid" id="home-stats-grid"></div></div>';
+        renderHomeStats();
+      } else if (!S.messages.length) {
+        ct.innerHTML = S.groupCast
+          ? sceneEmptyStateHtml()
+          : '<div class="empty-state"><div class="icon">📜</div><div>Start writing to begin the scene</div></div>';
+      } else {
+        let msgs = S.messages;
+        if (S.isStreaming && S.streamCutoffIndex != null) {
+          msgs = S.messages.slice(0, S.streamCutoffIndex);
+        }
+        const start = Math.min(Math.max(S.renderWindowStart | 0, 0), msgs.length);
+        if (start > 0) msgs = msgs.slice(start);
+        renderedMsgs = msgs;
+        // Reuse the bubbles whose markup did not change. A branch swipe or a
+        // mid-stream repaint then rebuilds only the rows that actually differ,
+        // instead of replaying the whole list's entrance animation and layout.
+        const fresh = reconcileChildren(
+          ct,
+          // An aborted turn can leave two id-less rows in the list (the pending user
+          // message and the unpersisted reply), so they key by position, not by role.
+          msgs.map((m, i) => ({ key: m.id ? `m${m.id}` : `p${i}`, html: _messageHtml(m, avatars) })),
+          "msg-swap",
+        );
+        // Seed the new bubbles' intrinsic sizes before the scroll math below
+        // reads scrollHeight, or a node that has never been rendered still
+        // counts as the 300px placeholder and the restore lands short.
+        _measureIntrinsicSizes(fresh);
+      }
+      if (badgeEl) ct.appendChild(badgeEl);
+      if (streamingEl && !S.hideStreamingBox && !S.hideUntilBaked) {
+        syncStreamingAvatar(streamingEl, avatars);
+        ct.appendChild(streamingEl);
+      }
+      renderTurnError(ct);
+    },
+    { forceBottom },
+  );
   if (!S.isStreaming) updateContextCounter();
   _refreshWorkflowViewportObserver();
   _segmentRenderedMessages(renderedMsgs);
 }
 
 export function _applyWorkflowTextSegments(bodyEl, msg) {
+  // Segmentation wraps every word of the message in its own span, so it is only
+  // worth paying for where something will use one. A *registered* text effect is
+  // not that: TTS registers karaoke at boot and may never play a clip, and until
+  // it does the spans are pure weight on every bubble on screen. Effects segment
+  // their own target when they start (workflow_text_effects.js). Click handlers
+  // are the exception — the affordance has to be painted before the click — so
+  // they still segment up front.
+  if (!S.workflowClickHandlers.length && bodyEl.dataset.segApplied !== "1") return;
   segmentBody(bodyEl);
   markClickable(bodyEl, msg);
 }
@@ -410,8 +458,18 @@ function _segmentRenderedMessages(renderedMsgs) {
   }
 }
 
+let _contextCounterTimer = null;
+
+// Every repaint asks for this, and the endpoint re-renders the whole prompt to
+// estimate it — a burst of swipes would otherwise queue one of the most
+// expensive requests in the app behind each click. Coalesce them; the counter
+// is a display, so only the last answer matters.
 export function updateContextCounter() {
-  fetchContextSize();
+  if (_contextCounterTimer) clearTimeout(_contextCounterTimer);
+  _contextCounterTimer = setTimeout(() => {
+    _contextCounterTimer = null;
+    fetchContextSize();
+  }, 250);
 }
 
 async function getContextSize(convId) {
@@ -456,7 +514,7 @@ export function renderContextSize() {
   const openAttr = S.contextSizeOpen ? " open" : "";
   el.outerHTML = `<details class="inspector-block ctx-section" id="inspector-context-size"${openAttr} ontoggle="S.contextSizeOpen=this.open;saveInspectorOpenStates()">
     <summary class="ctx-summary">
-      <span class="reasoning-summary-arrow">▶</span>
+      <span class="reasoning-summary-arrow">${CHEVRON_RIGHT_ICON}</span>
       <span class="ctx-total">~${total.toLocaleString()} tokens <span class="ctx-msgs">(${data.message_count} msgs)</span></span>
     </summary>
     <div class="ctx-rows">${rows}</div>

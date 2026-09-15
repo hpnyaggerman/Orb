@@ -24,13 +24,14 @@ from backend.analysis.detectors.slop_detector import (
     FlaggedSentence,
 )
 from backend.analysis.detectors.template_repetition import TemplateResult
+from backend.analysis.patching import apply_id_patches
 from backend.inference import (
-    EDITOR_RENUMBER_NOTICE,
     CachedBase,
     LLMClient,
-    enabled_schemas,
 )
 from backend.pipeline.passes.editor.editor import editor_pass
+from backend.pipeline.passes.editor.prompts import EDITOR_RENUMBER_NOTICE
+from backend.prompting.tool_catalog import enabled_schemas
 
 SETTINGS = {
     "model_name": "test-model",
@@ -402,3 +403,21 @@ async def test_non_thinking_mode_still_stops_quietly():
 
     assert len(seen) == 1
     assert events[-1]["draft"] == GUARDED_DRAFT.replace(GUARDED_CLOSER, "Nobody spoke.")
+
+
+async def test_patching_an_ellipsis_beat_does_not_strand_its_continuation():
+    # The reported failure: `a bit... more still than usual` is ONE sentence, and
+    # splitting at the ellipsis made its first half an addressable target. The
+    # model's replacement ends in a full stop, so patching the fragment left
+    # `. more still than usual.` -- a lowercase orphan -- in the saved reply.
+    draft = "Monika doesn't flinch. Her expression still open, although her emerald eyes seem a bit... more still than usual."
+    beat = "Her expression still open, although her emerald eyes seem a bit... more still than usual."
+
+    report = _make_report([beat])
+    targets = build_targets(report, draft)
+
+    assert [t.span for t in targets] == [beat]  # the whole beat, not the half before the ellipsis
+
+    patched, errors = apply_id_patches(draft, targets, [{"id": 1, "replace": "Her face stays open and inviting."}])
+    assert not errors
+    assert patched == "Monika doesn't flinch. Her face stays open and inviting."

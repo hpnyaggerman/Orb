@@ -16,8 +16,7 @@ cycle with ``backend/workflows/__init__.py``.
 
 from __future__ import annotations
 
-from ..contracts import ToolSpec
-from ..registry import Workflow
+from ..toolkit import ToolSpec, Workflow
 
 WORKFLOW_ID = "prose_format_llm"
 

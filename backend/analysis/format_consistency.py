@@ -4,12 +4,22 @@ from __future__ import annotations
 
 import re
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TypeVar
 
-from .text.text_segmentation import extract_block_spans, split_paragraphs
+from ..core.text_segmentation import PROTECTED_MARKUP_RE
+from .text.text_segmentation import (
+    CLOSE_QUOTES,
+    OPEN_QUOTES,
+    TOGGLE_QUOTES,
+    extract_block_spans,
+    extract_narration,
+    find_emphasis_spans,
+    find_quote_spans,
+    split_paragraphs,
+)
 
 __all__ = [
     "Dialogue",
@@ -17,7 +27,13 @@ __all__ = [
     "AxisStyle",
     "FormatDriftReport",
     "classify_axes",
+    "protected_runs",
+    "spoken_lines",
+    "narration_only",
     "baseline_axes",
+    "vote_axes",
+    "stable_label",
+    "skip_reasons",
     "normalize_format",
     "normalize_to_baseline",
 ]
@@ -35,7 +51,7 @@ class Narration(StrEnum):
     UNKNOWN = "unknown"
 
 
-_StyleT = TypeVar("_StyleT", Dialogue, Narration)
+_StyleT = TypeVar("_StyleT", bound=str)
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,8 +65,7 @@ class AxisStyle:
 
 @dataclass(slots=True)
 class FormatDriftReport:
-    """What the normalizer decided. ``changed`` is True only when the draft text
-    was actually rewritten."""
+    """The normalizer's result; ``changed`` means the draft was rewritten."""
 
     source: AxisStyle | None
     target: AxisStyle | None
@@ -58,7 +73,7 @@ class FormatDriftReport:
     note: str
 
     def transition(self) -> str:
-        """``source -> target`` axis labels for logging; ``?`` for an unknown end."""
+        """Return ``source -> target`` labels for logging."""
         src = self.source.label() if self.source else "?"
         tgt = self.target.label() if self.target else "?"
         return f"{src} -> {tgt}"
@@ -69,14 +84,17 @@ _NARR_LOW = 0.25  # <= this -> BARE
 
 
 def _emphasis_inner(raw: str) -> str:
-    """Strip the surrounding * / _ markers from an emphasis span's raw text."""
+    """Strip surrounding emphasis markers."""
     core = raw.strip()
     if len(core) >= 2 and core[0] in "*_" and core[-1] == core[0]:
         return core[1:-1].strip()
     return core.strip("*_ ").strip()
 
 
-_SENTENCE_END = ".!?…"
+# A clause can close on stylistic punctuation as well as a full stop: roleplay
+# greetings routinely end a line on "~", "♪" or a cut-off dash before an
+# action beat. Anything not listed here reads as mid-sentence italics.
+_SENTENCE_END = ".!?…~♪♥♡—–-)]"
 
 
 def _is_inline_emphasis(spans: list[tuple[str, int, int]], i: int, para: str) -> bool:
@@ -92,13 +110,10 @@ def _is_inline_emphasis(spans: list[tuple[str, int, int]], i: int, para: str) ->
     return left[-1] not in _SENTENCE_END
 
 
-_PROTECTED = re.compile(
-    r"```.*?```"  # fenced code (may span lines)
-    r"|\*{2,}[^\n]*?\*{2,}"  # **bold** / ***bold-italic*** (one line)
-    r"|_{2,}[^\n]*?_{2,}"  # __bold__ / ___bold-italic___ (one line)
-    r"|[\*_]{3,}",  # lone scene divider
-    re.DOTALL,
-)
+# Fenced code, bold runs and scene dividers are formatting, not RP markup. The
+# pattern lives in core so the markup classifier's input shaping
+# (`local_ml.markup_input`) hides exactly what this module hides.
+_PROTECTED = PROTECTED_MARKUP_RE
 
 
 def _split_protected_segments(text: str) -> list[tuple[bool, str]]:
@@ -125,17 +140,139 @@ def _strip_protected(text: str) -> str:
     return _PROTECTED.sub(" ", text)
 
 
+# Bare dialogue ("*she smiles* Hello") needs an action beat and unmarked text
+# without clear third-person narration or speech attribution.
+_THOUGHT_MARKERS = frozenset(
+    {
+        "think",
+        "thinks",
+        "thought",
+        "thinking",
+        "know",
+        "knows",
+        "knew",
+        "wonder",
+        "wonders",
+        "wondered",
+        "remember",
+        "remembers",
+        "remembered",
+        "realize",
+        "realizes",
+        "realized",
+        "believe",
+        "believes",
+        "believed",
+        "understand",
+        "understands",
+        "understood",
+        "suppose",
+        "supposes",
+        "guess",
+        "guesses",
+        "imagine",
+        "imagines",
+        "mean",
+        "means",
+        "meant",
+        "feel",
+        "feels",
+        "felt",
+        "want",
+        "wants",
+        "wanted",
+        "wish",
+        "wishes",
+        "wished",
+        "hope",
+        "hopes",
+        "hoped",
+        "love",
+        "loves",
+        "loved",
+        "hate",
+        "hates",
+        "hated",
+        "like",
+        "likes",
+        "liked",
+        "need",
+        "needs",
+        "needed",
+        "afraid",
+        "scared",
+        "maybe",
+        "perhaps",
+        "surely",
+        "must",
+        "should",
+        "why",
+    }
+)
+_BARE_NARRATION_MARKERS = frozenset(
+    {
+        "he",
+        "him",
+        "his",
+        "she",
+        "her",
+        "hers",
+        "himself",
+        "herself",
+        "they",
+        "them",
+        "their",
+        "theirs",
+        "said",
+        "says",
+        "asked",
+        "asks",
+        "replied",
+        "replies",
+        "answered",
+        "answers",
+        "murmured",
+        "murmurs",
+        "whispered",
+        "whispers",
+        "muttered",
+        "mutters",
+        "shouted",
+        "shouts",
+        "called",
+        "calls",
+        "added",
+        "adds",
+    }
+)
+
+_WORD = re.compile(r"[a-z']+")
+
+
+def _paragraph_spans(text: str) -> Iterator[tuple[str, list[tuple[str, int, int]]]]:
+    """Yield rewriteable paragraphs with their typed spans."""
+    for paragraph in split_paragraphs(_strip_protected(text)):
+        yield paragraph, extract_block_spans(paragraph)
+
+
+def _is_action_beat(beat: str) -> bool:
+    """Return whether block emphasis looks like a stage direction."""
+    words = _WORD.findall(beat.lower())
+    return len(words) >= 2 and _THOUGHT_MARKERS.isdisjoint(words)
+
+
 def classify_axes(text: str) -> AxisStyle:
     """Classify dialogue and narration markup by coverage."""
-    text = _strip_protected(text)
     speech_chars = 0
     block_emph_chars = 0
     bare_chars = 0
+    has_action_beat = False
+    bare_words: set[str] = set()
 
-    for para in split_paragraphs(text):
-        spans = extract_block_spans(para)
+    for para, spans in _paragraph_spans(text):
         for i, (typ, s, e) in enumerate(spans):
-            length = len(para[s:e].strip())
+            raw = para[s:e]
+            length = len(raw.strip())
             if length == 0:
                 continue
             if typ == "SPEECH":
@@ -144,13 +281,14 @@ def classify_axes(text: str) -> AxisStyle:
                 if _is_inline_emphasis(spans, i, para):
                     continue  # inline emphasis is orthogonal to both axes
                 block_emph_chars += length
+                has_action_beat = has_action_beat or _is_action_beat(_emphasis_inner(raw))
             else:  # NARRATION (bare)
                 bare_chars += length
+                bare_words.update(_WORD.findall(raw.lower()))
 
-    # Narration axis: of the non-dialogue prose, how much sits inside asterisks?
     narr_total = block_emph_chars + bare_chars
     if narr_total == 0:
-        narration = Narration.UNKNOWN  # no narration to judge (e.g. pure dialogue)
+        narration = Narration.UNKNOWN
     else:
         ratio = block_emph_chars / narr_total
         if ratio >= _NARR_HIGH:
@@ -164,13 +302,91 @@ def classify_axes(text: str) -> AxisStyle:
         dialogue = Dialogue.QUOTED
     elif narration == Narration.ASTERISK and bare_chars > 0:
         dialogue = Dialogue.BARE
+    elif bare_chars > 0 and has_action_beat and bare_words.isdisjoint(_BARE_NARRATION_MARKERS):
+        dialogue = Dialogue.BARE
+        narration = Narration.ASTERISK
     else:
         dialogue = Dialogue.UNKNOWN
 
     return AxisStyle(dialogue=dialogue, narration=narration)
 
 
-def _stable(values: list[_StyleT], unknown: _StyleT) -> _StyleT:
+_THOUGHT_ATTRIBUTION = re.compile(
+    r"\s*(?:I|[Hh]e|[Ss]he|[Tt]hey|[Ww]e|[Yy]ou|[Tt]he\s+[\w'-]+|[A-Z][\w'-]*)\s+"
+    r"(?:thinks?|thought|(?:tells?|told|says?|said|reminds?|reminded|asks?|asked)\s+"
+    r"(?:myself|himself|herself|themselves|ourselves|yourself))"
+    r"(?=\s*[,.;!?]|\s+(?:with|as|while|\w+ly)\b|\s*$)"
+)
+
+
+def _remove_attributed_thoughts(text: str) -> str:
+    def strip_segment(para: str) -> str:
+        spans = extract_block_spans(para)
+        cuts = [
+            (start, end)
+            for i, (typ, start, end) in enumerate(spans)
+            if typ == "EMPHASIS" and not _is_inline_emphasis(spans, i, para) and _THOUGHT_ATTRIBUTION.match(para[end:])
+        ]
+        for start, end in reversed(cuts):
+            para = para[:start] + " " + para[end:]
+        return para
+
+    return _map_prose(text, strip_segment)
+
+
+def _canonical_emphasis(text: str) -> str:
+    def normalize(segment: str) -> str:
+        for start, end in reversed(find_emphasis_spans(segment)):
+            # V2 recognizes asterisks more reliably. Exclude emoticons such as
+            # two occurrences of (⌐■_■), which can resemble an emphasis span.
+            if segment[start] == "_" and segment[start + 1].isalpha():
+                segment = segment[:start] + "*" + segment[start + 1 : end - 1] + "*" + segment[end:]
+        return segment
+
+    return _map_prose(text, normalize)
+
+
+def narration_only(text: str, dialogue: Dialogue) -> str:
+    """Return classifier narration, with speech removed and emphasis canonicalized."""
+    if dialogue != Dialogue.BARE:
+        return _canonical_emphasis(extract_narration(_remove_attributed_thoughts(text)))
+
+    narration: list[str] = []
+    for paragraph in split_paragraphs(text):
+        cleaned = _remove_attributed_thoughts(paragraph)
+        if cleaned != paragraph:
+            # A thought tag identifies surrounding prose as narration. Keep that
+            # context without changing how other paragraphs' bare speech is read.
+            narration.append(extract_narration(cleaned))
+            continue
+        for para, spans in _paragraph_spans(paragraph):
+            for i, (typ, start, end) in enumerate(spans):
+                if typ == "EMPHASIS" and not _is_inline_emphasis(spans, i, para):
+                    inner = _emphasis_inner(para[start:end])
+                    if inner:
+                        narration.append(inner)
+    return _canonical_emphasis(" ".join(narration))
+
+
+def protected_runs(text: str) -> list[str]:
+    """Return fenced code, bold markup, and scene-divider runs."""
+    return [m.group(0) for m in _PROTECTED.finditer(text)]
+
+
+def spoken_lines(text: str) -> list[str]:
+    """Return the contents of quoted spans with quotes and spacing normalized."""
+    lines: list[str] = []
+    for para, block in _paragraph_spans(text):
+        for typ, start, end in block:
+            if typ != "SPEECH":
+                continue
+            inner = " ".join(_strip_quotes(para[start:end]).split())
+            if inner:
+                lines.append(inner)
+    return lines
+
+
+def stable_label(values: list[_StyleT], unknown: _StyleT) -> _StyleT:
     """Return the stable majority value, or *unknown*."""
     confident = [v for v in values if v != unknown]
     if not confident:
@@ -181,28 +397,29 @@ def _stable(values: list[_StyleT], unknown: _StyleT) -> _StyleT:
     return unknown
 
 
-def baseline_axes(messages: list[str]) -> AxisStyle:
-    """Derive the target axes from recent assistant messages. Each axis is set
-    only when the window agrees on it; otherwise it stays UNKNOWN (not enforced)."""
-    styles = [classify_axes(m) for m in messages if m and m.strip()]
+def vote_axes(styles: Sequence[AxisStyle]) -> AxisStyle:
+    """Vote target axes from several messages' readings, each axis on its own."""
     return AxisStyle(
-        dialogue=_stable([s.dialogue for s in styles], Dialogue.UNKNOWN),
-        narration=_stable([s.narration for s in styles], Narration.UNKNOWN),
+        dialogue=stable_label([s.dialogue for s in styles], Dialogue.UNKNOWN),
+        narration=stable_label([s.narration for s in styles], Narration.UNKNOWN),
     )
+
+
+def baseline_axes(messages: list[str]) -> AxisStyle:
+    """Derive target axes from recent assistant messages."""
+    return vote_axes([classify_axes(m) for m in messages if m and m.strip()])
 
 
 _TERMINATORS = ".!?…,;:"
 
 
 def _role(spans: list[tuple[str, int, int]], i: int, src_dialogue: Dialogue, para: str) -> str:
-    """Map the block span at index *i* to its semantic role under the source
-    convention."""
+    """Map a span to its semantic role under the source convention."""
     typ = spans[i][0]
     if typ == "SPEECH":
         return "DIALOGUE"
     if typ == "EMPHASIS":
         return "EMPHASIS_INLINE" if _is_inline_emphasis(spans, i, para) else "NARRATION"
-    # bare NARRATION span
     if src_dialogue == Dialogue.BARE:
         return "DIALOGUE"  # asterisk convention: bare runs are spoken lines
     return "NARRATION"
@@ -280,7 +497,7 @@ def _rewrite_paragraph(
                 i += 1
                 continue
             if target_narration == Narration.ASTERISK and typ == "NARRATION":
-                run_end = _group_run(spans, i, src, "NARRATION", para)
+                run_end = _group_run(spans, i, src, "NARRATION", para, only_type="NARRATION")
                 out.append(_wrap_asterisks(para[s : spans[run_end][2]]))
                 i = run_end + 1
                 continue
@@ -290,12 +507,23 @@ def _rewrite_paragraph(
     return "".join(out)
 
 
-def _group_run(spans: list[tuple[str, int, int]], i: int, src: AxisStyle, role: str, para: str) -> int:
+def _group_run(
+    spans: list[tuple[str, int, int]],
+    i: int,
+    src: AxisStyle,
+    role: str,
+    para: str,
+    *,
+    only_type: str | None = None,
+) -> int:
     """Return the last span in the same-role run starting at *i*."""
     j = i
     while j + 1 < len(spans):
+        typ2 = spans[j + 1][0]
         r2 = _role(spans, j + 1, src.dialogue, para)
-        if r2 == role or r2 == "EMPHASIS_INLINE":
+        if r2 == "EMPHASIS_INLINE":
+            j += 1
+        elif r2 == role and (only_type is None or typ2 == only_type):
             j += 1
         else:
             break
@@ -318,15 +546,29 @@ def _governing_dialogue(src: AxisStyle, target: AxisStyle) -> Dialogue:
 
 def _rewrite(draft: str, src: AxisStyle, target: AxisStyle) -> str:
     """Rewrite a draft using an existing source classification."""
+    # Bare dialogue plus bare narration is ambiguous, so do not rewrite either axis.
+    if target.dialogue == Dialogue.BARE and target.narration == Narration.BARE:
+        return draft
+
     eff_dialogue = _governing_dialogue(src, target)
     eff_src = AxisStyle(dialogue=eff_dialogue, narration=src.narration)
 
     change_dialogue = (
         target.dialogue != Dialogue.UNKNOWN and eff_dialogue != Dialogue.UNKNOWN and target.dialogue != eff_dialogue
     )
-    change_narration = target.narration != Narration.UNKNOWN and src.narration != Narration.UNKNOWN
-
-    if change_narration and target.narration == Narration.ASTERISK and eff_dialogue != Dialogue.QUOTED:
+    # Unwrapping converts asterisk narration, so only a draft that reads ASTERISK is
+    # unwrapped. Whatever emphasis a bare or unknown draft keeps, the rewriter cannot
+    # tell a slip from an italic thought, a sound effect or a stressed word, and
+    # unwrapping those turns them into prose. A window that sets nothing in asterisks
+    # is no evidence either: most replies carry no thought at all. (Unwrapping such
+    # "stray narration" was tried: on held-out chat windows all 20 of its edits were
+    # judged harmful, 17 of them italic thoughts.)
+    # Wrapping is safe only when quoted dialogue identifies bare spans as narration.
+    if target.narration == Narration.BARE:
+        change_narration = src.narration == Narration.ASTERISK
+    elif target.narration == Narration.ASTERISK:
+        change_narration = eff_dialogue == Dialogue.QUOTED
+    else:
         change_narration = False
 
     if not (change_dialogue or change_narration):
@@ -338,14 +580,99 @@ def _rewrite(draft: str, src: AxisStyle, target: AxisStyle) -> str:
     return _map_prose(draft, lambda seg: _rewrite_segment(seg, eff_src, td, tn))
 
 
+# A stray curly apostrophe ("the dogs’ bowls", "runnin’") is a closing single quote
+# to the parser, and it closes nothing, so it cannot swap a parse.
+_QUOTE_MARKS = (OPEN_QUOTES | CLOSE_QUOTES | TOGGLE_QUOTES) - {"’"}
+
+
+def _quote_parse_unreliable(para: str) -> bool:
+    """Whether *para*'s quote parse is unsafe to rewrite on.
+
+    ``find_quote_spans`` pairs a straight quote with the NEXT one, so an unclosed
+    quote swaps speech and narration for the rest of its paragraph:
+    ``"Hello, she said. "Bye," he replied`` parses as the speech
+    ``"Hello, she said. "``. A quote mark outside every span, or a straight-quote
+    span that opens onto whitespace or closes after it, is that swap. No reading
+    of the draft makes such a paragraph safe to rewrite.
+    """
+    spans = find_quote_spans(para)
+    for i, ch in enumerate(para):
+        if ch not in _QUOTE_MARKS or any(a <= i < b for a, b in spans):
+            continue
+        if ch in TOGGLE_QUOTES and i > 0 and (para[i - 1].isdigit() or para[i - 1] == "\\"):
+            continue  # 5'10" or an escaped quote: the parser skips these too
+        return True
+    return any(para[a] in TOGGLE_QUOTES and b - a >= 3 and (para[a + 1].isspace() or para[b - 2].isspace()) for a, b in spans)
+
+
 def _rewrite_segment(text: str, src: AxisStyle, td: Dialogue | None, tn: Narration | None) -> str:
-    """Rewrite a non-protected segment paragraph by paragraph."""
-    pieces = re.split(r"(\n\s*\n)", text)
-    rebuilt = [
-        piece if (idx % 2 == 1 or not piece.strip()) else _rewrite_paragraph(piece, src, td, tn)
-        for idx, piece in enumerate(pieces)
-    ]
-    return "".join(rebuilt)
+    """Rewrite a non-protected segment paragraph by paragraph, leaving any
+    paragraph with an unreliable quote parse as written."""
+    return "".join(
+        piece if idx % 2 == 1 or not piece.strip() or _quote_parse_unreliable(piece) else _rewrite_paragraph(piece, src, td, tn)
+        for idx, piece in enumerate(re.split(r"(\n\s*\n)", text))
+    )
+
+
+# The action policy, skip-v1 (../RP-Markup-Classifier/src/policy.py): drafts that
+# no markup reading makes safe to rewrite, because the rewriter acts on the span
+# parser and the parser misreads them. Structure is not RP prose (metadata keys,
+# rules, headings, lists, tables, `Name: "..."` transcripts): a label or a rule
+# reads as a bare narration run. Emphasis the parser mis-pairs (a nested or
+# unclosed star, an emphasis span holding a quote) is cut into the wrong spans.
+# It reads the draft alone, with protected runs hidden: the rewriter never
+# touches those. On held-out chat windows it took harmful rewrites from 3.0% to
+# 0.5% behind the markup classifier and from 5.0% to 1.7% behind `classify_axes`.
+# The trainer froze those numbers against these exact rules: a change is skip-v2.
+_META = re.compile(r"(?m)^[ \t]*[A-Z][A-Z0-9 _/&-]{2,}:(?:[ \t]|$)")
+_RULE = re.compile(r"(?m)^[ \t]*(?:-{3,}|={3,}|—{2,})[ \t]*$")
+_HEADING = re.compile(r"(?m)^[ \t]*#{1,6}[ \t]+\S")
+_TABLE_ROW = re.compile(r"(?m)^[ \t]*\|.*\|[ \t]*$")
+# One to three capitalised words, a colon, then speech or a beat: `Cecilia: "..."`.
+# `She said: "..."` is prose: its second word is not capitalised.
+_SPEAKER = re.compile(r"(?m)^[ \t]*[A-Z][\w'’.-]*(?: [A-Z][\w'’.-]*){0,2}:[ \t]*[\"“*(]")
+_LIST_ITEM = re.compile(r"[ \t]*([-+•*]|\d{1,2}[.)])[ \t]+\S")
+# A markdown bullet star (`* item` after any hard line break) is never emphasis.
+_BULLET_STAR = re.compile(r"(?:^|(?<=[\n\v\f\r\x1c-\x1e\x85\u2028\u2029]))[ \t]*(\*)(?=[ \t])")
+
+
+def _list_items(text: str) -> int:
+    """Lines that open like a list item. A star that closes later on its line is a
+    sloppy beat (`* She waves. *`), not a bullet."""
+    return sum(
+        1 for line in text.splitlines() if (m := _LIST_ITEM.match(line)) and not (m.group(1) == "*" and "*" in line[m.end() :])
+    )
+
+
+def _has_stray_asterisk(text: str) -> bool:
+    """Whether a star sits outside every emphasis span and is not a bullet."""
+    paired = {i for a, b in find_emphasis_spans(text) for i in range(a, b)}
+    paired.update(m.start(1) for m in _BULLET_STAR.finditer(text))
+    return any(ch == "*" and i not in paired for i, ch in enumerate(text))
+
+
+def _quote_in_emphasis(text: str) -> bool:
+    """Whether an emphasis span holds a quote mark, which the parser cuts into
+    narration, speech and narration."""
+    return any(not _QUOTE_MARKS.isdisjoint(text[a:b]) for a, b in find_emphasis_spans(text))
+
+
+_SKIP_RULES: tuple[tuple[str, Callable[[str], object]], ...] = (
+    ("metadata", _META.search),
+    ("rule", _RULE.search),
+    ("heading", _HEADING.search),
+    ("list", lambda text: _list_items(text) >= 2),
+    ("table", lambda text: len(_TABLE_ROW.findall(text)) >= 2),
+    ("speaker-label", _SPEAKER.search),
+    ("stray-asterisk", _has_stray_asterisk),
+    ("quote-in-emphasis", _quote_in_emphasis),
+)
+
+
+def skip_reasons(draft: str) -> list[str]:
+    """Why *draft* must be left as written (skip-v1); empty when it may be rewritten."""
+    visible = _strip_protected(draft)
+    return [name for name, fires in _SKIP_RULES if fires(visible)]
 
 
 def normalize_to_baseline(
@@ -353,18 +680,31 @@ def normalize_to_baseline(
     baseline_messages: list[str] | None,
     *,
     enabled: bool,
+    target: AxisStyle | None = None,
+    source: AxisStyle | None = None,
 ) -> tuple[str, FormatDriftReport]:
-    """Normalize draft markup against recent assistant messages."""
+    """Normalize draft markup against recent assistant messages.
+
+    *target* and *source* default to the heuristic reading of the baseline and of
+    the draft; passing both lets another classifier decide the rewrite end to end.
+    Whichever reading decides, a draft ``skip_reasons`` flags is left as written,
+    and only a draft that reads ASTERISK loses its emphasis to a bare target.
+    """
     if not enabled:
         return draft, FormatDriftReport(None, None, False, "disabled")
     if not draft or not draft.strip() or not baseline_messages:
         return draft, FormatDriftReport(None, None, False, "no baseline")
 
-    target = baseline_axes(baseline_messages)
+    if target is None:
+        target = baseline_axes(baseline_messages)
     if target.dialogue == Dialogue.UNKNOWN and target.narration == Narration.UNKNOWN:
         return draft, FormatDriftReport(None, target, False, "baseline unstable")
 
-    source = classify_axes(draft)
+    if source is None:
+        source = classify_axes(draft)
+    skipped = skip_reasons(draft)
+    if skipped:
+        return draft, FormatDriftReport(source, target, False, f"skipped ({', '.join(skipped)})")
     new_text = _rewrite(draft, source, target)
     changed = new_text != draft
     note = "normalized" if changed else "already consistent"

@@ -39,18 +39,32 @@ LAYERS = {
     "validate.js": 0,
     "scroll_follow.js": 0,
     "text_segmentation.js": 0,
-    "sidebar_icons.js": 0,
+    "icons.js": 0,
     "drag_reorder.js": 0,
+    "dom_reconcile.js": 0,
+    # The Character Library's search + tag predicate. A leaf on purpose: the
+    # filter is the one piece of the browser worth testing directly, and
+    # library_browser.js drags in the whole L5 chat chain.
+    "library_filter.js": 0,
+    # The card-CSS policy: a tokenizer, an allowlist and the per-message scoper.
+    # A leaf so it can be tested without a DOM, which is the whole point of it
+    # being a string pass rather than a trip through the CSSOM.
+    "message_css.js": 0,
     # L1 state + shared pure helpers.
     "state.js": 1,
     "model_catalog.js": 1,
     "workflow_registry.js": 1,
     "utils.js": 1,
     "notify.js": 1,
+    # The browser half of prose rendering: DOMPurify, block layout and <style>
+    # scoping. Sits beside utils.js because it is what makes utils.js output
+    # safe to hand to innerHTML, and imports nothing above it.
+    "message_html.js": 1,
     # Pure render/state helpers for the Dynamic Worlds review surface; imports
     # only utils.js, so it sits alongside it rather than with the features.
     "world_proposals.js": 1,
     "group_cast.js": 1,
+    "library_dedupe_view.js": 1,
     # L2 services.
     "tabLock.js": 2,
     "audio_schedule.js": 2,
@@ -84,6 +98,8 @@ LAYERS = {
     "document_audit.js": 5,
     "library.js": 5,
     "library_browser.js": 5,
+    "library_manager.js": 5,
+    "library_dedupe.js": 5,
     "library_fragments.js": 5,
     "lorebooks.js": 5,
     "settings.js": 5,
@@ -110,12 +126,15 @@ ALLOWED_UPWARD: set[tuple[str, str]] = {
 }
 
 # ── 2. Ratchets (may only decrease) ──────────────────────────────────────────
-MAX_INLINE_ON = 263  # inline on*= handlers across frontend/ (js + index.html)
+MAX_INLINE_ON = 248  # inline on*= handlers across frontend/ (js + index.html)
 MAX_UNDERSCORE_IMPORTS = 10  # underscore-prefixed names imported cross-module
 
 # ── 4. Frozen ABI ────────────────────────────────────────────────────────────
-# workflow_api.js's complete export surface (ABI v3, additive-only). A rename or
-# removal fails; a genuinely new export is added here in the same commit.
+# workflow_api.js's complete export surface, additive-only. A rename or removal
+# fails; a genuinely new export is added here in the same commit -- and, because
+# that is a new revision of the plugin ABI, `WORKFLOW_API_VERSION` is bumped with
+# it. The check below reads that constant back so the number cannot drift from
+# the surface it describes.
 FROZEN_ABI = {
     "WORKFLOW_API_VERSION",
     # registrars
@@ -174,6 +193,7 @@ FROZEN_ABI = {
     "canMutate",
     "getWorkflowState",
     "setWorkflowState",
+    "localMlReady",
 }
 
 # ── Parsing helpers ──────────────────────────────────────────────────────────
@@ -267,6 +287,12 @@ def main() -> int:
             if n:
                 exports.add(n)
     exports.discard("")
+    version_decl = re.search(r"export\s+const\s+WORKFLOW_API_VERSION\s*=\s*(\d+)\s*;", api_text)
+    if version_decl is None:
+        errors.append("[abi] workflow_api.js does not declare WORKFLOW_API_VERSION")
+        abi_version = "?"
+    else:
+        abi_version = version_decl.group(1)
     missing = FROZEN_ABI - exports
     added = exports - FROZEN_ABI
     if missing:
@@ -279,7 +305,8 @@ def main() -> int:
     # Report.
     print(
         f"frontend layer check: {len(top_files)} modules, inline on*={inline} (max {MAX_INLINE_ON}), "
-        f"underscore imports={us} (max {MAX_UNDERSCORE_IMPORTS}), ABI exports={len(exports)}"
+        f"underscore imports={us} (max {MAX_UNDERSCORE_IMPORTS}), "
+        f"ABI v{abi_version} ({len(exports)} exports)"
     )
     if errors:
         print("\nFRONTEND LAYER CHECK FAILED:")

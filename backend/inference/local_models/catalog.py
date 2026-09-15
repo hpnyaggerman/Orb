@@ -48,6 +48,7 @@ class ModelSpec:
     revision: str  # pinned commit sha — a repo re-point can't swap the weights under us
     runtime: RuntimeKind = "llama_cpp"
     variants: tuple[ModelVariantSpec, ...] = ()
+    local_filename: str = ""  # versioned alias when upstream reuses an older artifact's basename
 
     @property
     def local_name(self) -> str:
@@ -61,7 +62,7 @@ class ModelSpec:
         variant name no spec claims is a file ``prune_stale`` deletes the next
         time anything downloads. ``test_local_models_catalog`` asserts both.
         """
-        return os.path.basename(self.filename)
+        return self.local_filename or os.path.basename(self.filename)
 
     def all_names(self) -> set[str]:
         """Every basename this spec puts under data/models/ — the prune claim."""
@@ -72,10 +73,10 @@ class ModelSpec:
 # share them and a half-updated pin is a silently different model. The two
 # lines version independently — upstream releases the sizes on their own
 # cadence, so a mismatched pair of version numbers here is not a typo.
-_PROSE_1_7B_REPO = "chartreuse-verte/prose-rewriter-1.7b-v1.5"
-_PROSE_1_7B_REV = "53d478919f8356dba81e543556f970a2545f5441"
-_PROSE_4B_REPO = "chartreuse-verte/prose-rewriter-4b-v1.4"
-_PROSE_4B_REV = "de46c5586d35bf5ed7543c6843ba9b048a0d06f0"
+_PROSE_1_7B_REPO = "chartreuse-verte/prose-rewriter-1.7b-v1.6"
+_PROSE_1_7B_REV = "3497f8966949420a9de68068d2fd262997138aa7"
+_PROSE_4B_REPO = "chartreuse-verte/prose-rewriter-4b-v1.6"
+_PROSE_4B_REV = "a92a6cbb4e7a8fe487cee5e2a2c3829020967713"
 
 MODELS: dict[str, ModelSpec] = {
     "autocomplete": ModelSpec(
@@ -97,19 +98,26 @@ MODELS: dict[str, ModelSpec] = {
         revision="9f8d0100e45c133e713283499e55105f61d29118",
     ),
     "pov_classifier": ModelSpec(
-        repo_id="chartreuse-verte/ettin-povtense-17m",
+        repo_id="chartreuse-verte/ettin-povtense-17m-v2",
         filename="gguf/povtense-17m-q8_0.gguf",
         size_mb=20,
-        revision="1245e55c47f9afc3d4938ef70f5228580228d899",
+        revision="bacd633b181b7efdfbb9ba668c8c530ba47ad8a0",
+        local_filename="povtense-17m-v2-q8_0.gguf",
+    ),
+    "markup_classifier": ModelSpec(
+        repo_id="chartreuse-verte/ettin-markup-17m",
+        filename="gguf/markup-17m-q8_0.gguf",
+        size_mb=20,
+        revision="758d5236405776dd801452a4954b047ba63775aa",
     ),
     # Not an in-process model: served by a child llama-server (see
-    # local_models/llama_server/, driven by features/prose_rewriter/).
+    # local_models/llama_server/, driven by the Prose Rewriter workflow host).
     # `filename`/`size_mb` name the default variant so the legacy single-file
     # paths keep working; the selector reads `variants`, and every basename
     # here must also be claimed by prune_stale.
     "prose_rewriter": ModelSpec(
         repo_id=_PROSE_4B_REPO,
-        filename="GGUF/prose-rewriter-4b-v1.4-Q8_0.gguf",
+        filename="GGUF/prose-rewriter-4b-v1.6-Q8_0.gguf",
         size_mb=4694,
         revision=_PROSE_4B_REV,
         runtime="llama_server",
@@ -119,7 +127,7 @@ MODELS: dict[str, ModelSpec] = {
                 label="1.7B · Q8_0",
                 detail="Fastest, good enough.",
                 repo_id=_PROSE_1_7B_REPO,
-                path="GGUF/prose-rewriter-1.7b-v1.5-Q8_0.gguf",
+                path="GGUF/prose-rewriter-1.7b-v1.6-Q8_0.gguf",
                 revision=_PROSE_1_7B_REV,
                 size_mb=2165,
             ),
@@ -128,7 +136,7 @@ MODELS: dict[str, ModelSpec] = {
                 label="4B · Q4_K_M",
                 detail="Medium quality.",
                 repo_id=_PROSE_4B_REPO,
-                path="GGUF/prose-rewriter-4b-v1.4-Q4_K_M.gguf",
+                path="GGUF/prose-rewriter-4b-v1.6-Q4_K_M.gguf",
                 revision=_PROSE_4B_REV,
                 size_mb=2716,
             ),
@@ -137,7 +145,7 @@ MODELS: dict[str, ModelSpec] = {
                 label="4B · Q8_0",
                 detail="Best quality, invents the least.",
                 repo_id=_PROSE_4B_REPO,
-                path="GGUF/prose-rewriter-4b-v1.4-Q8_0.gguf",
+                path="GGUF/prose-rewriter-4b-v1.6-Q8_0.gguf",
                 revision=_PROSE_4B_REV,
                 size_mb=4694,
             ),

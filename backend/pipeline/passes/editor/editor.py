@@ -18,6 +18,11 @@ from ....analysis import (
     run_audit,
 )
 from .feedback import FeedbackResult, feedback_step
+from .post_processing import (
+    PostProcessingResult,
+    post_processing_active,
+    post_processing_step,
+)
 
 if TYPE_CHECKING:
     from ....database.models import PhraseGroup
@@ -30,20 +35,24 @@ from ....analysis.patching import (
     apply_id_patches,
     filter_audit_report_to_text,
 )
-from ....core import AssistantToolMessage, ContentPart, WireMessage, extract_hyperparams
-from ....features.prose_rewriter import ProseRewriteConfig, rewrite_events
+from ....core import (
+    AssistantToolMessage,
+    ContentPart,
+    WireMessage,
+    extract_hyperparams,
+    reasoning_delta_event,
+)
 from ....inference import (
-    EDITOR_RENUMBER_NOTICE,
-    TOOLS,
     CachedBase,
     LLMClient,
     _KVCacheTracker,
-    build_editor_prompt,
-    build_feedback_tool,
     parse_tool_calls,
     reasoning_cfg,
 )
+from ....prompting.tool_catalog import require_tool
+from ....prompting.tool_schemas import build_feedback_tool
 from .length_guard import LengthGuard, evaluate_length_guard
+from .prompts import EDITOR_RENUMBER_NOTICE, build_editor_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -179,26 +188,10 @@ async def editor_pass(
     audit_context_msgs: list[str] | None = None,
     writer_user_msg: str | list[ContentPart] | None = None,
     feedback_fragments: Sequence[Mapping[str, Any]] | None = None,
-    prose_rewrite: ProseRewriteConfig | None = None,
+    post_processing_fragments: Sequence[Mapping[str, Any]] | None = None,
 ) -> AsyncIterator[dict]:
-    """Run local rewriting, the audit/edit loop, and feedback."""
+    """Run the audit/edit loop, post-processing fragments, and feedback."""
     t0 = time.monotonic()
-    # The writer's text, kept for the done-event fixup at the bottom: a rewrite
-    # the edit loop then found nothing to patch still has to be announced.
-    original_draft = draft
-
-    # BEFORE the audit, and that ordering is the whole point: the scanners must
-    # see the prose that will actually be persisted, and ``build_targets``
-    # anchors byte offsets into the exact string it was handed. Rewriting after
-    # the audit would leave every ``Target`` pointing into a draft that no
-    # longer exists — "a stale list silently edits the wrong sentences"
-    # (``analysis/patching.py``).
-    if prose_rewrite is not None and draft:
-        async for ev in rewrite_events(draft, prose_rewrite):
-            if ev["type"] == "rewritten":
-                draft = ev["draft"]  # everything below now reads the rewritten prose
-            else:  # draft_update / warning — both travel on as-is
-                yield ev
 
     edit_done: dict | None = None
     async for ev in _run_edit_loop(
@@ -217,15 +210,39 @@ async def editor_pass(
         writer_user_msg=writer_user_msg,
     ):
         if ev["type"] == "reasoning":
-            yield {"type": "reasoning", "delta": ev["delta"], "pass": "editor"}
+            yield {**reasoning_delta_event(ev), "pass": "editor"}
         elif ev["type"] == "draft_update":
             yield ev
         elif ev["type"] == "done":
             edit_done = ev
 
-    # _run_edit_loop yields exactly one done event. A None draft means "unchanged",
-    # so the feedback step reads the original text in that case.
-    final_text = (edit_done.get("draft") if edit_done else None) or draft
+    # _run_edit_loop yields exactly one done event. A None draft means
+    # "unchanged"; an empty string remains a meaningful post-processing result.
+    edited_draft = edit_done.get("draft") if edit_done else None
+    final_text = draft if edited_draft is None else edited_draft
+
+    post_processing_calls: list[dict] = []
+    if post_processing_fragments and not client.is_aborted:
+        async for ev in post_processing_step(
+            client,
+            base,
+            final_text,
+            settings,
+            post_processing_fragments,
+            writer_user_msg=(writer_user_msg if writer_user_msg is not None else effective_msg),
+            kv_tracker=kv_tracker,
+            reasoning_on=reasoning_on,
+            reasoning_prefill=reasoning_prefill,
+        ):
+            if ev["type"] == "reasoning":
+                yield {**reasoning_delta_event(ev), "pass": "editor"}
+            elif ev["type"] == "draft_update":
+                final_text = ev["draft"]
+                yield ev
+            elif ev["type"] == "done":
+                post: PostProcessingResult = ev["result"]
+                final_text = post.draft
+                post_processing_calls = post.tool_calls
 
     feedback_values: dict = {}
     if feedback_fragments and final_text and not client.is_aborted:
@@ -245,18 +262,15 @@ async def editor_pass(
             reasoning_prefill=reasoning_prefill,
         ):
             if ev["type"] == "reasoning":
-                yield {"type": "reasoning", "delta": ev["delta"], "pass": "editor"}
+                yield {**reasoning_delta_event(ev), "pass": "editor"}
             elif ev["type"] == "done":
                 fb: FeedbackResult = ev["result"]
                 feedback_values = fb.values
 
     done = dict(edit_done) if edit_done else {"type": "done", "draft": None, "debug": "", "elapsed": 0}
-    # `draft: None` means "unchanged" to editor_stage, which reads it against the
-    # WRITER's text. If the local rewriter changed the prose and the edit loop
-    # then had nothing to patch, that encoding would silently discard the
-    # rewrite — so name the absolute string instead.
-    if done.get("draft") is None and final_text != original_draft:
-        done["draft"] = final_text
+    done["draft"] = final_text if final_text != draft else None
+    if post_processing_calls:
+        done["tool_calls"] = [*(done.get("tool_calls") or []), *post_processing_calls]
     done["feedback"] = feedback_values
     # elapsed covers the whole editor pass, feedback sub-step included (the edit
     # loop's own elapsed only timed the loop).
@@ -271,6 +285,7 @@ async def editor_stage(
     settings: Mapping[str, Any],
     phrase_bank: list[PhraseGroup] | None,
     feedback_fragments: Sequence[Mapping[str, Any]],
+    post_processing_fragments: Sequence[Mapping[str, Any]] = (),
     editor_audit_msgs: list[str] | None,
     kv_tracker: _KVCacheTracker,
 ) -> AsyncIterator[dict]:
@@ -286,30 +301,26 @@ async def editor_stage(
     # surfaces only its user-facing note. It is gated on the feedback_enabled
     # setting AND at least one enabled feedback-type fragment, so the extra LLM
     # call is fully opt-in. Because feedback is folded in here, we still enter the
-    # editor pass (with editing disabled) when only feedback is wanted.
+    # editor pass (with audit/guard editing disabled) when only fragment work is wanted.
     feedback_needed = _feedback_active(settings, feedback_fragments, agent_on=cfg.agent_on)
-    # The local prose rewriter is a third reason to enter the pass, and it is
-    # NOT agent-gated — it runs on its own Local ML toggle. On a rewrite-only
-    # turn the edit loop reaches `AuditReport.clean()`, whose total_issues is 0
-    # by construction, trips the `<= 1` early exit, and makes no LLM call: the
-    # turn costs one local generation and nothing remote.
-    editor_will_run = bool(state.resp_text and (cfg.do_edit or feedback_needed or cfg.prose_rewrite is not None))
+    post_processing_needed = post_processing_active(post_processing_fragments, agent_on=cfg.agent_on)
+    editor_will_run = bool(state.resp_text and (cfg.do_edit or post_processing_needed or feedback_needed))
 
     # Authoritative writer→editor boundary. The frontend flips to its "refining"
     # phase on this event (not on a token-gap heuristic, which misfires when slow
-    # endpoints stall mid-stream), and only when an editor/feedback pass actually
+    # endpoints stall mid-stream), and only when an Editor sub-step actually
     # follows. Not emitted on the writer-abort path — afterStream clears the phase
     # there. Mirrors director_start/director_done.
     yield {"event": "writer_done", "data": {"editor_will_run": editor_will_run}}
 
     if editor_will_run:
         logger.info(
-            "Editor pass starting (draft=%d chars, phrase_bank=%d groups, edit=%s, feedback=%s, prose_rewrite=%s)",
+            "Editor pass starting (draft=%d chars, phrase_bank=%d groups, edit=%s, post_processing=%s, feedback=%s)",
             len(state.resp_text),
             len(phrase_bank) if phrase_bank else 0,
             cfg.do_edit,
+            post_processing_needed,
             feedback_needed,
-            cfg.prose_rewrite["variant_id"] if cfg.prose_rewrite else None,
         )
         # Errors are not caught here: an editor failure propagates and aborts the
         # turn, like the director/writer passes. _consume_pipeline's finally still
@@ -331,37 +342,24 @@ async def editor_stage(
             reasoning_prefill=cfg.editor_reasoning_prefill,
             audit_context_msgs=editor_audit_msgs,
             writer_user_msg=state.writer_content,
+            post_processing_fragments=post_processing_fragments if post_processing_needed else None,
             feedback_fragments=feedback_fragments if feedback_needed else None,
-            prose_rewrite=cfg.prose_rewrite,
         ):
             if event["type"] == "reasoning":
                 # Feedback reasoning is folded into the editor channel (it is an
                 # editor sub-step, so it shares the Editor reasoning toggle and box).
-                state.reasoning_editor += event["delta"]
                 yield {
                     "event": "reasoning",
-                    "data": {"pass": "editor", "delta": event["delta"]},
+                    "data": {"pass": "editor", "delta": state.add_reasoning("editor", event)},
                 }
             elif event["type"] == "draft_update":
                 # Cosmetic intermediate paint; the done→writer_rewrite block below
                 # stays the sole authority over state.resp_text.
                 yield {"event": "draft_update", "data": {"draft": event["draft"]}}
-            elif event["type"] == "warning":
-                # Non-terminal. editor_pass speaks the internal vocabulary and
-                # this stage is the only thing that speaks SSE, so the local
-                # rewriter's "didn't run" has to be translated here.
-                yield {
-                    "event": "warning",
-                    "data": {
-                        "headline": "Prose rewriter didn't run",
-                        "sentence": event["reason"],
-                        "kind": "local_ml",
-                    },
-                }
             elif event["type"] == "done":
                 state.latency += int(event.get("elapsed", 0) or 0)
                 refined_draft = event["draft"]
-                if refined_draft and refined_draft != state.resp_text:
+                if refined_draft is not None and refined_draft != state.resp_text:
                     state.resp_text = refined_draft
                     yield {
                         "event": "writer_rewrite",
@@ -380,10 +378,10 @@ async def editor_stage(
                     }
     else:
         logger.info(
-            "Editor pass skipped (do_edit=%s, feedback=%s, prose_rewrite=%s, draft=%d chars)",
+            "Editor pass skipped (do_edit=%s, post_processing=%s, feedback=%s, draft=%d chars)",
             cfg.do_edit,
+            post_processing_needed,
             feedback_needed,
-            cfg.prose_rewrite is not None,
             len(state.resp_text),
         )
 
@@ -534,7 +532,7 @@ async def _run_edit_loop(
             report.total_issues,
         )
         try:
-            hyperparams = extract_hyperparams(settings, defaults={"temperature": 0.25, "max_tokens": 8192})
+            hyperparams = extract_hyperparams(settings, lane="agent", token_floor=8192, defaults={"temperature": 0.25})
             reasoning_params = reasoning_cfg(reasoning_on, reasoning_prefill)
             if not reasoning_params["reasoning"].get("enabled", True):
                 logger.info("Editor iteration %d: reasoning disabled", iteration + 1)
@@ -804,7 +802,7 @@ def _pick_tool_choice(length_guard_triggered: bool, report: AuditReport, audit_e
     if length_guard_triggered or _rewrite_only(report, targets):
         return {"type": "function", "function": {"name": "editor_rewrite"}}
     if audit_enabled:
-        return TOOLS["editor_apply_patch"]["choice"]
+        return require_tool("editor_apply_patch")["choice"]
     return "auto"
 
 
