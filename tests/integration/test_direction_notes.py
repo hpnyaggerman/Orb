@@ -697,3 +697,127 @@ async def test_group_exchange_keeps_the_two_placements_on_their_own_replies(clie
     assert first == ["before-note"]
     assert last == ["after-note"]
     assert sorted(await _notes_on_active_path(conv["id"])) == ["after-note", "before-note"]
+
+
+def _recorder_request(llm_mock) -> str:
+    """Text of the most recent ``record_direction_note`` call's request message."""
+    for cap in reversed(llm_mock.captured):
+        if cap["pass"] == "direction_note":
+            content = cap["messages"][-1]["content"]
+            if isinstance(content, str):
+                return content
+            return "".join(p.get("text", "") for p in content if isinstance(p, dict))
+    return ""
+
+
+async def test_hidden_note_is_invisible_everywhere(client, db, llm_mock):
+    cid = "conv-dn-hidden"
+    await dbmod.create_conversation(cid, "dn", "Bot", "a scenario")
+    await _make_fragment()
+    await client.put(
+        "/api/settings",
+        json={
+            "enable_agent": True,
+            "direction_notes_record": True,
+            "enabled_tools": {"direct_scene": True},
+            "direction_notes_inject": "both",
+        },
+    )
+    direct_scene = [{"type": "function", "function": {"name": "direct_scene", "arguments": {"moods": []}}}]
+    llm_mock.enqueue_director(direct_scene)
+    llm_mock.enqueue_writer("She steps inside.")
+    llm_mock.enqueue_direction_note(_record_call(trajectory=_NOTE))
+    await _drain(handle_turn(cid, "hello"))
+
+    url = f"/api/conversations/{cid}/direction-notes"
+    listing = (await client.get(url)).json()
+    assert [n["enabled"] for n in listing] == [True]
+    fid = listing[0]["id"]
+    assert (await client.put(f"{url}/{fid}", json={"enabled": False})).status_code == 200
+
+    # Hidden: the director, the writer, and the recorder's already-recorded list all lose it.
+    second = "A second, visible fact."
+    llm_mock.enqueue_director(direct_scene)
+    llm_mock.enqueue_writer("She looks around.")
+    llm_mock.enqueue_direction_note(_record_call(trajectory=second))
+    events = await _drain(handle_turn(cid, "again"))
+    assert _NOTE not in _director_scene_prompt(llm_mock)
+    assert _NOTE not in await _injection_block(events)
+    request = _recorder_request(llm_mock)
+    assert _NOTE not in request
+    assert "Already recorded" not in request
+
+    # Shown again: the filter keys off the flag, not off history.
+    assert (await client.put(f"{url}/{fid}", json={"enabled": True})).status_code == 200
+    llm_mock.enqueue_director(direct_scene)
+    llm_mock.enqueue_writer("She waits.")
+    await _drain(handle_turn(cid, "once more"))
+    prompt = _director_scene_prompt(llm_mock)
+    assert _NOTE in prompt
+    assert second in prompt
+
+
+async def test_note_visibility_routes(client, db, llm_mock):
+    cid = "conv-dn-visibility"
+    await dbmod.create_conversation(cid, "dn", "Bot", "a scenario")
+    await _make_fragment()
+    await client.put("/api/settings", json={"enable_agent": True, "direction_notes_record": True})
+    llm_mock.enqueue_writer("A reply.")
+    llm_mock.enqueue_direction_note(_record_call(trajectory=_NOTE))
+    await _drain(handle_turn(cid, "hello"))
+    asst = await _last_assistant(cid)
+    url = f"/api/conversations/{cid}/direction-notes"
+
+    listing = (await client.get(url)).json()
+    assert [n["enabled"] for n in listing] == [True]
+    fid = listing[0]["id"]
+
+    assert (await client.put(f"{url}/{fid}", json={"enabled": False})).status_code == 200
+    assert [n["enabled"] for n in (await client.get(url)).json()] == [False]
+
+    # A content-only edit leaves the flag alone.
+    edited = await client.put(f"{url}/{fid}", json={"content": "edited"})
+    assert edited.status_code == 200
+    assert edited.json()["content"] == "edited"
+    assert [(n["content"], n["enabled"]) for n in (await client.get(url)).json()] == [("edited", False)]
+
+    assert (await client.put(f"{url}/{fid}", json={})).status_code == 400
+    assert (await client.put(f"{url}/{fid}", json={"content": "   "})).status_code == 400
+
+    log = (await client.get(f"/api/conversations/{cid}/messages/{asst['id']}/director-log")).json()
+    assert [n["enabled"] for n in log["direction_notes"]] == [False]
+
+    assert (await client.put(url, json={"enabled": True})).json() == {"updated": 1}
+    assert [n["enabled"] for n in (await client.get(url)).json()] == [True]
+    assert (await client.put(url, json={"enabled": False})).json() == {"updated": 1}
+    assert [n["enabled"] for n in (await client.get(url)).json()] == [False]
+
+    assert (await client.put("/api/conversations/no-such-conv/direction-notes", json={"enabled": True})).status_code == 404
+
+
+async def test_bulk_visibility_is_branch_scoped(client, db, llm_mock):
+    cid = "conv-dn-bulk-branch"
+    await dbmod.create_conversation(cid, "dn", "Bot", "a scenario")
+    await _make_fragment()
+    await client.put("/api/settings", json={"enable_agent": True, "direction_notes_record": True})
+    llm_mock.enqueue_writer("The door creaks open.")
+    llm_mock.enqueue_direction_note(_record_call(trajectory=_NOTE))
+    await _drain(handle_turn(cid, "hello"))
+    asst1 = await _last_assistant(cid)
+
+    # Regenerate onto a sibling branch that records its own note; only that branch is active.
+    note_b = "Branch B fact."
+    llm_mock.enqueue_writer("The door stays shut.")
+    llm_mock.enqueue_direction_note(_record_call(trajectory=note_b))
+    await _drain(handle_regenerate(cid, asst1["id"]))
+    asst2 = await _last_assistant(cid)
+    assert asst2["id"] != asst1["id"]
+    assert await _notes_on_active_path(cid) == [note_b]
+
+    url = f"/api/conversations/{cid}/direction-notes"
+    assert (await client.put(url, json={"enabled": False})).json() == {"updated": 1}
+    assert [r["enabled"] for r in await dbmod.get_direction_notes_for_message(asst1["id"])] == [1]
+    assert [r["enabled"] for r in await dbmod.get_direction_notes_for_message(asst2["id"])] == [0]
+
+    await dbmod.switch_to_branch(cid, asst1["id"])
+    assert [(n["content"], n["enabled"]) for n in (await client.get(url)).json()] == [(_NOTE, True)]

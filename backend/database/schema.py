@@ -383,7 +383,8 @@ CREATE TABLE IF NOT EXISTS direction_notes (
     interactive_fragment_id TEXT NOT NULL DEFAULT '',
     interactive_fragment_label TEXT NOT NULL DEFAULT '',
     content TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    enabled INTEGER NOT NULL DEFAULT 1
 );
 
 CREATE INDEX IF NOT EXISTS idx_dirnote_message ON direction_notes(message_id);

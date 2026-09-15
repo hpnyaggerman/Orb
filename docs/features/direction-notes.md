@@ -29,6 +29,19 @@ branch. The note button on an assistant reply lets you add a label and note text
 to that turn. Your notes are marked **You**. You can edit or delete notes from the
 panel.
 
+## Hide notes
+
+Each note in the Notes panel has a switch. Switching a note off hides it from the
+Agent everywhere: the Director, the Writer, and the list of already-recorded notes
+the recorder sees. The note stays on its branch and can be switched back on at any
+time. New notes start switched on.
+
+**Show all** and **Hide all** set the switch on every note of the active branch. To
+keep only a few notes, use **Hide all** and switch those few back on.
+
+The Inspector marks a hidden note with a **Hidden** badge in the turn it was
+recorded.
+
 ## Branches
 
 Regenerating or editing a reply creates a new branch. Notes on the old path do not

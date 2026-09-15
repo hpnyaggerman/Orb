@@ -67,7 +67,12 @@ class SettingsUpdate(BaseModel):
 
 
 class DirectionNoteUpdate(BaseModel):
-    content: str
+    content: str | None = None
+    enabled: bool | None = None
+
+
+class DirectionNotesBulkUpdate(BaseModel):
+    enabled: bool
 
 
 class DirectionNoteCreate(BaseModel):

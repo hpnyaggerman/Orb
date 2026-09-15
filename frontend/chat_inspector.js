@@ -380,8 +380,9 @@ export function buildDirectionNotesHtml(notes) {
     .map((n) => {
       const isUser = n.interactive_fragment_id === USER_NOTE_ID;
       const badge = isUser ? ` <span class="notes-row-user-badge">You</span>` : "";
+      const hiddenBadge = n.enabled === false ? ` <span class="notes-row-hidden-badge">Hidden</span>` : "";
       return `<div class="feedback-row${isUser ? " user-note" : ""}">
-        <span class="feedback-row-label">${esc(n.interactive_fragment_label || "")}${badge}</span>
+        <span class="feedback-row-label">${esc(n.interactive_fragment_label || "")}${badge}${hiddenBadge}</span>
         <div class="feedback-row-value">${esc(String(n.content))}</div>
       </div>`;
     })

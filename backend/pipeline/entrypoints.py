@@ -133,11 +133,14 @@ async def _load_direction_notes(ctx: PipelineContext, conversation_id: str, path
 
     Reconstructed from the messages on *path*, so the set is branch-correct; each note
     carries its authoring fragment's label and the turn it was recorded on (mapped from
-    the path). Always loaded (cheap, empty when no notes exist) -- whether the notes are
-    injected into the prompt or shown to the recording step is decided by their own gates
-    downstream, independent of one another.
+    the path). Always loaded (cheap, empty when no notes exist). Notes the user hid
+    (``enabled`` = 0) are dropped here, and this is the only place they are: every
+    model-facing consumer -- the Director prompt, the Writer's Scene Direction, and the
+    recording step's already-recorded list -- reads this list. Whether the surviving notes
+    are injected into the prompt or shown to the recording step is decided by their own
+    gates downstream, independent of one another.
     """
-    rows = await db.get_direction_notes_for_path(conversation_id, [m["id"] for m in path])
+    rows = [r for r in await db.get_direction_notes_for_path(conversation_id, [m["id"] for m in path]) if r["enabled"]]
     turn_by_message = {m["id"]: m.get("turn_index") for m in path}
     ctx.director["direction_notes"] = [
         {**db.direction_note_projection(r), "turn_index": turn_by_message.get(r["message_id"])} for r in rows

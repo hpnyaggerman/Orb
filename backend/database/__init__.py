@@ -65,6 +65,7 @@ from .queries.direction_notes import (
     direction_note_projection,
     get_direction_notes_for_message,
     get_direction_notes_for_path,
+    set_direction_notes_enabled_for_path,
     update_direction_note,
 )
 from .queries.director_state import get_director_state, update_director_state
@@ -387,6 +388,7 @@ __all__ = [
     "resolve_char_context",
     "set_active_leaf",
     "set_character_expressions",
+    "set_direction_notes_enabled_for_path",
     "set_local_ml_config",
     "set_local_ml_enabled",
     "set_public_profile",

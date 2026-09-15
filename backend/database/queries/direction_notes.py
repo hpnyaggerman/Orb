@@ -79,12 +79,33 @@ async def get_direction_notes_for_message(message_id: int) -> list[DirectionNote
         return [cast(DirectionNoteRow, dict(r)) for r in rows]
 
 
-async def update_direction_note(fid: int, content: str) -> DirectionNoteRow | None:
+async def update_direction_note(
+    fid: int, *, content: str | None = None, enabled: bool | None = None
+) -> DirectionNoteRow | None:
+    # A None argument binds NULL, which COALESCE resolves to the current column value, so
+    # one static statement serves content-only, flag-only, and combined updates.
     async with get_db() as db:
-        await db.execute("UPDATE direction_notes SET content = ? WHERE id = ?", (content, fid))
+        await db.execute(
+            "UPDATE direction_notes SET content = COALESCE(?, content), enabled = COALESCE(?, enabled) WHERE id = ?",
+            (content, None if enabled is None else int(enabled), fid),
+        )
         await db.commit()
         rows = list(await db.execute_fetchall("SELECT * FROM direction_notes WHERE id = ?", (fid,)))
         return cast(DirectionNoteRow, dict(rows[0])) if rows else None
+
+
+async def set_direction_notes_enabled_for_path(conversation_id: str, path_message_ids: Sequence[int], enabled: bool) -> int:
+    """Set the flag on every note anchored to a message on *path_message_ids*; notes on other branches are untouched."""
+    if not path_message_ids:
+        return 0
+    placeholders = ",".join("?" for _ in path_message_ids)
+    async with get_db() as db:
+        cur = await db.execute(
+            f"UPDATE direction_notes SET enabled = ? WHERE conversation_id = ? AND message_id IN ({placeholders})",  # nosec B608 -- placeholders are a fixed-count '?' list, values parameterised
+            (int(enabled), conversation_id, *path_message_ids),
+        )
+        await db.commit()
+        return cur.rowcount
 
 
 async def delete_direction_note(fid: int) -> bool:

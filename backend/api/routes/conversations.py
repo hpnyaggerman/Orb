@@ -60,6 +60,7 @@ from ...database import (
     resolve_cast,
     resolve_char_context,
     set_active_leaf,
+    set_direction_notes_enabled_for_path,
     set_workflow_message_state,
     sync_group_members,
     touch_conversation,
@@ -103,6 +104,7 @@ from ..schemas import (
     ConversationCreate,
     ConversationUpdate,
     DirectionNoteCreate,
+    DirectionNotesBulkUpdate,
     DirectionNoteUpdate,
     GroupRosterUpdate,
     SceneProfileDraft,
@@ -809,7 +811,9 @@ async def api_get_message_director_log(
     msg = await get_message_by_id(msg_id)
     if not msg or msg.get("conversation_id") != cid:
         raise HTTPException(status_code=404, detail="Message not found")
-    direction_notes = [direction_note_projection(r) for r in await get_direction_notes_for_message(msg_id)]
+    direction_notes = [
+        {**direction_note_projection(r), "enabled": bool(r["enabled"])} for r in await get_direction_notes_for_message(msg_id)
+    ]
     log = await get_director_log_for_message(msg_id)
     if not log:
         return {
@@ -846,6 +850,7 @@ async def api_list_direction_notes(cid: str, _conv: ConversationRow = Depends(re
             "id": r["id"],
             **direction_note_projection(r),
             "message_id": r["message_id"],
+            "enabled": bool(r["enabled"]),
             "turn_index": by_id[r["message_id"]]["turn_index"],
         }
         for r in rows
@@ -874,9 +879,24 @@ async def api_create_direction_note(cid: str, data: DirectionNoteCreate):
     return {"id": ids[0]}
 
 
+@router.put("/api/conversations/{cid}/direction-notes")
+async def api_set_direction_notes_enabled(
+    cid: str,
+    data: DirectionNotesBulkUpdate,
+    _conv: ConversationRow = Depends(require_conversation),  # noqa: B008
+):
+    messages = await get_messages(cid)
+    updated = await set_direction_notes_enabled_for_path(cid, [m["id"] for m in messages], data.enabled)
+    return {"updated": updated}
+
+
 @router.put("/api/conversations/{cid}/direction-notes/{fid}")
 async def api_update_direction_note(cid: str, fid: int, data: DirectionNoteUpdate):
-    updated = await update_direction_note(fid, data.content)
+    if data.content is None and data.enabled is None:
+        raise HTTPException(status_code=400, detail="Nothing to update")
+    if data.content is not None and not data.content.strip():
+        raise HTTPException(status_code=400, detail="Note content is empty")
+    updated = await update_direction_note(fid, content=data.content, enabled=data.enabled)
     if not updated:
         raise HTTPException(status_code=404, detail="Note not found")
     return updated

@@ -543,6 +543,7 @@ class DirectionNoteRow(TypedDict):
     interactive_fragment_label: str
     content: str
     created_at: str
+    enabled: int
 
 
 class DirectorStateRow(TypedDict):
