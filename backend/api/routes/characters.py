@@ -44,6 +44,7 @@ from ...features.cards import parsing as tavern_cards
 from ...inference import agent_lane_from_settings, client_from_settings
 from ..deps import (
     _normalise_lorebook_entry,
+    cached_image_response,
     lorebook_to_book,
     profile_draft_failures,
     project_lorebook_view,
@@ -76,11 +77,18 @@ async def api_create_character(data: CharacterCardCreate):
         entries = character_book.get("entries") or []
         if isinstance(entries, dict):
             entries = list(entries.values())
-        if entries:
+        book_ext = character_book.get("extensions")
+        orb_ext = book_ext.get("orb") if isinstance(book_ext, dict) else None
+        # An `orb` block marks a book Orb exported, so materialize it even with
+        # no entries: an empty Dynamic World is a real link whose lore the Agent
+        # writes during play. A foreign card's vestigial `entries: []` still
+        # imports nothing.
+        if entries or isinstance(orb_ext, dict):
             book_name = character_book.get("name") or card_data["name"]
             world = await get_world_by_name(book_name)
             if not world:
-                world = await create_world({"name": book_name})
+                dynamic = bool(orb_ext.get("dynamic_enabled")) if isinstance(orb_ext, dict) else False
+                world = await create_world({"name": book_name, "dynamic_enabled": dynamic})
                 for item in entries:
                     if isinstance(item, dict):
                         await create_lorebook_entry(world["id"], _normalise_lorebook_entry(item))
@@ -240,17 +248,7 @@ async def api_get_avatar(card_id: str, request: Request):
     if not result:
         raise HTTPException(status_code=404, detail="No avatar found")
     image_bytes, mime_type = result
-    # Avatars are large (a card's full PNG) and change only on edit. Let the
-    # browser cache them so the library grid doesn't re-download every avatar on
-    # each re-render/search/sort. The frontend already busts the URL (?v=) when
-    # an avatar is edited in-session; the ETag corrects cross-session edits once
-    # max-age lapses via a cheap conditional GET. usedforsecurity=False: this is
-    # a cache validator, not a security hash.
-    etag = '"' + hashlib.md5(image_bytes, usedforsecurity=False).hexdigest() + '"'
-    cache_headers = {"Cache-Control": "private, max-age=300", "ETag": etag}
-    if request.headers.get("if-none-match") == etag:
-        return Response(status_code=304, headers=cache_headers)
-    return Response(content=image_bytes, media_type=mime_type or "image/png", headers=cache_headers)
+    return cached_image_response(image_bytes, mime_type, request)
 
 
 @router.get("/api/characters/{card_id}/export")
@@ -287,7 +285,11 @@ async def api_export_character(card_id: str, world_view: Literal["authored", "ef
     if world_id and not export_card.get("character_book"):
         world = await get_world(world_id)
         entries = project_lorebook_view(await get_lorebook_entries(world_id), world_view)
-        export_card["character_book"] = lorebook_to_book(world["name"] if world else "", entries)
+        export_card["character_book"] = lorebook_to_book(
+            world["name"] if world else "",
+            entries,
+            dynamic_enabled=bool(world and world["dynamic_enabled"]),
+        )
 
     png_bytes = tavern_cards.to_png(export_card, avatar_bytes)
 
@@ -328,13 +330,7 @@ async def api_get_expression(card_id: str, label: str, request: Request):
     if not result:
         raise HTTPException(status_code=404, detail="No expression found")
     image_bytes, mime = result
-    # Same private-cache + conditional-GET block as avatars: expressions change
-    # only on re-upload, and the popup swaps src on label change without a buster.
-    etag = '"' + hashlib.md5(image_bytes, usedforsecurity=False).hexdigest() + '"'
-    cache_headers = {"Cache-Control": "private, max-age=300", "ETag": etag}
-    if request.headers.get("if-none-match") == etag:
-        return Response(status_code=304, headers=cache_headers)
-    return Response(content=image_bytes, media_type=mime or "image/png", headers=cache_headers)
+    return cached_image_response(image_bytes, mime, request)
 
 
 @router.delete("/api/characters/{card_id}/expressions")

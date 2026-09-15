@@ -1,6 +1,7 @@
 import { api } from "./api.js";
 import { loadConversations, refreshSceneCardFragments, resetChatUI, stashCardFragments } from "./chat.js";
 import { createChipInput } from "./chips.js";
+import { CLOSE_ICON, EDIT_ICON } from "./icons.js";
 import {
   initCardFragments,
   readCardFragments,
@@ -10,7 +11,6 @@ import {
 } from "./library_fragments.js";
 import { loadWorlds } from "./lorebooks.js";
 import { closeModal, showConfirmModal, showCropModal, showModal, switchTab } from "./modal.js";
-import { SIDEBAR_CLOSE_ICON, SIDEBAR_EDIT_ICON } from "./sidebar_icons.js";
 import { charactersView, S } from "./state.js";
 import {
   $,
@@ -33,10 +33,8 @@ export {
   randomizeInternet,
   searchInternet,
   setCharBrowserSort,
-  setCharBrowserView,
   setInternetSource,
   showCharacterBrowserModal,
-  toggleTagSelection,
 } from "./library_browser.js";
 export {
   deleteInteractiveFragment,
@@ -120,8 +118,8 @@ export function renderCharacters() {
         <div class="char-item-meta">${meta}</div>
       </div>
       <div class="char-item-actions">
-        <button class="char-action-edit" onclick="event.stopPropagation();showCharEditModal('${c.id}')" title="Edit character" aria-label="Edit ${escAttr(c.name)}">${SIDEBAR_EDIT_ICON}</button>
-        <button class="char-action-delete" onclick="event.stopPropagation();deleteCharacter('${c.id}')" title="Delete character" aria-label="Delete ${escAttr(c.name)}">${SIDEBAR_CLOSE_ICON}</button>
+        <button class="char-action-edit" onclick="event.stopPropagation();showCharEditModal('${c.id}')" title="Edit character" aria-label="Edit ${escAttr(c.name)}">${EDIT_ICON}</button>
+        <button class="char-action-delete" onclick="event.stopPropagation();deleteCharacter('${c.id}')" title="Delete character" aria-label="Delete ${escAttr(c.name)}">${CLOSE_ICON}</button>
       </div>
     </div>`;
     })
@@ -188,7 +186,7 @@ export function addAltGreeting(prefix) {
   if (!container) return;
   const row = document.createElement("div");
   row.className = "alt-greeting-row";
-  row.innerHTML = `<textarea rows="3"></textarea><button class="btn btn-sm" onclick="this.parentElement.remove()" title="Remove">✕</button>`;
+  row.innerHTML = `<textarea rows="3"></textarea><button class="btn btn-sm btn-square" onclick="this.parentElement.remove()" title="Remove" aria-label="Remove">${CLOSE_ICON}</button>`;
   container.appendChild(row);
 }
 
@@ -244,7 +242,7 @@ function charFormTabs(prefix, d, isEdit, worlds = []) {
       (g) => `
     <div class="alt-greeting-row">
       <textarea rows="3">${esc(g)}</textarea>
-      <button class="btn btn-sm" onclick="this.parentElement.remove()" title="Remove">✕</button>
+      <button class="btn btn-sm btn-square" onclick="this.parentElement.remove()" title="Remove" aria-label="Remove">${CLOSE_ICON}</button>
     </div>`,
     )
     .join("");
@@ -280,8 +278,8 @@ function charFormTabs(prefix, d, isEdit, worlds = []) {
         ? `
     <div id="${prefix}-tf" class="tab-content">
       <div class="card-frag-hint">
-        These fragments travel with the card (and its exported PNG). Merged into the Interactive and Mood fragment lists; 
-        global fragments win on ID collision.
+        These fragments are stored with the card and its exported PNG. On import, they are merged into the Interactive and Mood fragment lists.
+        If IDs collide, global fragments take precedence.
       </div>
       <div id="ce-card-frag-list"></div>
       <div class="card-frag-actions">
@@ -290,9 +288,6 @@ function charFormTabs(prefix, d, isEdit, worlds = []) {
       </div>
     </div>
     <div id="${prefix}-ta" class="tab-content">
-      <div class="field"><label>Group chat - Public cast appearance</label><textarea id="${prefix}-public-appearance" rows="2" placeholder="${escAttr(PUBLIC_APPEARANCE_PLACEHOLDER)}">${esc(publicProfile.appearance || "")}</textarea></div>
-      <div class="field"><label>Group chat - Public cast role</label><textarea id="${prefix}-public-role" rows="2" placeholder="${escAttr(PUBLIC_ROLE_PLACEHOLDER)}">${esc(publicProfile.role || "")}</textarea></div>
-      ${d.id ? `<button type="button" class="btn btn-sm" id="${prefix}-generate-public-profile">Generate editable draft</button><div class="modal-hint">Only these confirmed public fields enter a group's shared cast prompt.</div>` : ""}
       <div class="field">
         <label>Tags</label>
         <div class="lb-chip-wrap" id="${prefix}-tag-wrap" onclick="document.getElementById('${prefix}-tag-text')?.focus()"></div>
@@ -307,10 +302,14 @@ function charFormTabs(prefix, d, isEdit, worlds = []) {
       <div class="field"><label>Creator's Note</label><textarea id="${prefix}-creator-notes" rows="1">${esc(d.creator_notes || "")}</textarea></div>
       <div class="field"><label>System Prompt Override</label><textarea id="${prefix}-sysprompt" rows="1">${esc(d.system_prompt || "")}</textarea></div>
       <div class="field"><label>Post-History Instructions</label><textarea id="${prefix}-posthist" rows="1">${esc(d.post_history_instructions || "")}</textarea></div>
+      <div class="form-divider">Group chat</div>
+      <div class="field"><label>Public cast appearance</label><textarea id="${prefix}-public-appearance" rows="2" placeholder="${escAttr(PUBLIC_APPEARANCE_PLACEHOLDER)}">${esc(publicProfile.appearance || "")}</textarea></div>
+      <div class="field"><label>Public cast role</label><textarea id="${prefix}-public-role" rows="2" placeholder="${escAttr(PUBLIC_ROLE_PLACEHOLDER)}">${esc(publicProfile.role || "")}</textarea></div>
+      ${d.id ? `<button type="button" class="btn btn-sm" id="${prefix}-generate-public-profile">Generate editable draft</button><div class="modal-hint">Only these confirmed public fields enter a group's shared cast prompt.</div>` : ""}
       ${
         d.id
-          ? `<div class="field">
-        <label>Expression Images</label>
+          ? `<div class="form-divider">Expression images</div>
+      <div class="field">
         <input type="file" id="${prefix}-expr-zip" accept=".zip" style="display:none" onchange="handleExpressionsZip(this, '${d.id}')">
         <div>
           <button class="btn btn-sm" onclick="document.getElementById('${prefix}-expr-zip').click()">Upload .zip</button>

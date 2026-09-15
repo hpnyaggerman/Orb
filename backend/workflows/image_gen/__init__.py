@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from ..registry import Workflow
+from ..toolkit import Workflow
 from .config import (
     CONFIG_DEFAULTS,
     MAX_THINKING_TOKENS,

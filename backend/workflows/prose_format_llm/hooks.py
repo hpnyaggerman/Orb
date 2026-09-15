@@ -9,8 +9,12 @@ re-acquire it.
 
 from __future__ import annotations
 
-from ..contracts import EV_DRAFT_REPLACED
-from ..toolkit import get_workflow_config, get_workflow_state, set_workflow_state
+from ..toolkit import (
+    EV_DRAFT_REPLACED,
+    get_workflow_config,
+    get_workflow_state,
+    set_workflow_state,
+)
 from . import WORKFLOW_ID
 from .loop import make_enforce_fn, make_judge_fn, run_analyzer, run_enforcement_loop
 from .patching import apply_patches

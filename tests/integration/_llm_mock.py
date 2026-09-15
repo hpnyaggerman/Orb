@@ -9,7 +9,7 @@ waiting on a per-pass ``asyncio.Event`` so a test can hold a stream
 mid-pipeline while another concurrent action arrives.
 
 Pass dispatch is by ``tool_choice`` rather than a call counter, because
-director may be skipped entirely (gated behind ``has_pre_writer_tools``
+director may be skipped entirely (gated behind ``has_director_loop_tools``
 in the orchestrator) and editor iterates multiple times per turn -- a
 positional scheme would mis-bind queued responses.
 """
@@ -25,10 +25,16 @@ from typing import Any
 from backend.inference import AbortToken, LLMClient
 
 _EDITOR_FUNCTION_NAMES = {"editor_apply_patch", "editor_rewrite"}
+_POST_PROCESSING_FUNCTION_NAMES = {"editor_search_replace"}
 _DIRECTOR_FUNCTION_NAMES = {"direct_scene"}
 _FEEDBACK_FUNCTION_NAMES = {"give_feedback"}
 _DIRECTION_NOTE_FUNCTION_NAMES = {"record_direction_note"}
 _WORLD_CHANGE_FUNCTION_NAMES = {"propose_world_changes"}
+# The library auto-tagger. Named here rather than left to the "workflow"
+# catch-all below because that branch is also the one *exempted* from the
+# tools-blob check — falling into it would mislabel the pass and under-check
+# it at the same time.
+_AUTO_TAG_FUNCTION_NAMES = {"assign_character_tags"}
 
 
 def _validate_tool_calls(tool_calls: Any) -> None:
@@ -85,6 +91,8 @@ def _pass_from_tool_choice(tool_choice: Any) -> str:
         name = tool_choice.get("function", {}).get("name")
         if name in _EDITOR_FUNCTION_NAMES:
             return "editor"
+        if name in _POST_PROCESSING_FUNCTION_NAMES:
+            return "post_processing"
         if name in _DIRECTOR_FUNCTION_NAMES:
             return "director"
         if name in _FEEDBACK_FUNCTION_NAMES:
@@ -93,6 +101,8 @@ def _pass_from_tool_choice(tool_choice: Any) -> str:
             return "direction_note"
         if name in _WORLD_CHANGE_FUNCTION_NAMES:
             return "world_change"
+        if name in _AUTO_TAG_FUNCTION_NAMES:
+            return "auto_tag"
         # Any other forced function name belongs to a workflow tool: the
         # toolkit's forced_tool_call helper passes the same dict shape via
         # TOOLS[<wid_registered_name>]["choice"], but the name is not one of
@@ -128,9 +138,11 @@ class FakeLLMClient:
             "director": [],
             "writer": [],
             "editor": [],
+            "post_processing": [],
             "feedback": [],
             "direction_note": [],
             "world_change": [],
+            "auto_tag": [],
             "workflow": [],
         }
         # Raw text-completion queue (complete_raw, document text mode) — separate
@@ -139,6 +151,8 @@ class FakeLLMClient:
         # {"content": str, "probs": list} so a test can attach per-token probs.
         self._raw_queue: list[dict] = []
         self.raw_calls: list[dict] = []
+        # Queued reasoning, FIFO by pass.
+        self._reasoning: dict[str, list[str]] = {}
         # render_prompt captures (doc-mode text+assisted patch re-render).
         self.render_calls: list[dict] = []
         self.completion_mode = "chat"
@@ -146,9 +160,11 @@ class FakeLLMClient:
             "director": [],
             "writer": [],
             "editor": [],
+            "post_processing": [],
             "feedback": [],
             "direction_note": [],
             "world_change": [],
+            "auto_tag": [],
             "workflow": [],
         }
         # Mirror LLMClient: the turn's clients share one abort token, so an
@@ -200,6 +216,11 @@ class FakeLLMClient:
         _validate_tool_calls(tool_calls)
         self._queues["feedback"].append({"tool_calls": tool_calls})
 
+    def enqueue_post_processing(self, tool_calls: list[dict]) -> None:
+        """Queue one fragment's forced ``editor_search_replace`` response."""
+        _validate_tool_calls(tool_calls)
+        self._queues["post_processing"].append({"tool_calls": tool_calls})
+
     def enqueue_direction_note(self, tool_calls: list[dict]) -> None:
         """Queue a director-notes response (the ``record_direction_note`` forced call)."""
         _validate_tool_calls(tool_calls)
@@ -210,8 +231,17 @@ class FakeLLMClient:
         _validate_tool_calls(tool_calls)
         self._queues["world_change"].append({"tool_calls": tool_calls})
 
+    def enqueue_auto_tag(self, tool_calls: list[dict]) -> None:
+        """Queue a library auto-tag response (the ``assign_character_tags`` forced call)."""
+        _validate_tool_calls(tool_calls)
+        self._queues["auto_tag"].append({"tool_calls": tool_calls})
+
     def enqueue_workflow(self, message: dict) -> None:
         self._queues["workflow"].append({"message": message})
+
+    def enqueue_reasoning(self, pass_name: str, text: str) -> None:
+        """Queue reasoning for the next call of *pass_name*."""
+        self._reasoning.setdefault(pass_name, []).append(text)
 
     def enqueue_raw(self, text: str, probs: list[dict] | None = None) -> None:
         """Queue a raw text-completion response (``complete_raw``, doc text mode).
@@ -279,6 +309,15 @@ class FakeLLMClient:
         if self.abort_token.is_aborted:
             return
 
+        thoughts = self._reasoning.get(pass_name)
+        if thoughts:
+            # Split into two deltas to exercise intra-call streaming.
+            text = thoughts.pop(0)
+            head, tail = text[: len(text) // 2], text[len(text) // 2 :]
+            for delta in (head, tail):
+                if delta:
+                    yield {"type": "reasoning", "delta": delta}
+
         if pass_name == "writer":
             payload = self._queues["writer"].pop(0) if self._queues["writer"] else {"content": ""}
             text = payload.get("content", "")
@@ -302,8 +341,8 @@ class FakeLLMClient:
             yield {"type": "done", "message": payload.get("message", {})}
             return
 
-        if pass_name == "feedback":
-            payload = self._queues["feedback"].pop(0) if self._queues["feedback"] else {"tool_calls": []}
+        if pass_name in ("feedback", "post_processing"):
+            payload = self._queues[pass_name].pop(0) if self._queues[pass_name] else {"tool_calls": []}
             yield {
                 "type": "done",
                 "message": {
@@ -314,7 +353,7 @@ class FakeLLMClient:
             }
             return
 
-        if pass_name in ("direction_note", "world_change"):
+        if pass_name in ("direction_note", "world_change", "auto_tag"):
             payload = self._queues[pass_name].pop(0) if self._queues[pass_name] else {"tool_calls": []}
             yield {
                 "type": "done",
@@ -336,7 +375,7 @@ class FakeLLMClient:
             },
         }
 
-    async def render_prompt(self, messages, *, prefill=None, reasoning=False) -> str:
+    async def render_prompt(self, messages, *, prefill=None, reasoning=False, fmt=None) -> str:
         """Deterministic /apply-template stand-in (doc-mode text+assisted patch).
 
         Captures the render inputs and returns a marker string so tests can
@@ -370,6 +409,13 @@ def _wire(obj: Any) -> str:
     return json.dumps(obj, separators=(",", ":"), ensure_ascii=False)
 
 
+# Passes that issue one call per item over a shared prefix, rather than one
+# call per conversation turn. See the grouping note in
+# ``verify_kv_prefix_invariants``. Add a pass here only when its system message
+# and tools blob are meant to be constant for the whole batch.
+_BATCH_PASSES = {"auto_tag"}
+
+
 def verify_kv_prefix_invariants(captured: list[dict]) -> list[str]:
     """Cross-call KV-cache invariants over every chat ``complete()`` call a
     test made. Returns human-readable violations; empty list means clean.
@@ -398,6 +444,18 @@ def verify_kv_prefix_invariants(captured: list[dict]) -> list[str]:
     diverges deliberately (persona/settings switch mid-conversation — a
     user-driven cache invalidation) opts out with
     ``@pytest.mark.kv_divergence_expected``.
+
+    **Batch lanes** (``_BATCH_PASSES``) are grouped differently, because that
+    identity rule is blind to them. A batch pass sends one call per item with
+    the item in ``messages[1]``, so N calls land in N groups of one and every
+    check above is skipped — precisely the "new call site nobody registered"
+    failure this function exists to catch. Those passes group by
+    ``(endpoint, model, pass)`` instead: the whole point of such a lane is that
+    the system message and the tools blob are constant across the batch while
+    only the user message moves, which is exactly what the two checks assert.
+    An allowlist rather than a blanket rule, because a genuinely per-item call
+    site may legitimately vary its system message (``sheet_update`` builds one
+    per cast member).
     """
     groups: dict[tuple[str, str, str], list[dict]] = {}
     for call in captured:
@@ -407,7 +465,11 @@ def verify_kv_prefix_invariants(captured: list[dict]) -> list[str]:
         # Lane = (server, model): dual-model runs writer and agent on different
         # servers with independent KV caches, and both auto-provisioned model
         # configs may share a name — the endpoint is what separates the lanes.
-        key = (call.get("endpoint", ""), call.get("model", ""), _wire(msgs[1]))
+        # The third element is the group's identity within that lane: a
+        # conversation for a chat pass, the pass itself for a batch lane.
+        pass_name = call.get("pass", "")
+        identity = f"batch:{pass_name}" if pass_name in _BATCH_PASSES else _wire(msgs[1])
+        key = (call.get("endpoint", ""), call.get("model", ""), identity)
         groups.setdefault(key, []).append(call)
 
     violations: list[str] = []

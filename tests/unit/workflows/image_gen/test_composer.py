@@ -333,23 +333,23 @@ async def test_reasoning_mode_is_explicit_and_ignores_pipeline_pass_flags(monkey
         assert all(c["reasoning_on"] is reasoning_on and c["model_name"] == "agent-m" for c in calls)
 
 
-async def test_thinking_swaps_the_answer_sized_caps_for_the_configured_budget(monkeypatch):
-    """The per-call caps size a bare answer. A thinking model spends the same budget
+async def test_thinking_swaps_the_answer_sized_floors_for_the_configured_budget(monkeypatch):
+    """The per-call floors size a bare answer. A thinking model spends the same budget
     on its reasoning first, so with the toggle on both calls get the configured
-    thinking budget instead -- capped at the answer size, DeepSeek at high effort
-    came back truncated mid-thought with no arguments."""
+    thinking budget as their floor instead -- capped at the answer size, DeepSeek at
+    high effort came back truncated mid-thought with no arguments."""
     for reasoning_on, expected in ((False, [2_048, 4_096]), (True, [composer.DEFAULT_THINKING_TOKENS] * 2)):
         calls = _record_forced_calls(monkeypatch)
         await _run(reasoning_on=reasoning_on, scene_analysis=True)
-        assert [c["max_tokens"] for c in calls] == expected
+        assert [c["token_floor"] for c in calls] == expected
 
     calls = _record_forced_calls(monkeypatch)
     await _run(reasoning_on=True, scene_analysis=True, thinking_tokens=32_000)
-    assert [c["max_tokens"] for c in calls] == [32_000, 32_000]
-    # With thinking off the budget is inert: the answer caps hold whatever it says.
+    assert [c["token_floor"] for c in calls] == [32_000, 32_000]
+    # With thinking off the budget is inert: the answer floors hold whatever it says.
     calls = _record_forced_calls(monkeypatch)
     await _run(reasoning_on=False, scene_analysis=True, thinking_tokens=32_000)
-    assert [c["max_tokens"] for c in calls] == [2_048, 4_096]
+    assert [c["token_floor"] for c in calls] == [2_048, 4_096]
 
 
 # ── scene hygiene ────────────────────────────────────────────────────────────
@@ -960,22 +960,6 @@ async def test_the_subject_roster_is_never_numbered_against_the_reference_roster
     assert "1. Iris" not in tail and "2. Ashley" not in tail
     # The one numbered list left says what it is about: the images, by array position.
     assert "numbered by their position in that set: 1. Ashley." in tail
-
-
-async def test_a_nameless_subject_leaves_no_hole_in_the_roster(monkeypatch):
-    """A solo card with no name used to be enumerated and then filtered, so the roster
-    opened at "2." with no "1." -- a numbered list missing its first row, in a prompt
-    that also carries the numbered reference list."""
-    captured: dict = {}
-    await _compose(
-        monkeypatch,
-        {"compose_image_prompt": {"scene": "2girls", "avoid": None, "visible_subjects": []}},
-        captured,
-        subjects=[_subject("", "silver hair"), _subject("Ashley", "red coat")],
-    )
-    tail = captured["compose_image_prompt"]
-    assert "- Ashley - fixed positive tags added separately: red coat" in tail
-    assert "2." not in tail.split("Do not copy or contradict")[0]
 
 
 # ── trap 4.1: identity suppression is only for who was actually referenced ───

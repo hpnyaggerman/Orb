@@ -21,9 +21,9 @@ import {
 } from "./chat.js";
 import { closeModal, setModalCloseGuard, showModal } from "./modal.js";
 import { sseEvents, streamPost } from "./sse.js";
-import { effectiveWorkflowEnabled, S, subscribe } from "./state.js";
+import { effectiveWorkflowEnabled, localMlReady, S, subscribe } from "./state.js";
 import { broadcastWorkflowMutation } from "./tabLock.js";
-import { convUrl, esc, escAttr, notifyError, toast } from "./utils.js";
+import { convUrl, esc, escAttr, fromMessageBody, notifyError, toast } from "./utils.js";
 import {
   registerClickHandler,
   registerTextEffect,
@@ -38,7 +38,7 @@ import { clearTextEffect, startTextEffect } from "./workflow_text_effects.js";
 
 // Workflow modules use this facade for registration, requests, and playback.
 
-export const WORKFLOW_API_VERSION = 3;
+export const WORKFLOW_API_VERSION = 4;
 
 export {
   api,
@@ -51,6 +51,7 @@ export {
   effectiveWorkflowEnabled,
   esc,
   escAttr,
+  localMlReady,
   messageSegments,
   notifyError,
   onChannel,
@@ -103,7 +104,9 @@ let _actionsWired = false;
 
 function _dispatchAction(e, type) {
   const el = e.target.closest?.("[data-wf-action]");
-  if (!el) return;
+  // A workflow's own surfaces (widgets, panels, message buttons) all sit outside
+  // the bubble. Inside it is model markup, which never gets to name an action.
+  if (!el || fromMessageBody(el)) return;
   if ((el.dataset.wfOn || "click") !== type) return;
   const fn = _actions.get(el.dataset.wfAction);
   if (!fn) return;

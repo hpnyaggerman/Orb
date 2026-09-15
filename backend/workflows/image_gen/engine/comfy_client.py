@@ -8,6 +8,7 @@ import time
 import uuid
 from collections.abc import Mapping
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -18,6 +19,9 @@ from .image_bytes import MAX_IMAGE_BYTES, image_mime
 
 REFERENCE_SUBFOLDER = "orb"
 
+# How long to wait between /history polls. Named so tests can shorten it;
+# a hardcoded sleep made the queue-progress test wait in real time.
+_POLL_INTERVAL = 1.0
 _OBJECT_INFO_TTL = 60.0
 _OBJECT_INFO_MAX_ENTRIES = 8
 _object_info_cache: dict[str, tuple[float, dict]] = {}
@@ -123,6 +127,22 @@ class ComfyClient:
             _object_info_cache.clear()
         _object_info_cache[self.api_url] = (now + _OBJECT_INFO_TTL, result)
         return result
+
+    async def node_info(self, class_type: str) -> dict:
+        """One node class's declaration, or `{}` where the server does not know it.
+
+        Served out of the full catalogue while that is still cached, and fetched on
+        its own otherwise: `/object_info` is tens of megabytes, which is not a price
+        a render should pay to read one widget's declared bounds.
+        """
+        cached = _object_info_cache.get(self.api_url)
+        if cached and cached[0] > time.monotonic():
+            entry = cached[1].get(class_type)
+            if isinstance(entry, Mapping):
+                return dict(entry)
+        result = await self._json("GET", f"/object_info/{quote(class_type, safe='')}")
+        entry = result.get(class_type) if isinstance(result, Mapping) else None
+        return dict(entry) if isinstance(entry, Mapping) else {}
 
     async def upload_image(
         self,
@@ -239,7 +259,7 @@ class ComfyClient:
                     await emit(progress, "rendering", {"number": number, "ahead": ahead})
                 elif ahead != previous:
                     await emit(progress, "queued", {"number": number, "ahead": ahead})
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(_POLL_INTERVAL)
         if record is None:
             raise ImageGenerationError("Image generation timed out")
         outputs = record.get("outputs")

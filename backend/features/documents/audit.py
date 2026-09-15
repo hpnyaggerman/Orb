@@ -23,7 +23,8 @@ from ...analysis.text.text_segmentation import (
     sentence_boundary_ends,
 )
 from ...core import ChatMessage, extract_hyperparams
-from ...inference import TOOLS, LLMClient, parse_tool_calls, reasoning_cfg
+from ...inference import LLMClient, parse_tool_calls, reasoning_cfg
+from ...prompting.tool_catalog import require_tool
 from .continuation import _MACRO_RE, build_generation_messages
 
 if TYPE_CHECKING:
@@ -62,8 +63,8 @@ _TEMPLATE_TOKEN_RE = re.compile(r"<\|[^<>]*\|>")
 # unreachable by construction.
 _PATCH_JSON_INSTRUCTION = (
     "The audited text needs fixes. Respond with a JSON object of the form "
-    '{"patches": [{"id": 1, "replace": "..."}]} — one patch per numbered finding. '
-    "Each `id` is the number shown in [brackets] beside the finding in the report above. "
+    '{"patches": [{"id": 1, "replace": "..."}]} — one patch per numbered issue. '
+    "Each `id` is the number shown in [brackets] beside the issue in the report above. "
     "Rewrite each flagged span boldly to fix its issue while keeping the surrounding narrative "
     "flow, preserving the author's voice, tense, and intent; an empty `replace` deletes the span. "
     "Do not copy the old sentence into `replace`."
@@ -148,7 +149,7 @@ def build_patch_prompt_raw(base: str, draft_core: str, report_text: str) -> str:
 def build_patch_messages(context: str, draft_core: str, report_text: str, *, assisted: bool) -> list[ChatMessage]:
     """The patch conversation for the CHAT-transport shapes: the generation
     messages replayed verbatim (byte parity — see ``build_generation_messages``),
-    the draft closed as the model's own turn (so the numbered findings read as
+    the draft closed as the model's own turn (so the numbered issues read as
     edits to its own text), and the fix request as a pure suffix. Text mode never uses this — it
     byte-extends the rendered generation prompt instead (see ``patch_document``),
     because a closed assistant turn can render differently from the open
@@ -265,8 +266,13 @@ async def patch_document(
     # generation prompt is what keeps the KV prefix warm); only the scanners
     # see the cleaned/capped ctx above.
     report_text = format_numbered_report(targets)
-    params = extract_hyperparams(settings, defaults={"temperature": 0.25, "max_tokens": 8192})
-    schema = TOOLS["editor_apply_patch"]["schema"]
+    # Writer lane on purpose (the route serves this call from the writer endpoint,
+    # for byte parity with the prompt that generated the draft), but floored like
+    # the agent-lane forced calls: the whole patch set has to fit in one reply, and
+    # a document preset kept short for brief continuations would truncate it.
+    params = extract_hyperparams(settings, token_floor=8192, defaults={"temperature": 0.25})
+    editor_patch = require_tool("editor_apply_patch")
+    schema = editor_patch["schema"]
     if client.completion_mode == "text":
         # Both text shapes byte-extend the generation prompt as a raw
         # continuation: verbatim document (raw) or the re-run /apply-template
@@ -291,7 +297,7 @@ async def patch_document(
             messages,
             model,
             tools=[schema],
-            tool_choice=TOOLS["editor_apply_patch"]["choice"],
+            tool_choice=editor_patch["choice"],
             tools_in_prompt=False,
             **params,
             **reasoning_cfg(False),

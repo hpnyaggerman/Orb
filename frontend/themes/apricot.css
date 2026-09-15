@@ -4,7 +4,8 @@
   --band:#e4d0b3;          /* titlebar beige — headers and docks */
   --mint:#c8e3ab;
   --mint-deep:#7fae63;
-  --rose-deep:#a8506a;     /* dialogue: dark enough to read as prose */
+  --rose-deep:#8c3552;     /* dialogue — the darker, saturated voice */
+  --narration:#7a6552;     /* *asides* — the lighter, near-neutral tone */
   --lilac:#cbb6e8;
   --apricot-deep:#bd6b32;
   --coral:#f0a186;
@@ -95,10 +96,12 @@ body {
     border-radius: 16px !important;
     box-shadow: var(--shadow-card) !important;
   }
-  #chat-header, #doc-header { margin-bottom: 12px; }
-  #chat-input-area, #doc-footer { margin-top: 12px; }
+  #doc-header { margin-bottom: 12px; }
+  #doc-footer { margin-top: 12px; }
+  #chat-header { margin-bottom: 4px; }
+  #chat-input-area { margin-top: 4px; }
 
-  #chat-messages { padding: 10px 12px 14px !important; }
+  #chat-messages { padding: 2px 12px 6px !important; }
 }
 
 .btn {
@@ -154,7 +157,7 @@ body {
 #burger-btn:hover { background: var(--bg-hover) !important; color: var(--ink) !important; }
 
 .chat-avatar, .char-avatar-sm, .char-avatar-lg, .card-pick-avatar,
-.cast-avatar, .cast-pick-avatar, .persona-avatar, .world-avatar,
+.cast-avatar, .cast-pick-avatar, .persona-avatar, .msg-avatar, .world-avatar,
 .char-browser-avatar, .char-browser-list-avatar, .stat-fav-avatar {
   border: 2px solid var(--ink) !important;
   background: var(--bg-elevated) !important;
@@ -238,7 +241,8 @@ textarea:focus, select:focus, #chat-input:focus {
 .message.user .msg-body { background: #e7f1d7 !important; border-color: var(--ink) !important; }
 
 .message .msg-body .quoted { color: var(--rose-deep) !important; }
-.message .msg-body em { color: #7d6857 !important; }
+.message .msg-body em { color: var(--narration) !important; }
+.message .msg-body .quoted em { color: inherit !important; }
 
 .message .msg-body pre,
 .message .msg-body code.inline-code,

@@ -6,10 +6,16 @@ import asyncio
 import atexit
 import math
 import os
-from collections.abc import Mapping, Sequence
+import re
+from collections.abc import Sequence
 from typing import Any
 
-from ..core.text_segmentation import remove_quoted_spans, split_sentences
+from ..core.text_segmentation import (
+    HARD_LINE_BREAK_RE,
+    remove_quoted_spans,
+    split_sentences,
+    strip_protected_markup,
+)
 from .local_models import (
     MODELS,
     ModelSpec,
@@ -30,34 +36,42 @@ from .local_models import (
 )
 
 #: Re-exported from :mod:`local_models` for callers that address this module by
-#: name — ``workflows/toolkit.py`` publishes it as the workflow author's API,
-#: and the Local ML routes and tests import from here. NOTE FOR TESTS: these
+#: name. The workflow toolkit wraps the small capabilities plug-ins need; Local
+#: ML routes and tests import this implementation module directly. NOTE FOR TESTS: these
 #: are second bindings. Production code calls ``local_models``' own copies, so
 #: a monkeypatch belongs on the module that OWNS the name (``assets.download``,
 #: ``dependencies.deps_ok``), not on the re-export.
 __all__ = [
+    "DIALOGUE_COLS",
     "GO_EMOTIONS",
+    "MARKUP_INPUT_CHARS",
+    "MARKUP_INPUT_VERSION",
     "MODELS",
+    "NARRATION_ROWS",
     "POV_ROWS",
+    "TENSE_COLS",
     "ModelSpec",
     "ModelVariantSpec",
     "acomplete",
     "aclassify",
+    "aclassify_markup",
     "aclassify_pov",
+    "aclassify_pov_tense",
     "ascore",
     "available",
-    "build_prompt",
-    "complete",
     "delete_model",
     "deps_ok",
     "download",
     "install_cmd",
+    "markup_from_logits",
+    "markup_input",
     "model_dir",
     "pov_from_logits",
     "pov_input",
     "present",
     "prune_stale",
     "resolve_path",
+    "tense_from_logits",
     "variant_path",
     "variant_present",
     "variant_spec",
@@ -98,13 +112,14 @@ GO_EMOTIONS: tuple[str, ...] = (
     "neutral",
 )
 
-# The POV half of the povtense head, whose 12 logits are a row-major 4x3 grid:
-# POV rows x tense columns (past, present, ambiguous). Row-sum the softmax for the
-# POV, column-sum it for the tense. Order MUST match the GGUF head's logit order.
-# Only the rows are consumed -- an image prompt has no tense, so the columns are
-# summed by nobody and the tense half of the model is deliberately unused.
+# The povtense head's 12 logits are a row-major 4x3 grid: POV rows x tense
+# columns. Row-sum the softmax for the POV, column-sum it for the tense. Order
+# MUST match the GGUF head's logit order -- a transposed reading still returns a
+# plausible label, so every cell is pinned by test: the rows in
+# tests/unit/workflows/image_gen/test_pov.py, the columns in tests/unit/test_local_ml.py.
 POV_ROWS: tuple[str, ...] = ("first", "second", "third", "ambiguous")
-_POV_TENSES = 3
+TENSE_COLS: tuple[str, ...] = ("past", "present", "ambiguous")
+_TENSE_COUNT = len(TENSE_COLS)
 
 _REPEAT_PENALTY = 1.1
 _FREQUENCY_PENALTY = 0.1
@@ -190,27 +205,6 @@ async def acomplete(
     """
     async with _lock(feature):
         return await asyncio.to_thread(_complete_blocking, feature, prompt, n_predict, stop, temperature)
-
-
-async def complete(
-    prompt: str,
-    n_predict: int = 12,
-    stop: Sequence[str] = ("\n",),
-    temperature: float = 0.25,
-) -> str:
-    """Autocomplete continuation over ``acomplete('autocomplete', ...)``.
-
-    Works around a tokenization quirk of the typeahead model: a prompt ending in
-    whitespace generates garbage ("I hold up both " fails where "I hold up both"
-    works). rstrip the prompt before generating; build_prompt guarantees the only
-    trailing whitespace is the user's draft tail, so this trims exactly the draft.
-    When we did trim, the user already typed the word separator, so lstrip the
-    model's re-emitted leading space back off — the frontend appends the completion
-    to the untrimmed draft, and "...both " + " hands" would double the space.
-    """
-    trimmed = prompt.rstrip()
-    completion = await acomplete("autocomplete", trimmed, n_predict, stop, temperature)
-    return completion.lstrip() if trimmed != prompt else completion
 
 
 # A separate Llama mode from generation: the GGUF carries a 2-class head, scored
@@ -306,7 +300,9 @@ async def aclassify(feature: str, text: str) -> str:
         return await asyncio.to_thread(_classify_blocking, feature, text)
 
 
-# The model card asks for "roughly 1-4 sentences without prior context", not a
+# The v2 model still needs short windows. Keep narration extraction in callers:
+# empirical dialogue-insertion probes favor it over trusting native markers
+# (docs/experiments/povtense-v2.md). The model card asks for 1-4 sentences, not a
 # whole reply: the encoder's trained context is 256 tokens, and a raw tail slice of
 # that size is 5-10 sentences that usually starts mid-word. So `pov_input` shapes
 # the span instead of just capping it. Tail-anchored like the emotion path: the
@@ -331,25 +327,51 @@ def pov_input(text: str) -> str:
     return " ".join(sentences[-_POV_SENTENCES:]).strip()[-_POV_MAX_CHARS:]
 
 
-def pov_from_logits(logits: Sequence[float]) -> str:
-    """Marginalize the 4x3 povtense grid down to one POV row label.
+def _argmax(values: Sequence[float]) -> int:
+    return max(range(len(values)), key=values.__getitem__)
 
-    Pure, so the row-major layout — the one thing here that is silently wrong if
-    transposed — is testable without the model.
+
+def _grid_margins(logits: Sequence[float], rows: Sequence[str], cols: Sequence[str]) -> tuple[str, str]:
+    """Read a row-major joint head as (row label, column label).
+
+    Each label is the argmax of its own softmax marginal (row sums, column sums),
+    never the top cell's coordinates. The softmax stays unnormalized: dividing
+    every mass by one constant cannot move an argmax.
     """
     m = max(logits)
     exp = [math.exp(x - m) for x in logits]
-    # Row sums over the softmax marginalize the tense out of each POV. The
-    # normalizer is constant across rows, so argmax needs no division.
-    rows = [sum(exp[i * _POV_TENSES : (i + 1) * _POV_TENSES]) for i in range(len(POV_ROWS))]
-    return POV_ROWS[max(range(len(rows)), key=rows.__getitem__)]
+    width = len(cols)
+    row_mass = [sum(exp[r * width : (r + 1) * width]) for r in range(len(rows))]
+    col_mass = [sum(exp[r * width + c] for r in range(len(rows))) for c in range(width)]
+    return rows[_argmax(row_mass)], cols[_argmax(col_mass)]
+
+
+def _pov_tense_from_logits(logits: Sequence[float]) -> tuple[str, str]:
+    return _grid_margins(logits, POV_ROWS, TENSE_COLS)
+
+
+def pov_from_logits(logits: Sequence[float]) -> str:
+    """Marginalize the 4x3 joint head to one POV row label."""
+    return _pov_tense_from_logits(logits)[0]
+
+
+def tense_from_logits(logits: Sequence[float]) -> str:
+    """Marginalize the 4x3 joint head to one tense column label."""
+    return _pov_tense_from_logits(logits)[1]
+
+
+def _classify_pov_tense_blocking(feature: str, text: str) -> tuple[str, str]:
+    """Both grid margins off ONE embed -- the head is a single forward pass, so
+    asking for the tense separately would pay for the model twice."""
+    shaped = pov_input(text)
+    if not shaped:
+        return "ambiguous", "ambiguous"
+    logits = _head_logits(feature, shaped, len(POV_ROWS) * _TENSE_COUNT)
+    return _pov_tense_from_logits(logits)
 
 
 def _classify_pov_blocking(feature: str, text: str) -> str:
-    shaped = pov_input(text)
-    if not shaped:
-        return "ambiguous"
-    return pov_from_logits(_head_logits(feature, shaped, len(POV_ROWS) * _POV_TENSES))
+    return _classify_pov_tense_blocking(feature, text)[0]
 
 
 async def aclassify_pov(text: str) -> str:
@@ -365,78 +387,92 @@ async def aclassify_pov(text: str) -> str:
         return await asyncio.to_thread(_classify_pov_blocking, "pov_classifier", text)
 
 
-def build_prompt(
-    char_name: str,
-    user_name: str,
-    char_summary: str,
-    recent: Sequence[Mapping[str, str]],
-    draft: str,
-    *,
-    max_msg_chars: int = 500,
-    max_summary_chars: int = 400,
-) -> str:
-    """Assemble a short raw-continuation prompt ending at the user's draft.
+async def aclassify_pov_tense(text: str) -> tuple[str, str]:
+    """One message -> (POV_ROWS label, TENSE_COLS label). One model call.
 
-    *recent* is oldest→newest ``{"role": "user"|"assistant", "content": str}``,
-    each entry optionally carrying a ``"name"`` that labels that line instead of
-    *char_name* — how a group scene names the member who actually spoke, since
-    there every reply would otherwise be attributed to the scene itself.
-    Deliberately excludes the Director/pipeline injection block — this is a
-    lightweight typeahead, not a full turn. The model continues the final line.
+    The combined entry point for callers that want both margins of the grid;
+    `aclassify_pov` stays the single-label door image_gen's camera reads through.
+    Lazy-loads; serialized by the feature's lock; off the loop.
     """
-    lines: list[str] = []
-    summary = (char_summary or "").strip()
-    if summary:
-        lines.append(summary[:max_summary_chars])
-        lines.append("***Roleplay chat below***")
-    for m in recent:
-        name = (m.get("name") or "").strip() or (user_name if m.get("role") == "user" else char_name)
-        content = (m.get("content") or "").strip()[
-            -max_msg_chars:
-        ]  # keep the tail: typeahead reacts to the latest action, which is at the END of the message
-        if content:
-            lines.append(f"{name}: {content}")
-    # No trailing newline: the model continues this exact line.
-    lines.append(f"{user_name}: {draft}")
-    return "\n".join(lines)
+    async with _lock("pov_classifier"):
+        return await asyncio.to_thread(_classify_pov_tense_blocking, "pov_classifier", text)
 
 
-if __name__ == "__main__":
-    # Self-check for the pure trimmer (no model needed).
-    p = build_prompt(
-        "Aria",
-        "Sam",
-        "Aria is a wry tavern keeper.",
-        [{"role": "assistant", "content": "You look lost."}, {"role": "user", "content": "Maybe I am."}],
-        "I walk into the",
-    )
-    assert p.endswith("Sam: I walk into the"), p
-    assert "Aria: You look lost." in p
-    assert "Aria is a wry tavern keeper." in p
-    assert "Director" not in p and "Scene Direction" not in p
-    print("build_prompt OK")
+# The markup classifier (narration x dialogue convention) reads a WHOLE message:
+# convention is a coverage ratio and the dead band is a whole-message property, so
+# unlike `pov_input` nothing is windowed. Protected formatting runs (fenced code,
+# **bold**, dividers) are removed with the exact pattern `classify_axes` ignores.
+# Quote and asterisk glyphs are deliberately NOT normalized: the tokenizer reads
+# every variant, and a broken or unusual mark is the very signal being classified.
+# The one exception is a markdown bullet (`* item` at a line start): the parser
+# already refuses to read it as emphasis, and its star becomes "-" so a list never
+# looks like asterisk narration to the model. A line that closes an asterisk later
+# (`* She waves. *`) is a sloppy beat rather than a list, and keeps its star.
+#
+# The model's own cut is the token one. `Llama.embed(truncate=True)` keeps the
+# first n_batch (512) ids, so a long message loses its tail and its [SEP]; the
+# trainer (../RP-Markup-Classifier) truncates the same way rather than HF's
+# keep-[SEP] way, so both sides see identical ids. MARKUP_INPUT_CHARS is only a
+# runaway guard: on app.db it never binds before the token cut. Training builds
+# record MARKUP_INPUT_VERSION and a digest of this function's output, so bump the
+# version whenever the shaping changes.
+MARKUP_INPUT_VERSION = "markup-input-v2"
+MARKUP_INPUT_CHARS = 4000
 
-    # Self-check for the povtense grid layout (no model needed). One hot cell per
-    # case, placed row-major: index = row * 3 + tense column.
-    for row, label in enumerate(POV_ROWS):
-        for col in range(_POV_TENSES):
-            grid = [0.0] * (len(POV_ROWS) * _POV_TENSES)
-            grid[row * _POV_TENSES + col] = 9.0
-            assert pov_from_logits(grid) == label, (row, col, label)
-    # A POV spread across all three tenses still beats a single taller cell in another row.
-    spread = [0.0] * 12
-    spread[6] = spread[7] = spread[8] = 2.0  # "third", split across tenses
-    spread[0] = 3.0  # "first", one tense only
-    assert pov_from_logits(spread) == "third", spread
-    print("pov_from_logits OK")
+_LINE_BREAKS = re.compile(f"({HARD_LINE_BREAK_RE.pattern})")
+_BULLET_STAR = re.compile(r"([ \t]*)\*(?=[ \t])")
 
-    # Self-check for what the POV model is actually shown (no model needed).
-    reply = 'She turned. "I will go," she said. He waited by the door. Rain hit the glass.'
-    shaped = pov_input(reply)
-    assert "I will go" not in shaped, shaped  # dialogue is not narration
-    assert shaped.endswith("Rain hit the glass."), shaped  # tail-anchored
-    assert len(split_sentences(shaped)) <= _POV_SENTENCES, shaped
-    assert pov_input('"All of it." "Every word."') == ""  # all dialogue -> caller walks back
-    assert pov_input("") == "" and pov_input("   ") == ""
-    assert pov_input("no terminal punctuation here") == "no terminal punctuation here"
-    print("pov_input OK")
+
+def _dash_bullets(text: str) -> str:
+    """Rewrite each line-start bullet star to "-"; nothing else moves."""
+    parts = _LINE_BREAKS.split(text)
+    for i in range(0, len(parts), 2):  # even slots are lines, odd slots their breaks
+        m = _BULLET_STAR.match(parts[i])
+        if m and "*" not in parts[i][m.end() :]:
+            parts[i] = f"{m.group(1)}-{parts[i][m.end() :]}"
+    return "".join(parts)
+
+
+def markup_input(text: str) -> str:
+    """The text the markup classifier sees: protected runs removed, bullet stars
+    dashed, then capped.
+
+    Pure, so the shaping that training and serving share is testable without
+    loading the model.
+    """
+    return _dash_bullets(strip_protected_markup(text or ""))[:MARKUP_INPUT_CHARS]
+
+
+# The markup head is one 9-way softmax over a row-major 3x3 grid: narration rows x
+# dialogue columns (../RP-Markup-Classifier/src/schema.py). Read like povtense:
+# row sums for the narration, column sums for the dialogue, never both off the top
+# cell. Order MUST match the GGUF head's logit order -- a transposed read still
+# returns plausible labels, so tests/unit/test_local_ml.py pins every cell.
+# "unknown" is a trained class (nothing to read, or both styles mixed in this one
+# message), not a confidence floor: callers read it as "leave this alone".
+NARRATION_ROWS: tuple[str, ...] = ("asterisk", "bare", "unknown")
+DIALOGUE_COLS: tuple[str, ...] = ("quoted", "bare", "unknown")
+_MARKUP_CELLS = len(NARRATION_ROWS) * len(DIALOGUE_COLS)
+
+
+def markup_from_logits(logits: Sequence[float]) -> tuple[str, str]:
+    """Marginalize the 3x3 markup head to (narration, dialogue)."""
+    return _grid_margins(logits, NARRATION_ROWS, DIALOGUE_COLS)
+
+
+def _classify_markup_blocking(feature: str, text: str) -> tuple[str, str]:
+    shaped = markup_input(text)
+    if not shaped.strip():
+        return "unknown", "unknown"  # nothing to read: never load the model for it
+    return markup_from_logits(_head_logits(feature, shaped, _MARKUP_CELLS))
+
+
+async def aclassify_markup(text: str) -> tuple[str, str]:
+    """One whole message -> (NARRATION_ROWS label, DIALOGUE_COLS label). One model call.
+
+    The model reads `markup_input(text)`, of which llama.cpp keeps the first 512
+    tokens, exactly as training cut it. Lazy-loads; serialized by the feature's
+    lock; off the loop.
+    """
+    async with _lock("markup_classifier"):
+        return await asyncio.to_thread(_classify_markup_blocking, "markup_classifier", text)

@@ -28,9 +28,20 @@ from .subjects import Subject
 logger = logging.getLogger(__name__)
 
 
-async def _forced_args(
-    *, client, model_name, prefix, tail, tool_name, settings, answer_tokens, reasoning_on, thinking_tokens
-) -> dict:
+# What each call needs to answer in full: a compact JSON argument object, plus room
+# for the reasoning that precedes it when `prompter_reasoning` is on. Composition
+# writes the prompt itself, so it gets the larger of the two. With thinking on the
+# configured prompter budget replaces both: a thinking model spends the same budget
+# on its reasoning first (DeepSeek counts reasoning_content against it), and capped
+# at the answer size a high-effort model came back cut off mid-thought with no
+# arguments at all. The agent endpoint's configured max_tokens raises whichever
+# floor applies when it is higher; a writer preset kept short for brief replies
+# never lowers it (see `agent_lane_max_tokens`).
+_ANALYZE_TOKENS = 2_048
+_COMPOSE_TOKENS = 4_096
+
+
+async def _forced_args(*, client, model_name, prefix, tail, tool_name, settings, token_floor, reasoning_on) -> dict:
     logger.info("[image_gen] %s tail:\n%s", tool_name, "\n--\n".join(m["content"] for m in tail))
     args: dict = {}
     async for event in forced_tool_call(
@@ -43,12 +54,7 @@ async def _forced_args(
         # One workflow-owned mode for both calls, so they share a reasoning-forked lane.
         reasoning_on=reasoning_on,
         temperature=0.2,
-        # `answer_tokens` sizes a bare answer -- a dozen JSON fields, a prompt of a
-        # few hundred tokens -- but a thinking model spends the same `max_tokens` on
-        # its reasoning first (DeepSeek counts reasoning_content against it), so the
-        # configured budget takes over: capped at the answer size, a high-effort
-        # model came back cut off mid-thought with no arguments at all.
-        max_tokens=thinking_tokens if reasoning_on else answer_tokens,
+        token_floor=token_floor,
         offer_tools=OFFER_TOOLS,
     ):
         if event.get("type") == "result" and isinstance(event.get("args"), dict):
@@ -246,9 +252,8 @@ async def analyze_scene(
         tail=[{"role": "user", "content": analyze_ooc(pov, supports_negative, _sheets(subjects))}],
         tool_name="analyze_scene",
         settings=settings,
-        answer_tokens=2_048,
+        token_floor=thinking_tokens if reasoning_on else _ANALYZE_TOKENS,
         reasoning_on=reasoning_on,
-        thinking_tokens=thinking_tokens,
     )
     # First-person view is the user looking at the subject: keep only the subject
     # so a stray background character does not get drawn into the shot.
@@ -318,9 +323,8 @@ async def compose_scene(
         tail=tail,
         tool_name="compose_image_prompt",
         settings=settings,
-        answer_tokens=4_096,
+        token_floor=thinking_tokens if reasoning_on else _COMPOSE_TOKENS,
         reasoning_on=reasoning_on,
-        thinking_tokens=thinking_tokens,
     )
 
     normalized_format = normalize_prompt_format(prompt_format)

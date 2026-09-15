@@ -1,49 +1,177 @@
-"""Bind format normalization to the post-pipeline hook."""
+"""Bind format and voice normalization to the post-pipeline hook."""
 
 from __future__ import annotations
 
 import logging
+from collections.abc import Mapping
+from typing import Any
 
-from ..contracts import EV_DRAFT_REPLACED
-from ..toolkit import normalize_to_baseline
+from ..toolkit import (
+    EV_DRAFT_REPLACED,
+    AxisStyle,
+    forced_tool_call,
+    get_workflow_config,
+    local_feature_ready,
+    markup_axes,
+    normalize_to_baseline,
+    vote_axes,
+)
+from . import (
+    VOICE_REWRITE_LENGTH_RULE,
+    VOICE_REWRITE_TOOL_NAME,
+    WORKFLOW_ID,
+    capture,
+    normalize_config,
+)
+from .guard import rejection
+from .voice import (
+    FEATURE,
+    UNKNOWN_LABELS,
+    VoiceLabels,
+    classify,
+    drift,
+    labels_for,
+    target,
+)
 
 logger = logging.getLogger(__name__)
 
 BASELINE_WINDOW = 3
 
+# Keep the voice rewrite on a short, constant-prefix lane: it only needs the draft,
+# and must not undo the Editor's length guard.
+_SYSTEM = (
+    "You are a copy editor. You restate a passage of prose in a different narrative "
+    "voice and change nothing else.\n\n"
+    "RULES:\n"
+    "- Change ONLY the narrative voice. Keep every story beat, every line of "
+    "dialogue, the author's vocabulary, and all formatting exactly as they are.\n"
+    f"- {VOICE_REWRITE_LENGTH_RULE}\n"
+    "- Restate the whole passage, not an excerpt.\n"
+    "- Change the person of a pronoun, never who it points to. The character who "
+    "acts keeps acting and the person addressed keeps being addressed, so the "
+    'speaking character\'s own actions must never become "you". Do not introduce '
+    "a character, a name, or a detail the passage does not contain."
+)
 
-def _baseline_window(history) -> list[str]:
-    """The recent assistant-message window (newest first, up to 3) whose markup
-    convention the draft is held to.
+# One line per drifting axis. Folding two axes into a single "in X and Y" sentence
+# buries the second inside the first one's trailing clause, which is how a POV
+# phrase that has to name both parties reads once a tense is appended to it.
+_INSTRUCTION = (
+    f"Restate the passage below and call `{VOICE_REWRITE_TOOL_NAME}` with the result.\n\n"
+    "REQUIRED VOICE:\n{voice}\n\nPASSAGE:\n{draft}"
+)
 
-    Mirrors the fallback window the editor pass derived from its cached prefix:
-    assistant history is always plain text, so a non-str body (the multimodal
-    list form rides only user messages) has nothing to contribute.
-    """
-    window: list[str] = []
+
+def _baseline_window(history) -> list[Mapping[str, Any]]:
+    """Return up to three recent plain-text assistant rows, newest first."""
+    window: list[Mapping[str, Any]] = []
     for msg in reversed(history):
         if msg.get("role") == "assistant":
             content = msg.get("content", "")
             if isinstance(content, str):
-                window.append(content)
+                window.append(msg)
                 if len(window) >= BASELINE_WINDOW:
                     break
     return window
 
 
-async def post_pipeline(ctx):
-    """Hold the finished draft's markup convention to the recent messages'.
+async def _voice_enabled(ctx) -> bool:
+    """Whether the local classifier and opt-in voice check are enabled."""
+    if not local_feature_ready(FEATURE, ctx.settings):
+        return False
+    return normalize_config(await get_workflow_config(WORKFLOW_ID))["voice_consistency"]
 
-    Suspension is the framework's job: the per-workflow toggle gates this hook in
-    the fan-out loop, so when reached the hook always runs.
-    ``normalize_to_baseline`` is a conservative no-op -- it rewrites only when the
-    baseline window agrees on a convention and the draft drifts from it -- so when
-    nothing changes the hook yields nothing (no malformed-event warning).
+
+async def _voice_rewrite(ctx, text: str, phrases: list[str]) -> str:
+    """Restate *text* on a self-contained voice-rewrite lane."""
+    args: dict = {}
+    async for event in forced_tool_call(
+        client=ctx.agent_client or ctx.client,
+        prefix=[{"role": "system", "content": _SYSTEM}],
+        tail_messages=[
+            {
+                "role": "user",
+                "content": _INSTRUCTION.format(voice="\n".join(f"- {p}" for p in phrases), draft=text),
+            }
+        ],
+        tool_name=VOICE_REWRITE_TOOL_NAME,
+        settings=ctx.settings,
+        model_name=ctx.agent_model_name or None,
+        # None makes forced_tool_call send only the forced tool.
+        enabled_tools=None,
+        kv_tracker=ctx.kv_tracker,
+        cache_shape="format_consistency:voice_rewrite",
+        reasoning_on=False,
+        temperature=0.25,
+        token_floor=8192,
+    ):
+        if event.get("type") == "result" and isinstance(event.get("args"), dict):
+            args = event["args"]
+    rewritten = args.get("rewritten_text")
+    return rewritten if isinstance(rewritten, str) else ""
+
+
+async def _hold_voice(ctx, text: str, window: list[Mapping[str, Any]], styles: list[AxisStyle]) -> str:
+    """Return *text* in the window's voice, or unchanged when it is ambiguous.
+
+    *styles* are the window rows' markup readings, in window order.
     """
-    baseline_msgs = _baseline_window(ctx.history)
-    # The pure normalizer keeps an on/off param for its own test surface; the real
-    # gate is the framework toggle, so this path always passes True.
-    new_text, drift = normalize_to_baseline(ctx.draft, baseline_msgs, enabled=True)
-    if drift.changed:
-        logger.info("format-consistency: normalized draft (%s)", drift.transition())
-        yield {"type": EV_DRAFT_REPLACED, "draft": new_text}
+    window_labels: list[VoiceLabels] = []
+    for msg, style in zip(window, styles, strict=True):
+        labels = await labels_for(msg, style)
+        if labels is None:
+            return text
+        window_labels.append(labels)
+    baseline = target(window_labels)
+    if baseline == UNKNOWN_LABELS:
+        return text
+    source = await classify(text, await markup_axes(text, ctx.settings))
+    if source is None:
+        return text
+    phrases = drift(source, baseline)
+    if not phrases:
+        return text
+    logger.info(
+        "format-consistency: voice drift %s -> %s; requesting a rewrite in %s",
+        source,
+        baseline,
+        ", ".join(phrases),
+    )
+    rewritten = await _voice_rewrite(ctx, text, phrases)
+    if not rewritten:
+        return text
+    reason = rejection(text, rewritten)
+    if reason:
+        logger.info("format-consistency: discarding the voice rewrite (%s)", reason)
+        return text
+    return rewritten
+
+
+async def post_pipeline(ctx):
+    """Normalize the finished draft's markup and, optionally, its narrative voice."""
+    window = _baseline_window(ctx.history)
+    baseline_msgs = [msg.get("content", "") for msg in window]
+    # One markup reading per window row serves both halves: the voted markup target
+    # here, and each row's narration extraction in the voice check.
+    styles = [await markup_axes(content, ctx.settings) for content in baseline_msgs]
+    convention = vote_axes(styles)
+    text = ctx.draft
+
+    # Voice failures must not prevent the always-on markup normalization.
+    try:
+        if await _voice_enabled(ctx):
+            text = await _hold_voice(ctx, text, window, styles)
+    except Exception:
+        logger.exception("format-consistency: voice check failed; normalizing markup only")
+        text = ctx.draft
+
+    # Run markup normalization last because the voice rewrite can reintroduce drift.
+    draft = text
+    source = await markup_axes(draft, ctx.settings)
+    text, report = normalize_to_baseline(draft, baseline_msgs, enabled=True, target=convention, source=source)
+    if report.changed:
+        logger.info("format-consistency: normalized draft (%s)", report.transition())
+    await capture.record(ctx, window=window, draft=draft, report=report, output=text)
+    if text != ctx.draft:
+        yield {"type": EV_DRAFT_REPLACED, "draft": text}

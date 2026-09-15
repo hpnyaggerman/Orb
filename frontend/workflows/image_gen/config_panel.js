@@ -37,12 +37,10 @@ import {
   maxCloudReferences,
   normalizePromptFormat,
   PROMPT_FORMATS,
-  pendingDisclosures,
   povChoices,
   promptFormatLabel,
   providerTakesReferences,
   sizeChoices,
-  sizeIsExact,
   styleConnectionId,
 } from "./policy.js";
 
@@ -103,11 +101,14 @@ export function initConfigPanel(sharedConfig) {
   registerAction(WORKFLOW_ID, "styleRemove", (el) => removeStyle(Number(el.dataset.styleIndex)));
   registerAction(WORKFLOW_ID, "styleChange", (el) => refreshStyleState(el));
   registerAction(WORKFLOW_ID, "styleConnection", (el) => relinkStyle(el));
+  registerAction(WORKFLOW_ID, "resolutionToggle", (el, event) => toggleResolutionMenu(el, event));
+  registerAction(WORKFLOW_ID, "resolutionPick", (el) => pickResolution(el));
   registerAction(WORKFLOW_ID, "connAdd", () => addConnection());
   registerAction(WORKFLOW_ID, "connRemove", (el) => removeConnection(el.dataset.connId));
   registerAction(WORKFLOW_ID, "connChange", (el) => refreshConnectionState(el));
   registerAction(WORKFLOW_ID, "connTest", (el) => testConnection(el.dataset.connId));
   registerAction(WORKFLOW_ID, "connOpen", (el) => revealConnection(el.dataset.connId));
+  wireResolutionMenus();
   initCharacterProfile();
 }
 
@@ -160,7 +161,7 @@ function refreshCard() {
 }
 
 export function configPanelRenderer() {
-  return `<div class="tool-card-desc">Generate images on demand with ComfyUI or a cloud API.</div>
+  return `<div class="tool-card-desc">Generate images on demand with ComfyUI on your machine or through a cloud API.</div>
     <div id="ig-card-config">${configPanelBody()}</div>`;
 }
 
@@ -235,7 +236,7 @@ function styleModelField(style, connectionId) {
   return modelField(modelPickerState(modelsByConnection[connectionId], style.model || ""), {
     attrs: styleField("model"),
     emptyLabel: preset?.default_model ? `Default — ${preset.default_model}` : "Choose a model",
-    placeholder: preset?.default_model || "model id",
+    placeholder: preset?.default_model || "model name or ID",
   });
 }
 
@@ -248,10 +249,136 @@ function sizeOption(value) {
 function resolutionField(style, { preset = null, comfy = false } = {}) {
   const current = styleSize(style).join("x");
   const choices = sizeChoices(preset, comfy);
-  const pairs = choices.map(sizeOption);
-  if (!choices.includes(current))
-    pairs.unshift([current, `${current} (${sizeIsExact(preset, comfy, current) ? "custom" : "not offered"})`]);
-  return `<label>Resolution<select ${styleField("size")}>${optionList(pairs, current)}</select></label>`;
+  const inputId = `ig-size-${style.id}`;
+  const options = choices
+    .map((value) => {
+      const [, label] = sizeOption(value);
+      return `<div class="cb-option" role="option" data-wf-action="image_gen:resolutionPick" data-value="${escAttr(value)}"><span class="cb-option-text">${esc(label)}</span></div>`;
+    })
+    .join("");
+  return `<div class="ig-field"><label for="${escAttr(inputId)}">Resolution</label>
+    <div class="cb-root ig-resolution" data-ig-resolution>
+      <div class="cb-control">
+        <input id="${escAttr(inputId)}" type="text" class="cb-input" ${styleField("size")} value="${escAttr(current)}" placeholder="1024x1024" autocomplete="off" aria-autocomplete="list" aria-controls="${escAttr(inputId)}-list">
+        <button type="button" class="cb-arrow ig-resolution-arrow" data-wf-action="image_gen:resolutionToggle" aria-label="Show resolution presets" aria-expanded="false"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="2,4 6,8 10,4"></polyline></svg></button>
+      </div>
+      <div class="cb-dropdown" hidden><div id="${escAttr(inputId)}-list" class="cb-list" role="listbox">${options}<div class="cb-empty" hidden>No matching resolutions</div></div></div>
+    </div>
+  </div>`;
+}
+
+function resolutionOptions(root) {
+  return [...root.querySelectorAll(".cb-option")].filter((option) => !option.hidden);
+}
+
+function setResolutionMenuOpen(root, open) {
+  root.querySelector(".cb-control")?.classList.toggle("open", open);
+  const dropdown = root.querySelector(".cb-dropdown");
+  if (dropdown) dropdown.hidden = !open;
+  root.querySelector(".ig-resolution-arrow")?.setAttribute("aria-expanded", String(open));
+  if (!open) root.querySelector(".cb-option.active")?.classList.remove("active");
+}
+
+function closeResolutionMenus(except = null) {
+  document.querySelectorAll("[data-ig-resolution]").forEach((root) => {
+    if (root !== except) setResolutionMenuOpen(root, false);
+  });
+}
+
+function filterResolutionMenu(input) {
+  const root = input.closest("[data-ig-resolution]");
+  if (!root) return;
+  const query = input.value.trim().toLowerCase();
+  let visible = 0;
+  root.querySelectorAll(".cb-option").forEach((option) => {
+    option.classList.remove("active");
+    option.hidden = !String(option.dataset.value || "")
+      .toLowerCase()
+      .includes(query);
+    if (!option.hidden) visible += 1;
+  });
+  const empty = root.querySelector(".cb-empty");
+  if (empty) empty.hidden = visible > 0;
+  closeResolutionMenus(root);
+  setResolutionMenuOpen(root, true);
+}
+
+function showAllResolutions(root) {
+  root.querySelectorAll(".cb-option").forEach((option) => {
+    option.hidden = false;
+  });
+  const empty = root.querySelector(".cb-empty");
+  if (empty) empty.hidden = true;
+}
+
+function toggleResolutionMenu(el, event) {
+  event?.preventDefault();
+  const root = el.closest("[data-ig-resolution]");
+  const dropdown = root?.querySelector(".cb-dropdown");
+  if (!root || !dropdown) return;
+  const opening = dropdown.hidden;
+  closeResolutionMenus(root);
+  if (opening) showAllResolutions(root);
+  setResolutionMenuOpen(root, opening);
+  root.querySelector(".cb-input")?.focus();
+}
+
+function pickResolution(el) {
+  const root = el.closest("[data-ig-resolution]");
+  const input = root?.querySelector(".cb-input");
+  if (!root || !input) return;
+  input.value = el.dataset.value || "";
+  input.dispatchEvent(new Event("change", { bubbles: true }));
+  setResolutionMenuOpen(root, false);
+  input.focus();
+}
+
+let resolutionMenusWired = false;
+
+function wireResolutionMenus() {
+  if (resolutionMenusWired) return;
+  resolutionMenusWired = true;
+  document.addEventListener("input", (event) => {
+    if (event.target.matches?.("[data-ig-resolution] .cb-input")) filterResolutionMenu(event.target);
+  });
+  document.addEventListener("keydown", (event) => {
+    const input = event.target.closest?.("[data-ig-resolution] .cb-input");
+    if (!input) return;
+    const root = input.closest("[data-ig-resolution]");
+    if (event.key === "Escape") {
+      setResolutionMenuOpen(root, false);
+      return;
+    }
+    if (!["ArrowDown", "ArrowUp"].includes(event.key) && event.key !== "Enter") return;
+    const dropdown = root.querySelector(".cb-dropdown");
+    if (dropdown.hidden) {
+      if (event.key === "Enter") return;
+      showAllResolutions(root);
+      closeResolutionMenus(root);
+      setResolutionMenuOpen(root, true);
+    }
+    const options = resolutionOptions(root);
+    if (!options.length) return;
+    const active = options.findIndex((option) => option.classList.contains("active"));
+    if (event.key === "Enter") {
+      if (active >= 0) {
+        event.preventDefault();
+        pickResolution(options[active]);
+      }
+      return;
+    }
+    event.preventDefault();
+    options.forEach((option) => {
+      option.classList.remove("active");
+    });
+    const next =
+      event.key === "ArrowDown" ? (active + 1) % options.length : (active - 1 + options.length) % options.length;
+    options[next].classList.add("active");
+    options[next].scrollIntoView({ block: "nearest" });
+  });
+  document.addEventListener("mousedown", (event) => {
+    if (!event.target.closest?.("[data-ig-resolution]")) closeResolutionMenus();
+  });
 }
 
 function graphTakesSize(workflowId) {
@@ -282,7 +409,7 @@ function comfyReferenceFields(style) {
   if (!slots.length) return "";
   const one = slots.length === 1;
   return `<div class="ig-heading ig-reference-heading">Reference image</div>
-    <div class="image-gen-note">This workflow loads ${one ? "an image" : `${slots.length} images`}. Point ${one ? "it" : "them"} at what Orb should feed ${one ? "it" : "them — all of them get the same picture"}, or leave ${one ? "it" : "them"} off to keep the ${one ? "file" : "files"} this workflow was exported with.</div>
+    <div class="image-gen-note">This workflow loads ${one ? "one image" : `${slots.length} images`}. Choose what Orb loads for each style, or leave this off to keep the ${one ? "image" : "images"} exported with the workflow.${one ? "" : " With character references, Orb uses separate character images when available and reuses one when the workflow requires more."}</div>
     <div class="ig-grid"><label>Reference image${referenceSelect(styleSource(style))}</label></div>`;
 }
 
@@ -307,11 +434,11 @@ function cloudStyleFields(style, connection) {
   const slots = maxCloudReferences(preset);
   const capacityNote =
     source && providerTakesReferences(preset)
-      ? `<div class="image-gen-note">${esc(connection.label)} carries ${slots === 1 ? "one reference image" : `up to ${slots} reference images`}, one per character in the scene. ${slots === 1 ? "In a group chat only the speaker's likeness is sent; everyone else is described in the prompt." : "A scene with more characters than that sends the first few and describes the rest."}</div>`
+      ? `<div class="image-gen-note">${esc(connection.label)} accepts ${slots === 1 ? "one reference image" : `up to ${slots} reference images`}, one for each character in the scene. If the scene has more characters than available reference slots, the rest are described in the prompt.</div>`
       : "";
   const referenceSizeNote =
     preset?.reference_drives_size && source && providerTakesReferences(preset)
-      ? `<div class="image-gen-note">${esc(connection.label)} sizes a reference render from the reference image, so Resolution does not apply while it is on.</div>`
+      ? `<div class="image-gen-note">${esc(connection.label)} uses the reference image to determine the output size, so Resolution is ignored when references are enabled.</div>`
       : "";
   return `<div class="ig-grid">
       <label>Model${styleModelField(style, connection.id)}</label>
@@ -320,16 +447,30 @@ function cloudStyleFields(style, connection) {
       ${references}
     </div>
     ${capacityNote}${referenceSizeNote}
+    ${compatibilityFields(style, connection)}
     <div class="image-gen-note ig-style-backend">${
       preset?.dimension_mode === "aspect_ratio" ? "Aspect ratio is chosen automatically from the resolution. " : ""
-    }The API key for ${esc(connection.label)} lives on its connection.
+    }The API key for ${esc(connection.label)} is stored in its connection settings.
       <button type="button" class="ig-link" data-wf-action="image_gen:connOpen" data-conn-id="${escAttr(connection.id)}">Edit connection</button></div>`;
+}
+
+function compatibilityFields(style, connection) {
+  const preset = connection.preset;
+  const seed = preset?.supports_seed
+    ? `<label class="ig-toggle"><input type="checkbox" ${styleField("send_seed")}${style.send_seed === false ? "" : " checked"}><span class="ig-toggle-label">Seed</span></label>
+      <input class="ig-seed-max" ${styleField("seed_max")} inputmode="numeric" value="${escAttr(style.seed_max ?? "")}" placeholder="Max seed (optional)" aria-label="Maximum seed"${style.send_seed === false ? " disabled" : ""}>`
+    : "";
+  const negative = preset?.supports_negative_prompt
+    ? `<label class="ig-toggle"><input type="checkbox" ${styleField("send_negative_prompt")}${style.send_negative_prompt === false ? "" : " checked"}><span class="ig-toggle-label">Negative prompt</span></label>`
+    : "";
+  if (!seed && !negative) return "";
+  return `<details class="ig-advanced ig-compatibility"><summary>Compatibility</summary><div class="ig-compatibility-body">${seed}${negative}</div></details>`;
 }
 
 function negativeNote(connection) {
   if (connection?.source !== "cloud") return "";
   if (connection.preset?.supports_negative_prompt !== false) return "";
-  return `<div class="image-gen-note">${esc(connection.label)} has no negative prompt field — this text is not sent.</div>`;
+  return `<div class="image-gen-note">${esc(connection.label)} does not support negative prompts, so this text will not be sent.</div>`;
 }
 
 function styleBody(style, index, connection) {
@@ -338,17 +479,20 @@ function styleBody(style, index, connection) {
         <label>Connection<select data-ig-field="connection" data-wf-action="image_gen:styleConnection" data-wf-on="change">${styleConnectionOptions(styleConnectionId(style, cfg))}</select></label>
         <label>Prompt format<select ${styleField("prompt_format")}>${promptFormatOptions(style.prompt_format)}</select></label>
       </div>
-      <label>Positive style prompt<textarea ${styleField("prompt")} placeholder="No positive style prompt">${esc(style.prompt || "")}</textarea></label>
-      <label>Negative style prompt<textarea ${styleField("negative_prompt")} placeholder="No negative style prompt">${esc(style.negative_prompt || "")}</textarea></label>
+      <label>Positive style prompt<textarea ${styleField("prompt")} placeholder="Optional style prompt">${esc(style.prompt || "")}</textarea></label>
+      <label>Negative style prompt<textarea ${styleField("negative_prompt")} placeholder="Optional negative prompt">${esc(style.negative_prompt || "")}</textarea></label>
       ${negativeNote(connection)}
-      <label>Extra instructions<textarea ${styleField("extra_instructions")} placeholder="Extra guidance for the prompter model (e.g. emphasize hand placement and use full-body framing).">${esc(style.extra_instructions || "")}</textarea></label>
+      <label>Extra instructions<textarea ${styleField("extra_instructions")} placeholder="Optional guidance for the prompter model (e.g. emphasize hand placement and use full-body framing).">${esc(style.extra_instructions || "")}</textarea></label>
       ${backendFields(style, connection)}
       <button class="btn btn-sm ig-danger" data-wf-action="image_gen:styleRemove" data-style-index="${index}">Remove style</button>`;
 }
 
+const CHECKPOINT_EXTENSION = /\.(safetensors|ckpt|sft|pt|gguf)$/i;
+
 function styleTargetBadge(style, connection) {
   if (connection?.source === "cloud") return style.model || connection.preset?.default_model || "";
-  return style.checkpoint || draft.graphs.find((g) => g.id === style.workflow)?.label || "";
+  if (style.checkpoint) return style.checkpoint.replace(CHECKPOINT_EXTENSION, "");
+  return draft.graphs.find((g) => g.id === style.workflow)?.label || "";
 }
 
 function styleSummary(style, connection) {
@@ -374,8 +518,8 @@ function styleRows(expandIds = "") {
 
 function capturedSize(row, style) {
   const [storedW, storedH] = styleSize(style);
-  const [width, height] = String(row.querySelector('[data-ig-field="size"]')?.value ?? "").split("x");
-  return { width: Number(width) || storedW, height: Number(height) || storedH };
+  const match = String(row.querySelector('[data-ig-field="size"]')?.value ?? "").match(/^\s*(\d+)\s*[x×]\s*(\d+)\s*$/i);
+  return { width: Number(match?.[1]) || storedW, height: Number(match?.[2]) || storedH };
 }
 
 function captureStyles() {
@@ -384,6 +528,10 @@ function captureStyles() {
     if (!row) return s;
     const get = (name) => row.querySelector(`[data-ig-field="${name}"]`)?.value ?? "";
     const stored = (name) => row.querySelector(`[data-ig-field="${name}"]`)?.value ?? s[name] ?? "";
+    const enabled = (name) => {
+      const field = row.querySelector(`[data-ig-field="${name}"]`);
+      return field ? field.checked : s[name] !== false;
+    };
     return {
       ...s,
       label: get("label").trim() || s.label || s.id,
@@ -396,6 +544,9 @@ function captureStyles() {
       workflow: stored("workflow"),
       model: stored("model"),
       quality: stored("quality"),
+      send_seed: enabled("send_seed"),
+      seed_max: stored("seed_max"),
+      send_negative_prompt: enabled("send_negative_prompt"),
       reference_source: stored("reference_source"),
       ...capturedSize(row, s),
     };
@@ -446,6 +597,9 @@ function addStyle() {
     width: previous.width || DEFAULT_EDGE,
     height: previous.height || DEFAULT_EDGE,
     quality: previous.quality || "",
+    send_seed: previous.send_seed !== false,
+    seed_max: previous.seed_max ?? "",
+    send_negative_prompt: previous.send_negative_prompt !== false,
     reference_source: styleSource(previous),
   });
   renderStyles(id);
@@ -496,6 +650,10 @@ function refreshStyleState(el) {
     return;
   }
   captureStyles();
+  if (el.dataset.igField === "send_seed") {
+    const maximum = row?.querySelector('[data-ig-field="seed_max"]');
+    if (maximum) maximum.disabled = !el.checked;
+  }
   refreshStyleSummary(row);
 }
 
@@ -506,7 +664,7 @@ function relinkStyle(el) {
 
 function workflowField(selected) {
   if (!draft.graphs.length) {
-    return `<span class="image-gen-note ig-workflow-empty">No workflows detected. Import one in <strong>Imported ComfyUI workflows</strong> below.</span>`;
+    return `<span class="image-gen-note ig-workflow-empty">No workflows found. Import one below under <strong>Imported ComfyUI workflows</strong>.</span>`;
   }
   return `<select data-ig-field="workflow" data-wf-action="image_gen:styleChange" data-wf-on="change">${workflowOptions(selected)}</select>`;
 }
@@ -520,7 +678,7 @@ function workflowOptions(selected) {
 }
 
 function graphRows() {
-  if (!draft.graphs.length) return `<div class="image-gen-note">No imported workflows.</div>`;
+  if (!draft.graphs.length) return `<div class="image-gen-note">No workflows imported yet.</div>`;
   return draft.graphs
     .map(
       (g) => `<div class="ig-graph-row">
@@ -585,7 +743,7 @@ function comfyFields() {
       <label>Server URL<input ${connField("api_url")} value="${escAttr(comfy.api_url || "http://127.0.0.1:8188")}"></label>
       <label>API key<input type="password" ${connField("api_key")} value="${escAttr(comfy.api_key || "")}"></label>
     </div>
-    <div class="image-gen-note">Orb's local backend. It cannot be removed — a style whose cloud connection is deleted falls back to it.</div>`;
+    <div class="image-gen-note">ComfyUI is the built-in local connection and cannot be removed. Styles using a removed cloud connection fall back to ComfyUI.</div>`;
 }
 
 function cloudFields(connection) {
@@ -598,7 +756,7 @@ function cloudFields(connection) {
       : "";
   const unknown = preset
     ? ""
-    : `<div class="image-gen-note ig-unready">Orb has no preset for "${esc(id)}". Its credentials are kept, but nothing can render on it — this is usually a provider that was renamed in a later release.</div>`;
+    : `<div class="image-gen-note ig-unready">Orb no longer recognizes "${esc(id)}". Its credentials are kept, but it cannot generate images. The provider may have been renamed in a later release.</div>`;
   const docs = preset?.docs_url
     ? `<div class="image-gen-note"><a href="${escAttr(preset.docs_url)}" target="_blank" rel="noopener noreferrer">${esc(preset.label)} API documentation</a></div>`
     : "";
@@ -607,7 +765,7 @@ function cloudFields(connection) {
       ${baseUrl}
       <label>Proxy<input ${connField("proxy")} value="${escAttr(entry.proxy || "")}" placeholder="socks5://127.0.0.1:1080"></label>
     </div>
-    <div class="image-gen-note">Model, resolution and the reference image are chosen per style, under <strong>Styles</strong> above. A proxy set here routes this connection only.</div>
+    <div class="image-gen-note">Choose the model, resolution, and reference image for each style under <strong>Styles</strong> above. A proxy set here routes this connection only.</div>
     ${capabilityLine(preset)}${docs}`;
 }
 
@@ -643,7 +801,7 @@ function connectionRows(expandIds = []) {
 
 function addRowHtml() {
   const options = addableProviders(connections, backends.providers);
-  if (!options.length) return `<span class="image-gen-note">Every provider Orb knows already has a connection.</span>`;
+  if (!options.length) return `<span class="image-gen-note">All available providers are already connected.</span>`;
   return `<select id="ig-conn-add">${optionList(options.map((p) => [p.id, p.label]))}</select>
     <button class="btn btn-sm" data-wf-action="image_gen:connAdd">Add connection</button>`;
 }
@@ -839,14 +997,6 @@ function openSettings(expandStyleId = "") {
       <div class="ig-styles">${styleRows(expandStyleId)}</div>
       <button class="btn btn-sm" data-wf-action="image_gen:styleAdd">Add style</button>
     </section>
-    <details class="ig-advanced" id="ig-connections"${cardReadiness.ready ? "" : " open"}>
-      <summary>Connections<span class="ig-summary-note" id="ig-conn-summary">${esc(connectionSummaryText())}</span></summary>
-      <div class="ig-advanced-body">
-        <div class="image-gen-note">Where images render. Every style links to one, so a local checkpoint and a commercial API can sit side by side. ComfyUI is always available and cannot be removed.</div>
-        <div id="ig-conn-list" class="ig-conn-list">${connectionRows(setupTargets())}</div>
-        <div id="ig-conn-add-row" class="image-gen-row">${addRowHtml()}</div>
-      </div>
-    </details>
     ${
       getActiveConvId()
         ? `<section class="ig-section">
@@ -864,15 +1014,25 @@ function openSettings(expandStyleId = "") {
       <label class="ig-toggle"><input id="ig-scene-analysis" type="checkbox"${cfg.scene_analysis === true ? " checked" : ""}><span class="ig-toggle-body"><span class="ig-toggle-label">Analyze complex scenes</span><span class="image-gen-note">More accurate outfits and positions for scenes; one extra model call.</span></span></label>
       <label class="ig-toggle"><input id="ig-prompter-reasoning" type="checkbox"${cfg.prompter_reasoning === true ? " checked" : ""}><span class="ig-toggle-body"><span class="ig-toggle-label">Enable prompter thinking</span><span class="image-gen-note">Uses thinking for scene analysis and prompt composition; the thinking budget above covers reasoning and answer together. For best prompt-cache reuse, match Editor reasoning config.</span></span></label>
     </section>
-    <details class="ig-advanced">
-      <summary>Imported ComfyUI workflows<span class="ig-summary-note">${draft.graphs.length || "none"}</span></summary>
-      <div class="ig-advanced-body">
-        <div class="image-gen-note">Use a PNG generated by ComfyUI or a dev-mode Export (API) JSON file. Imported workflows run only on the ComfyUI connection, and are kept whichever connection a style links to.</div>
-        <div id="ig-graph-list" class="ig-graph-list">${graphRows()}</div>
-        <input type="file" accept=".json,.png,application/json,image/png" data-wf-action="image_gen:graphFile" data-wf-on="change">
-        <div id="ig-graph-picker"></div>
-      </div>
-    </details>
+    <div class="ig-drawers">
+      <details class="ig-advanced" id="ig-connections"${cardReadiness.ready ? "" : " open"}>
+        <summary>Connections<span class="ig-summary-note" id="ig-conn-summary">${esc(connectionSummaryText())}</span></summary>
+        <div class="ig-advanced-body">
+          <div class="image-gen-note">Where images render. Every style links to a connection, which can be local or cloud-based. ComfyUI is always available and cannot be removed.</div>
+          <div id="ig-conn-list" class="ig-conn-list">${connectionRows(setupTargets())}</div>
+          <div id="ig-conn-add-row" class="image-gen-row">${addRowHtml()}</div>
+        </div>
+      </details>
+      <details class="ig-advanced">
+        <summary>Imported ComfyUI workflows<span class="ig-summary-note">${draft.graphs.length || "none"}</span></summary>
+        <div class="ig-advanced-body">
+          <div class="image-gen-note">Import a PNG from ComfyUI or an API-format JSON export. Imported workflows run through ComfyUI and remain available no matter which connection a style uses.</div>
+          <div id="ig-graph-list" class="ig-graph-list">${graphRows()}</div>
+          <input type="file" accept=".json,.png,application/json,image/png" data-wf-action="image_gen:graphFile" data-wf-on="change">
+          <div id="ig-graph-picker"></div>
+        </div>
+      </details>
+    </div>
   </div><div class="modal-actions"><button class="btn" data-wf-action="image_gen:settingsClose">Close</button><button class="btn btn-accent" id="ig-save" data-wf-action="image_gen:save">Save</button></div>`);
   baseline = JSON.stringify(readConfig());
   setModalCloseGuard(() => !isDirty() || window.confirm(DISCARD_MESSAGE));
@@ -970,7 +1130,7 @@ function dimensionRows(items) {
   return edges
     .map(
       ([edge, label, found]) =>
-        `<label>${label}<select id="ig-slot-${edge}">${candidateOptions(found, -1, "None — the workflow decides")}</select></label>`,
+        `<label>${label}<select id="ig-slot-${edge}">${candidateOptions(found, -1, "None — use the workflow's setting")}</select></label>`,
     )
     .join("");
 }
@@ -980,7 +1140,7 @@ function referenceRows() {
   if (!slots.length) return "";
   const one = slots.length === 1;
   return `<div class="ig-heading ig-reference-heading">Reference images</div>
-    <div class="image-gen-note">This workflow loads ${one ? "an image" : `${slots.length} images`}. Choose what Orb feeds ${one ? "it" : "them"} per style, under <strong>Styles</strong> above — including leaving ${one ? "it" : "them"} as the ${one ? "file" : "files"} this workflow was exported with.</div>
+    <div class="image-gen-note">This workflow loads ${one ? "one image" : `${slots.length} images`}. Choose what Orb loads for each style under <strong>Styles</strong> above, or leave this off to keep the ${one ? "image" : "images"} exported with the workflow.${one ? "" : " With character references, Orb uses separate character images when available and reuses one when the workflow requires more."}</div>
     <ul class="ig-slot-list">${slots.map((item) => `<li>${esc(item.label)}</li>`).join("")}</ul>`;
 }
 
@@ -990,13 +1150,13 @@ async function importGraphFile(input) {
   if (!file || !picker) return;
   try {
     if (draft.graphs.length >= MAX_USER_GRAPHS)
-      throw new Error(`Orb stores at most ${MAX_USER_GRAPHS} imported workflows. Remove one before importing another.`);
+      throw new Error(`You can save up to ${MAX_USER_GRAPHS} imported workflows. Remove one before importing another.`);
     const graph = file.name.toLowerCase().endsWith(".png")
       ? graphFromPng(await file.arrayBuffer())
       : graphFromApiJson(await file.text());
     const candidates = slotCandidates(graph, await graphNodeTypes(graph));
     const missing = missingRoles(candidates);
-    if (missing.length) throw new Error(`This workflow has no ${missing.join(", no ")}.`);
+    if (missing.length) throw new Error(`This workflow is missing: ${missing.join(", ")}.`);
     pendingGraph = { graph, label: file.name.replace(/\.(json|png)$/i, ""), candidates };
     const negative = candidates.text.length > 1 ? 1 : -1;
     const model = candidates.checkpoint.length ? 0 : -1;
@@ -1007,7 +1167,7 @@ async function importGraphFile(input) {
         <label>Negative prompt<select id="ig-slot-negative">${candidateOptions(candidates.text, negative, "None — this workflow has no negative prompt")}</select></label>
         <label>Seed<select id="ig-slot-seed">${candidateOptions(candidates.seed)}</select></label>
         <label>Image output<select id="ig-slot-output">${candidateOptions(candidates.output)}</select></label>
-        <label>Model<select id="ig-slot-model">${candidateOptions(candidates.checkpoint, model, "None — keep the workflow's own model")}</select></label>
+        <label>Model<select id="ig-slot-model">${candidateOptions(candidates.checkpoint, model, "None — keep the workflow's model")}</select></label>
         ${dimensionRows(candidates.dimension)}
       </div>
       ${referenceRows()}
@@ -1056,16 +1216,12 @@ function addPendingGraph() {
   renderStyles();
   const picker = document.getElementById("ig-graph-picker");
   if (picker)
-    picker.innerHTML = `<div class="image-gen-note">Added ${esc(label)}. Test the connection, then save settings.</div>`;
+    picker.innerHTML = `<div class="image-gen-note">Added ${esc(label)}. Test the connection, then save your settings.</div>`;
   pendingGraph = null;
 }
 
 async function saveSettings() {
   const next = readConfig();
-  if (!confirmRemotePrivacy(next)) {
-    toast("Nothing was saved — the connection needs approval before it can render", "error");
-    return;
-  }
   const button = document.getElementById("ig-save");
   if (button?.disabled) return;
   if (button) button.disabled = true;
@@ -1077,7 +1233,7 @@ async function saveSettings() {
     await saveProfile();
     toast(
       droppedGraphs > 0
-        ? `Saved, but ${droppedGraphs} imported workflow${droppedGraphs > 1 ? "s" : ""} could not be stored`
+        ? `Saved, but ${droppedGraphs} imported workflow${droppedGraphs > 1 ? "s" : ""} could not be saved`
         : "Image generation settings saved",
       droppedGraphs > 0 ? "error" : undefined,
     );
@@ -1090,13 +1246,4 @@ async function saveSettings() {
   } finally {
     if (button) button.disabled = false;
   }
-}
-
-function confirmRemotePrivacy(next) {
-  for (const disclosure of pendingDisclosures(next, connectionList(next, backends.providers))) {
-    if (localStorage.getItem(disclosure.key) === "acknowledged") continue;
-    if (!window.confirm(disclosure.message)) return false;
-    localStorage.setItem(disclosure.key, "acknowledged");
-  }
-  return true;
 }

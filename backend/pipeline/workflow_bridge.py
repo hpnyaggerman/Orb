@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Collection, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, cast
 
 from ..core import ChatMessage, workflow_character_state_lock, workflow_state_lock
-from ..inference import TOOLS, LLMClient, _KVCacheTracker
+from ..inference import LLMClient, _KVCacheTracker
+from ..prompting.tool_catalog import has_tool
 from ..workflows import (
     EV_ATTACH_ARTIFACT,
     EV_DRAFT_REPLACED,
@@ -98,17 +99,25 @@ async def _run_post_pipeline(
     client: LLMClient,
     kv_tracker: _KVCacheTracker,
     schema_overrides: Mapping[str, dict],
+    agent_client: LLMClient | None = None,
+    agent_model_name: str = "",
+    post_workflow_ids: Collection[str] | None = None,
 ) -> AsyncIterator[dict | _PostPipelineResult]:
-    """Run every POST_PIPELINE workflow hook over the finished draft.
+    """Run selected POST_PIPELINE hooks over the post-Editor draft.
 
     Streams pass-through SSE events and yields one final
     :class:`_PostPipelineResult` when all hooks have run. Each hook may replace
     the draft once, attach artifacts, or set per-message state. Hook failures
-    are logged and skipped so one bad hook cannot crash the turn.
+    are logged and skipped so one bad hook cannot crash the turn. By default
+    every hook runs; ``post_workflow_ids`` lets an off-turn caller reuse this
+    dispatcher for an explicit subset without firing unrelated workflows.
     """
     staged_attachments: list[dict] = []
     staged_message_state: dict[str, dict] = {}
+
     for sub in iter_subscriptions(HookType.POST_PIPELINE):
+        if post_workflow_ids is not None and sub.workflow_id not in post_workflow_ids:
+            continue
         if not effective_workflow_enabled(sub.workflow_id, settings):
             logger.info("workflow %r post-pipeline hook suspended (disabled)", sub.workflow_id)
             continue
@@ -117,7 +126,6 @@ async def _run_post_pipeline(
         # /trigger calls and any other in-flight pipeline that reaches this
         # hook on the same conversation. Different workflows on the same
         # conversation keep distinct lock keys, so they still run in parallel.
-        # Serialize same-(cid, wid) writers; different workflows run in parallel.
         async with (
             workflow_state_lock(conversation_id or "", sub.workflow_id),
             workflow_character_state_lock(character_id or "", sub.workflow_id),
@@ -138,6 +146,10 @@ async def _run_post_pipeline(
                     schema_overrides=_readonly(schema_overrides),
                     character_id=character_id,
                     character=_readonly(card),
+                    # The execution target for a forced Agent call: in
+                    # dual-model mode the Writer is a different endpoint.
+                    agent_client=agent_client if agent_client is not None else client,
+                    agent_model_name=agent_model_name,
                 )
                 async for ev in sub.callable(post_ctx):
                     t = ev.get("type") if isinstance(ev, dict) else None
@@ -381,7 +393,7 @@ async def _iterate_pre_pipeline_hooks(
                                     val,
                                 )
                                 continue
-                            if name not in TOOLS:
+                            if not has_tool(name):
                                 logger.warning(
                                     "workflow %r enabled unregistered tool %r; dropping",
                                     sub.workflow_id,

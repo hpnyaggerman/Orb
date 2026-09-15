@@ -29,7 +29,7 @@ from backend.features.documents.continuation import (
     DOC_CHAT_INSTRUCTION,
     build_generation_messages,
 )
-from backend.inference import TOOLS
+from backend.prompting.tool_catalog import TOOLS
 
 _BANNED = "shivers down her spine"
 _BANK = [[_BANNED]]  # one literal phrase group, detector-facing shape
@@ -232,7 +232,7 @@ class _StubPatchClient:
         self._patches = patches
         self._raw_content = raw_content
 
-    async def render_prompt(self, messages, *, prefill=None, reasoning=False):
+    async def render_prompt(self, messages, *, prefill=None, reasoning=False, fmt=None):
         self.render_calls.append({"messages": messages, "prefill": prefill, "reasoning": reasoning})
         return f"<render:{len(messages)}:{prefill or ''}>"
 

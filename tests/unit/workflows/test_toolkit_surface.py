@@ -18,6 +18,26 @@ _LOCK_NAMES = (
     "workflow_config_lock",
 )
 
+_LOWER_LAYER_INTERNALS = (
+    "LLMClient",
+    "STANDALONE_TOOLS",
+    "TOOLS",
+    "build_prefix",
+    "enabled_schemas",
+    "format_message_with_attachments",
+    "local_ml",
+    "parse_tool_calls",
+    "reasoning_cfg",
+)
+
+_PLUGIN_CONTRACTS = (
+    "EV_DRAFT_REPLACED",
+    "ToolSpec",
+    "Workflow",
+    "WorkflowEventStream",
+    "WorkflowUserFacingError",
+)
+
 
 def test_locks_exported_from_toolkit():
     for name in _LOCK_NAMES:
@@ -28,3 +48,37 @@ def test_locks_exported_from_toolkit():
 def test_toolkit_locks_are_canonical():
     for name in _LOCK_NAMES:
         assert getattr(toolkit, name) is getattr(locks, name), f"{name} is not the backend.core.locks object"
+
+
+def test_toolkit_does_not_expose_lower_layer_implementation_objects():
+    for name in _LOWER_LAYER_INTERNALS:
+        assert not hasattr(toolkit, name), f"{name} leaks through the workflow API"
+        assert name not in toolkit.__all__
+
+
+def test_toolkit_exposes_local_ml_as_narrow_capabilities():
+    assert "local_feature_available" in toolkit.__all__
+    assert "local_feature_ready" in toolkit.__all__
+    assert "classify_pov" in toolkit.__all__
+    assert "classify_pov_tense" in toolkit.__all__
+    assert "markup_axes" in toolkit.__all__
+
+
+def test_toolkit_exposes_the_shared_agreement_rule():
+    """Both halves of format_consistency must answer "did the window agree?" the
+    same way, so the rule is published rather than reimplemented per axis."""
+    assert hasattr(toolkit, "stable_label")
+    assert "stable_label" in toolkit.__all__
+
+
+def test_toolkit_exposes_format_convention_shaping():
+    """A plug-in must use one convention for markup repair and voice shaping."""
+    for name in ("AxisStyle", "baseline_axes", "markup_axes", "narration_only", "vote_axes"):
+        assert hasattr(toolkit, name)
+        assert name in toolkit.__all__
+
+
+def test_toolkit_is_the_single_plugin_contract_surface():
+    for name in _PLUGIN_CONTRACTS:
+        assert hasattr(toolkit, name)
+        assert name in toolkit.__all__

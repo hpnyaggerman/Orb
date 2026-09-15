@@ -85,6 +85,7 @@ class _SettingsBase(TypedDict):
     character_library_view: str
     character_library_sort: str
     show_editor_diff: int
+    show_chat_avatars: int
     editor_audit_toggles: dict  # decoded to its in-memory shape by get_settings()
     document_audit_enabled: int
     document_audit_autopatch: int
@@ -259,10 +260,10 @@ class MessageRow(TypedDict):
     conversation_id: str
     role: MessageRole
     content: str
-    # Immutable Writer output before the local rewriter, Editor, and
-    # post-pipeline workflows, with inline macros frozen. NULL means the row
-    # predates this capture or did not come from the Writer pipeline (for
-    # example a greeting or summary).
+    # Immutable post-Editor output before the local rewriter and later
+    # post-pipeline workflows, with inline macros frozen. The column keeps its
+    # legacy name for storage compatibility. NULL means the row predates this
+    # capture or did not come from the turn pipeline (for example a greeting).
     writer_draft: str | None
     turn_index: int
     parent_id: int | None
@@ -494,12 +495,14 @@ class ActiveLorebookEntryRow(LorebookEntryRow):
 
 
 class UserPersonaRow(TypedDict):
-    """A row from ``user_personas`` (the queries select these six columns)."""
+    """A user persona without avatar bytes."""
 
     id: int
     name: str
     description: str
     avatar_color: str | None
+    avatar_mime: str | None
+    has_avatar: bool
     created_at: str
     updated_at: str
 

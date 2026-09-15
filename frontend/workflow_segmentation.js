@@ -1,9 +1,11 @@
+import { BLOCK_TAGS, NON_PROSE_TAGS } from "./message_html.js";
 import {
   isHardLineBreak,
   isSentenceWhitespace,
   splitTightSentenceChunks,
   tokenEndsSentence,
 } from "./text_segmentation.js";
+import { messageBody } from "./utils.js";
 
 // Word and sentence indices are shared by text effects and click handlers.
 
@@ -93,12 +95,21 @@ function _wrapTextNode(node, words) {
 }
 
 export function segmentBody(bodyEl) {
-  if (!bodyEl || bodyEl.dataset.segApplied === "1") return;
+  // Re-rendered bodies keep the flag but lose their spans, so check both.
+  if (!bodyEl || (bodyEl.dataset.segApplied === "1" && bodyEl.querySelector(".seg"))) return;
+  // A message that ships its own CSS owns its DOM shape: the sheet is written
+  // against the elements the model wrote, and a span per word is not one of
+  // them. `header span::before` firing once per word instead of once is the
+  // visible failure; `> *`, `:first-child` and `:nth-child` are the quiet ones.
+  // Word-level features lose these bubbles, which is the smaller loss.
+  if (bodyEl.querySelector(".msg-css-scope")) return;
   const walker = document.createTreeWalker(bodyEl, NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT, {
     acceptNode(node) {
       if (node.nodeType === Node.ELEMENT_NODE) {
-        if (node.tagName === "BR") return NodeFilter.FILTER_ACCEPT;
-        if (node.tagName === "PRE" || node.tagName === "CODE") return NodeFilter.FILTER_REJECT;
+        const tag = node.tagName.toUpperCase();
+        if (NON_PROSE_TAGS.has(tag)) return NodeFilter.FILTER_REJECT;
+        // Treat block elements like line breaks for sentence indices.
+        if (tag === "BR" || BLOCK_TAGS.has(tag)) return NodeFilter.FILTER_ACCEPT;
         return NodeFilter.FILTER_SKIP;
       }
       return NodeFilter.FILTER_ACCEPT;
@@ -166,8 +177,11 @@ export function segDescriptor(spanEl, extra) {
 }
 
 export function messageSegments(msgId) {
-  const bodyEl = document.querySelector(`#chat-messages .message[data-msg-id="${msgId}"] .msg-body`);
+  const bodyEl = messageBody(msgId);
   if (!bodyEl) return [];
+  // Bodies are no longer segmented on render, so the first caller to ask for a
+  // message's words is the one that pays for them.
+  segmentBody(bodyEl);
   const out = [];
   let last = null;
   for (const span of bodyEl.querySelectorAll(".seg")) {

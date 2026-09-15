@@ -6,7 +6,13 @@ import logging
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from ..toolkit import get_settings, local_ml
+from ..toolkit import (
+    classify_pov,
+    get_settings,
+    local_feature_ready,
+    markup_axes,
+    narration_only,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -35,11 +41,7 @@ def normalize_mode(value: Any) -> str:
 
 async def classifier_ready() -> bool:
     """Extras installed, model on disk, and the feature toggle left on."""
-    ok, _reason = local_ml.available(FEATURE)
-    if not ok:
-        return False
-    settings = await get_settings()
-    return settings.get("local_ml_enabled", {}).get(FEATURE, True) is not False
+    return local_feature_ready(FEATURE, await get_settings())
 
 
 def _assistant_texts(history: Sequence[Mapping[str, Any]]) -> list[str]:
@@ -58,7 +60,7 @@ def _assistant_texts(history: Sequence[Mapping[str, Any]]) -> list[str]:
     return texts
 
 
-async def _classify(history: Sequence[Mapping[str, Any]]) -> str | None:
+async def _classify(history: Sequence[Mapping[str, Any]], settings: Mapping[str, Any]) -> str | None:
     """Walk back over recent assistant messages until one is not ambiguous.
 
     None when every candidate is ambiguous, there is nothing to read, or the model
@@ -67,7 +69,10 @@ async def _classify(history: Sequence[Mapping[str, Any]]) -> str | None:
     """
     for text in _assistant_texts(history):
         try:
-            label = await local_ml.aclassify_pov(text)
+            # Match the voice check: remove bare speech before taking the tail,
+            # or a long spoken passage can displace every narration sentence.
+            style = await markup_axes(text, settings)
+            label = await classify_pov(narration_only(text, style.dialogue))
         except Exception:
             logger.exception("[image_gen] POV classification failed; falling back")
             return None
@@ -90,9 +95,10 @@ async def resolve(
     manual = _MANUAL.get(normalize_mode(mode))
     if manual is not None:
         return manual, "manual"
-    if not await classifier_ready():
+    settings = await get_settings()
+    if not local_feature_ready(FEATURE, settings):
         return DEFAULT_POV, "no_classifier"
-    classified = await _classify(history)
+    classified = await _classify(history, settings)
     if classified is not None:
         return classified, "classifier"
     return DEFAULT_POV, "default"

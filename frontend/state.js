@@ -18,6 +18,7 @@ export const S = {
   activePersonaId: null,
 
   settings: {},
+  localMlFeatures: {}, // last /local-ml/status features map; other cards gate on it
   endpoints: [],
   activeEndpointId: null,
   modelConfigs: [],
@@ -40,6 +41,8 @@ export const S = {
   hideUntilBaked: false, // keep the streaming reply out of the DOM until final
   preventPromptOverrides: false, // ignore character-card prompt overrides
   showEditorDiff: true, // show editor-pass diff highlights
+  showChatAvatars: false, // portrait gutter on chat messages
+  personaAvatarVersion: 0, // bumped on a persona avatar save; busts the image URL
   reasoningEnabled: { director: false, writer: false, editor: false, scripter: false },
   reasoningPrefill: { director: "", writer: "", editor: "" },
   editorAuditToggles: {
@@ -134,6 +137,19 @@ export const S = {
 
   rejectedWorkflowAtts: [],
 };
+
+/** Is a Local ML feature usable right now (downloaded, on, deps installed)?
+ *
+ * The Local ML cards publish the last `/local-ml/status` into `S`, so surfaces
+ * that depend on a model -- the Format Consistency card's POV option -- read
+ * the live answer here instead of fetching status once and going stale.
+ */
+export function localMlReady(feature) {
+  const info = S.localMlFeatures[feature];
+  // `runtime_ok` is absent for in-process features: only a feature that
+  // reports one can fail it.
+  return Boolean(info?.present && info?.enabled && info?.deps_ok && info.runtime_ok !== false);
+}
 
 export function effectiveWorkflowEnabled(wid) {
   const g = S.settings?.workflows_globally_enabled;

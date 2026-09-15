@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -13,7 +14,7 @@ from typing import Any, cast
 
 import httpx
 from fastapi import Depends, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 from ..database import (
     get_conversation,
@@ -56,6 +57,21 @@ async def _workflow_root_lock(root_id: int):
     lock = _workflow_root_locks.setdefault(root_id, asyncio.Lock())
     async with lock:
         yield
+
+
+def workflow_group_in_flight(root_id: int) -> bool:
+    """Whether a request currently holds this group's root lock.
+
+    Every operation that can add or remove a sibling holds the lock for its
+    whole duration and releases it only after its write commits, so False means
+    nothing in flight can still change this group -- the question a client is
+    left with when its own request dies on the wire mid-render.
+
+    False also covers "queued, but not yet at the lock", so a caller must see it
+    more than once before treating an operation as over.
+    """
+    lock = _workflow_root_locks.get(root_id)
+    return lock is not None and lock.locked()
 
 
 @asynccontextmanager
@@ -169,11 +185,25 @@ class _CleanupStreamingResponse(StreamingResponse):
 # connection warm. A turn has long token-free stretches — the reasoning-off
 # director pass, and (worst) the text-mode editor's prefill loop, which fires
 # many forced /completion calls back-to-back while emitting nothing to the
-# browser. An idle-timeout proxy in front of Orb (nginx proxy_read_timeout
-# defaults to 60s) tears down such a silent SSE, which strands the still-running
-# backend and drops the frontend to a stale draft. 15s stays comfortably under
-# common proxy timeouts.
-_SSE_KEEPALIVE_SECS = 15
+# browser. Two separate timers kill a silent stream, and the shorter one sets
+# this value:
+#
+# 1. The browser. When the OS reports a network change (on Linux, a
+#    NetworkManager state change over D-Bus), Firefox re-verifies traffic on
+#    every *active* connection and closes the ones that moved zero bytes inside
+#    network.http.network-changed.timeout — 5s by default — with
+#    NS_ERROR_NET_RESET. Loopback is not exempt. The page sees its fetch body
+#    fail ("Error in input stream"), never a clean end, so the turn dies with
+#    nothing logged on this side. A DHCPv6 lease renewal is such a change, and a
+#    router handing out a short T1 fires one every minute: a 15s heartbeat left
+#    gaps wide enough that turns died mid-generation several times an hour.
+# 2. An idle-timeout proxy in front of Orb (nginx proxy_read_timeout defaults to
+#    60s) tears down the same silent SSE, which strands the still-running
+#    backend and drops the frontend to a stale draft.
+#
+# 3s keeps every gap inside the browser's verification window and far under
+# common proxy timeouts, for ~4 bytes/s on an otherwise idle stream.
+_SSE_KEEPALIVE_SECS = 3
 
 
 async def _sse_stream(
@@ -328,6 +358,15 @@ def _pipeline_sse_response(
 _PROFILE_UPSTREAM = "The model endpoint did not answer the profile request."
 
 
+def cached_image_response(image_bytes: bytes, mime: str | None, request: Request) -> Response:
+    """Return a privately cacheable image response with ETag support."""
+    etag = '"' + hashlib.md5(image_bytes, usedforsecurity=False).hexdigest() + '"'
+    cache_headers = {"Cache-Control": "private, max-age=300", "ETag": etag}
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers=cache_headers)
+    return Response(content=image_bytes, media_type=mime or "image/png", headers=cache_headers)
+
+
 async def require_conversation(cid: str) -> ConversationRow:
     """404 guard shared by the ``/api/conversations/{cid}/...`` routes."""
     conv = await get_conversation(cid)
@@ -449,11 +488,21 @@ def _normalise_lorebook_entry(item: dict) -> dict:
     }
 
 
-def lorebook_to_book(world_name: str, entries: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+def lorebook_to_book(
+    world_name: str,
+    entries: Sequence[Mapping[str, Any]],
+    *,
+    dynamic_enabled: bool = False,
+) -> dict[str, Any]:
     """Serialize a World lorebook to Character Card shape."""
     return {
         "name": world_name,
-        "extensions": {},
+        # Orb's own marker. It round-trips the Dynamic World flag, and its mere
+        # presence tells the importer the book is a World Orb exported — so an
+        # entry-less one is a real lorebook to restore (a Dynamic World starts
+        # empty by design) rather than the vestigial `entries: []` that foreign
+        # cards carry.
+        "extensions": {"orb": {"dynamic_enabled": bool(dynamic_enabled)}},
         "entries": [
             {
                 "keys": e["keywords"],

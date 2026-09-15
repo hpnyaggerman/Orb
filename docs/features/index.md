@@ -28,6 +28,7 @@ and revise it afterward.
 | [Anti-slop](anti-slop.md) | Rewrite phrases and patterns you do not want in replies. |
 | [Anti-repetition](anti-repetition.md) | Detect repeated structures, openers, and phrases. |
 | [Length Guard](length-guard.md) | Limit reply length or rewrite replies that exceed the limit. |
+| [Post-processing Fragments](post-processing-fragments.md) | Apply ordered, exact Editor changes to replies. |
 | [Prose Rewriter](prose-rewriter.md) | Use a local model to revise the texture of each paragraph. |
 
 ## Writing tools
@@ -46,6 +47,7 @@ and revise it afterward.
 |---|---|
 | [Card-Embedded Fragments](card-fragments.md) | Include scene-direction fragments in a character card. |
 | [Fetch Cards from Internet](fetch-cards.md) | Browse supported card repositories and import cards. |
+| [Library Auto-tagging](library-auto-tagging.md) | Have the Agent tag every character from a vocabulary you write. |
 | [Backups and Presets](backups-presets.md) | Back up, share, merge, and restore Orb data. |
 | [Persona Pinning](persona-pinning.md) | Keep a persona attached to a conversation or character. |
 | [Character Expressions](character-expressions.md) | Change a character avatar based on the reply's emotion. |

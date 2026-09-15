@@ -115,7 +115,7 @@ async def test_update_enabled_tools_json_field(client, db):
 
 async def test_enabled_tools_sanitized_to_registered_tools(client, db):
     # Non-tool keys (the former length_guard* feature flags, or anything else not
-    # in the tool registry) must never be persisted back into enabled_tools.
+    # in the tool catalog) must never be persisted back into enabled_tools.
     resp = await client.put(
         "/api/settings",
         json={"enabled_tools": {"direct_scene": True, "length_guard": True, "not_a_tool": True}},
@@ -183,6 +183,23 @@ async def test_editor_audit_toggles_default_and_roundtrip(client, db):
     async with db.execute("SELECT editor_audit_toggles FROM settings WHERE id = 1") as cur:
         row = await cur.fetchone()
     assert json.loads(row["editor_audit_toggles"]) == updated
+
+
+async def test_show_chat_avatars_default_and_roundtrip(client, db):
+    resp = await client.get("/api/settings")
+    assert resp.status_code == 200
+    assert resp.json()["show_chat_avatars"] == 0
+
+    resp = await client.put("/api/settings", json={"show_chat_avatars": True})
+    assert resp.status_code == 200
+    assert resp.json()["show_chat_avatars"] == 1
+
+    async with db.execute("SELECT show_chat_avatars FROM settings WHERE id = 1") as cur:
+        row = await cur.fetchone()
+    assert row["show_chat_avatars"] == 1
+
+    resp = await client.put("/api/settings", json={"show_chat_avatars": False})
+    assert resp.json()["show_chat_avatars"] == 0
 
 
 async def test_hide_streaming_until_baked_default_and_roundtrip(client, db):

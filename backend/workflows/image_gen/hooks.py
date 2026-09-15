@@ -8,8 +8,8 @@ import secrets
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from ..contracts import WorkflowEventStream
 from ..toolkit import (
+    WorkflowEventStream,
     build_offturn_prefix,
     get_message_by_id,
     get_workflow_character_state,
@@ -147,8 +147,21 @@ def _history_through(history: Sequence[Mapping[str, Any]], message_id: int) -> l
     raise ValueError("that message is not on this conversation's active branch")
 
 
-_REPLAYED_FACTS = ("workflow_id", "backend_model", "width", "height", "quality", "reference_source")
+_REPLAYED_FACTS = (
+    "workflow_id",
+    "backend_model",
+    "width",
+    "height",
+    "quality",
+    "reference_source",
+    "negative_prompt_sent",
+)
 _DISCLOSED_FACTS = ("steps", "cfg", "sampler", "scheduler")
+
+
+async def _rendered(adapter, request, *, target, progress=None):
+    """Render through the shared seam used by fresh images and rerolls."""
+    return await resolve_and_generate(adapter, request, target=target, progress=progress)
 
 
 def _render_record(result, *, source: str) -> dict:
@@ -308,6 +321,15 @@ def _recorded_references(params: Mapping[str, Any]) -> list[Mapping[str, Any]]:
     return [entry for entry in recorded if isinstance(entry, Mapping)]
 
 
+def _rendered_seed(requested: int, result) -> int:
+    """The seed the backend drew with, which is not always the one it was handed: a
+    ComfyUI graph's seed node can declare a range smaller than the seed Orb picked,
+    and the render folds into it. Record what rendered, so the number shown next to
+    the image is the one that reproduces it."""
+    reported = result.backend_info.get("seed")
+    return reported if isinstance(reported, int) and not isinstance(reported, bool) else requested
+
+
 def _attachment(seed: int, result, metadata: dict, consumption: dict) -> dict:
     ext = MIME_EXTENSIONS.get(result.mime, "img")
     return {
@@ -315,7 +337,7 @@ def _attachment(seed: int, result, metadata: dict, consumption: dict) -> dict:
         "filename": f"generated-image.{ext}",
         "mime": result.mime,
         "data": result.image_bytes,
-        "seed": str(seed),
+        "seed": str(_rendered_seed(seed, result)),
         "generation_metadata": metadata,
         "consumption_metadata": consumption,
     }
@@ -404,8 +426,10 @@ async def _generate_fresh(
         profile_negative_prompt=str(profile.get("negative_prompt") or ""),
     )
     prompt, negative, style = assemble_prompts(config, style_id, profile, scene, avoid)
+    if not prompt.strip():
+        raise ImageGenerationError("the composed image prompt came out empty; try generating again")
     seed = _fresh_seed()
-    result = await resolve_and_generate(
+    result = await _rendered(
         adapter,
         ImageRequest(
             prompt=prompt,
@@ -431,8 +455,8 @@ async def _generate_fresh(
     consumption = _consumption(style, prompt, negative, result, md, source_label=adapter.label)
     if unfilled > 0:
         consumption.setdefault("notes", []).append(_unfilled_note(unfilled, len(references)))
-    # `md["references"]` rather than `references`: the ladder above may have dropped some
-    # of what was resolved, and this note is about what the image model was given.
+    # Read the adapter's record rather than the plan: it is the authoritative list of
+    # what the image model was given.
     uncovered = _uncovered_note(addressable, md["references"], len(slots), target.reference_capacity)
     if uncovered:
         consumption.setdefault("notes", []).append(uncovered)
@@ -575,8 +599,10 @@ async def reroll_gen(ctx, params, seed):
     prompt, negative, style_id = params.get("prompt"), params.get("negative_prompt"), params.get("style_id")
     if not isinstance(prompt, str) or not isinstance(negative, str) or not isinstance(style_id, str):
         raise ValueError("stored image parameters are incomplete")
-    if not prompt or not style_id:
+    if not style_id:
         raise ValueError("stored image parameters are incomplete")
+    if not prompt.strip():
+        raise ImageGenerationError("this image has no prompt to render; edit the prompt and reroll again")
     config = normalize_config(await get_workflow_config(WORKFLOW_ID))
     style = resolve_style(config, style_id)
     prior_style = (ctx.prior_consumption_metadata or {}).get("style_id")
@@ -604,7 +630,7 @@ async def reroll_gen(ctx, params, seed):
     if recorded_references or references:
         params["references"] = [reference.record() for reference in references]
     resolved_seed = fold_seed(seed)
-    result = await resolve_and_generate(
+    result = await _rendered(
         adapter,
         ImageRequest(
             prompt=prompt,

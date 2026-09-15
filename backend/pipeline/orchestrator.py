@@ -61,7 +61,7 @@ async def _consume_direction_note_step(gen: AsyncIterator[dict], state: TurnStat
     """
     async for ev in gen:
         if ev["type"] == "reasoning":
-            yield {"event": "reasoning", "data": {"pass": pass_label, "delta": ev["delta"]}}
+            yield {"event": "reasoning", "data": {"pass": pass_label, "delta": state.add_reasoning(pass_label, ev)}}
         elif ev["type"] == "done":
             if ev["result"].notes:
                 state.direction_notes.extend(ev["result"].notes)
@@ -103,9 +103,9 @@ async def _run_pipeline(
 ) -> AsyncIterator[dict]:
     """Run the director → writer → editor passes for one turn.
 
-    Streams SSE events as each pass runs, then runs post-pipeline workflow
-    hooks and emits a single ``_result`` event with the final draft and any
-    workflow attachments.
+    Streams SSE events as each pass runs, retains the post-Editor draft, then
+    runs the local prose rewriter and post-pipeline workflow hooks before
+    emitting one ``_result`` event.
 
     A stop during the director pass exits cleanly with no output. A stop during
     the writer pass still emits ``_result`` with the partial draft so persistence
@@ -133,9 +133,12 @@ async def _run_pipeline(
         schema_overrides=schema_overrides,
     )
 
-    # feedback fragments are handled post-writer and direction-note fragments by the
-    # direction-note step; the rest shape the writer prompt.
-    writer_fragments, feedback_fragments, direction_note_fragments = _split_interactive_fragments(interactive_fragments)
+    # Feedback and post-processing fragments are handled after the Writer, and
+    # direction-note fragments by the direction-note step; the rest shape the
+    # Writer prompt.
+    writer_fragments, feedback_fragments, direction_note_fragments, post_processing_fragments = _split_interactive_fragments(
+        interactive_fragments
+    )
 
     # Each direction-note fragment chooses its own recording placement, so a turn may run a
     # pre-writer step, a post-turn step, or both. The shared tool blob still carries the union
@@ -241,6 +244,7 @@ async def _run_pipeline(
             settings=settings,
             phrase_bank=phrase_bank,
             feedback_fragments=feedback_fragments,
+            post_processing_fragments=post_processing_fragments,
             editor_audit_msgs=editor_audit_msgs,
             kv_tracker=kv_tracker,
         ),
@@ -255,6 +259,19 @@ async def _run_pipeline(
         if stripped_draft != state.resp_text:
             state.resp_text = stripped_draft
             yield {"event": "writer_rewrite", "data": {"refined_text": stripped_draft}}
+
+    # Retain the Editor's result before any secondary workflow changes it. The
+    # database write still happens atomically with the final assistant message;
+    # this snapshot is the source an on-demand prose rewrite can replay later.
+    state.writer_draft = state.resp_text
+
+    # A stop during an Editor sub-step keeps the latest authoritative draft but
+    # must not start Feedback-adjacent work or any secondary workflow. This is
+    # the post-Writer counterpart to the abort boundary above.
+    if client.is_aborted:
+        yield _make_result(state)
+        kv_tracker.log_summary()
+        return
 
     # director_output is a plain dict (PostCtx expects a read-only mapping).
     director_output = state.as_director_output()
@@ -276,6 +293,11 @@ async def _run_pipeline(
             client=client,
             kv_tracker=kv_tracker,
             schema_overrides=schema_overrides,
+            # One source for both modes: cfg.agent_lane IS the writer lane when a
+            # single model serves both, so a hook's forced Agent call lands on
+            # the configured execution target.
+            agent_client=cfg.agent_lane.client,
+            agent_model_name=cfg.agent_lane.base.model,
         ),
     ):
         if isinstance(ev, _PostPipelineResult):

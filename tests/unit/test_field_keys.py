@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from backend.core import fold_key, folded_collisions, match_folded
-from backend.inference import wire_field
+from backend.prompting.tool_schemas import wire_field
 
 
 def test_fold_key_ignores_case_and_separators():

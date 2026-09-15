@@ -17,24 +17,21 @@ from ....core import (
     resolve_inline,
 )
 from ....inference import (
-    PRE_WRITER_TOOLS,
-    TOOLS,
     CachedBase,
     LLMClient,
     _KVCacheTracker,
-    build_direct_scene_tool,
-    build_director_scene_step_prompt,
-    build_director_tool_prompt,
-    compute_style_injection_block,
     parse_tool_calls,
     reasoning_cfg,
-    render_direction_notes_block,
-    resolve_mood_fragment_randoms,
-    wire_field,
 )
+from ....prompting import compute_style_injection_block, resolve_mood_fragment_randoms
+from ....prompting.tool_catalog import require_tool
+from ....prompting.tool_schemas import build_direct_scene_tool, wire_field
 from ...predicates import direction_note_to_director, direction_note_to_writer
+from ...tools import DIRECTOR_LOOP_TOOL_NAMES
 from . import progressive
+from .direction_note_prompts import render_direction_notes_block
 from .lorebook_select import LorebookSelectResult, lorebook_select_step
+from .prompts import build_director_scene_step_prompt, build_director_tool_prompt
 
 if TYPE_CHECKING:
     from ....core import Macros
@@ -72,7 +69,7 @@ SPEAKING_PLAN_SCHEMA_DESCRIPTION = (
 def speaking_plan_instruction(speaker_keys: str) -> str:
     """The live half: which keys are castable *this* exchange, for the trailing message.
 
-    The mirror of the editor's numbered findings — the volatile list is stated in
+    The mirror of the editor's numbered issues — the volatile list is stated in
     prose on the per-call tail and validated server-side (``cast.parse_speaking_plan``),
     never expressed as a schema override. It also reaches strictly more of the
     pipeline there: text mode never renders tool schemas at all, and the
@@ -234,7 +231,7 @@ async def director_pass(
     all_calls: list[dict] = []
     last_raw = ""
 
-    tool_names = [n for n, on in enabled_tools.items() if on and n in PRE_WRITER_TOOLS]
+    tool_names = [n for n, on in enabled_tools.items() if on and n in DIRECTOR_LOOP_TOOL_NAMES]
 
     if not tool_names:
         yield {
@@ -275,7 +272,7 @@ async def director_pass(
         plans_speakers = SPEAKING_PLAN_FIELD in scene_fields
         if name == "direct_scene" and per_fragment_on and (interactive_fragments or plans_speakers):
             reasoning_params = reasoning_cfg(reasoning_on, reasoning_prefill)
-            hyperparams = extract_hyperparams(settings, defaults={"temperature": 0.25, "max_tokens": 8192})
+            hyperparams = extract_hyperparams(settings, lane="agent", token_floor=8192, defaults={"temperature": 0.25})
 
             # One forced call per fragment, each shown the values already chosen
             # this turn so later fragments build on earlier ones. Moods are
@@ -312,7 +309,7 @@ async def director_pass(
                         resp,
                         label="director:direct_scene",
                         trailing=trailing,
-                        tool_choice=TOOLS["direct_scene"]["choice"],
+                        tool_choice=require_tool("direct_scene")["choice"],
                         kv_tracker=kv_tracker,
                         json_schema=_step_schema(tool_schema, target) if tool_schema else None,
                         **hyperparams,
@@ -374,14 +371,14 @@ async def director_pass(
         # direction-note steps. Aborting the turn here would also skip
         # persisting the finished reply.
         reasoning_params = reasoning_cfg(reasoning_on, reasoning_prefill)
-        hyperparams = extract_hyperparams(settings, defaults={"temperature": 0.25, "max_tokens": 8192})
+        hyperparams = extract_hyperparams(settings, lane="agent", token_floor=8192, defaults={"temperature": 0.25})
         try:
             async for event in base.complete_into(
                 client,
                 resp,
                 label=f"director:{name}",
                 trailing=trailing,
-                tool_choice=TOOLS[name]["choice"],
+                tool_choice=require_tool(name)["choice"],
                 kv_tracker=kv_tracker,
                 **hyperparams,
                 **reasoning_params,
@@ -462,8 +459,8 @@ async def director_stage(
     direction_notes = director.get("direction_notes") or []
     notes_block = macros.resolve_message(render_direction_notes_block(direction_notes)) if direction_notes else ""
 
-    has_pre_writer_tools = any(cfg.enabled_tools.get(n, False) for n in PRE_WRITER_TOOLS)
-    if cfg.agent_on and has_pre_writer_tools:
+    has_director_loop_tools = any(cfg.enabled_tools.get(n, False) for n in DIRECTOR_LOOP_TOOL_NAMES)
+    if cfg.agent_on and has_director_loop_tools:
         yield {"event": "director_start"}
         async for event in director_pass(
             cfg.agent_lane.client,
@@ -484,10 +481,9 @@ async def director_stage(
             speaker_keys=speaker_keys,
         ):
             if event["type"] == "reasoning":
-                state.reasoning_director += event["delta"]
                 yield {
                     "event": "reasoning",
-                    "data": {"pass": "director", "delta": event["delta"]},
+                    "data": {"pass": "director", "delta": state.add_reasoning("director", event)},
                 }
             elif event["type"] == "done":
                 result: DirectorResult = event["result"]
@@ -516,13 +512,13 @@ async def director_stage(
             settings=settings,
             catalog=lorebook.catalog,
             user_message=state.user_message,
+            entries=lorebook.entries,
             kv_tracker=kv_tracker,
             reasoning_on=cfg.director_reasoning_on,
             reasoning_prefill=cfg.director_reasoning_prefill,
         ):
             if event["type"] == "reasoning":
-                state.reasoning_director += event["delta"]
-                yield {"event": "reasoning", "data": {"pass": "director", "delta": event["delta"]}}
+                yield {"event": "reasoning", "data": {"pass": "director", "delta": state.add_reasoning("director", event)}}
             elif event["type"] == "done":
                 sel: LorebookSelectResult = event["result"]
                 state.selected_lorebook_entries = sel.selected
