@@ -5,13 +5,10 @@ import { renderDefaultWidget } from "./default_widget.js";
 import { closeModal, showModal } from "./modal.js";
 import { effectiveWorkflowEnabled, S } from "./state.js";
 import { broadcastWorkflowMutation, requestSendPermission, setWorkflowMutationCallback } from "./tabLock.js";
-import { $, convUrl, esc, escAttr, markChatProgrammaticScroll, toast } from "./utils.js";
-
-const WORKFLOW_ATT_EVICTED_MARKER = "[evicted]";
+import { $, boolFlag, convUrl, esc, escAttr, markChatProgrammaticScroll, toast } from "./utils.js";
 
 function _isAttachmentEvicted(att) {
-  const v = att.b64 || att.data_b64 || "";
-  return v === WORKFLOW_ATT_EVICTED_MARKER;
+  return boolFlag(att.evicted);
 }
 
 function _evictedAttachmentHtml(msg, att) {
@@ -76,6 +73,20 @@ function _workflowLabel(att) {
   return entry?.display_name || att.workflow_id || "artifact";
 }
 
+function _workflowPlacement(wid) {
+  return S.workflowAttachmentPlacements[wid]?.placement || "artifact";
+}
+
+function _notifyWorkflowRerollSuccess(wid, msgId, attId) {
+  const fn = S.workflowRerollSuccess[wid];
+  if (typeof fn !== "function") return;
+  try {
+    fn(msgId, attId);
+  } catch (e) {
+    console.error(`reroll success callback threw (${wid}):`, e);
+  }
+}
+
 const WF_MINIMIZED_LS_KEY = "orb.workflowMinimized";
 
 function _loadWorkflowMinimized() {
@@ -98,6 +109,7 @@ function _persistWorkflowMinimized() {
 }
 
 function _renderWorkflowSwipeContainer(msg, rootId, atts) {
+  if (_workflowPlacement(atts[0]?.workflow_id) === "actions") return "";
   const instanceId = `ws-${msg.id}-${rootId}`;
   const total = atts.length;
   const root = atts.find((a) => a.id === rootId) || atts[0];
@@ -182,7 +194,7 @@ function _workflowAttachmentGroups(msg) {
 }
 
 export function _renderWorkflowArtifacts(msg) {
-  const groups = _workflowAttachmentGroups(msg);
+  const groups = _workflowAttachmentGroups(msg).filter((g) => _workflowPlacement(g.atts[0]?.workflow_id) !== "actions");
   if (!groups.length) return "";
   const containers = groups.map((g) => _renderWorkflowSwipeContainer(msg, g.rootId, g.atts));
   return `<div class="workflow-artifacts">${containers.join("")}</div>`;
@@ -228,7 +240,11 @@ window.workflowArtifactStep = async (instanceId, delta) => {
   const newActiveId = group.atts[next].id;
   _workflowSwipeInFlight.set(rootId, { msgId, activeId: newActiveId });
   if (root) root.active_sibling_id = newActiveId;
-  el.outerHTML = _renderWorkflowSwipeContainer(msg, rootId, group.atts);
+  if (_workflowPlacement(group.atts[0]?.workflow_id) === "actions") {
+    renderMessages();
+  } else {
+    el.outerHTML = _renderWorkflowSwipeContainer(msg, rootId, group.atts);
+  }
   _scrollArtifactIntoView(msgId, rootId);
   try {
     await api.post(convUrl(S.activeConvId, "messages", msgId, "workflow-attachments", rootId, "activate"), {
@@ -252,7 +268,7 @@ window.workflowRehydrate = async (msgId, attId, btn) => {
   if (_workflowRehydrateInFlight.has(attId)) return;
   _workflowRehydrateInFlight.set(attId, msgId);
   btn.disabled = true;
-  const container = btn.closest(".workflow-artifact-swipe");
+  const container = btn.closest(".workflow-artifact-swipe, [data-root-id]");
   const wid = _resolveWorkflowId(msgId, attId);
   const ch = `workflow:${wid || "op"}:rehydrate:${attId}`;
   try {
@@ -343,7 +359,7 @@ async function _workflowGroupInFlight(convId, msgId, rootId) {
   }
 }
 
-async function _recoverWorkflowSibling(convId, msgId, rootId, before) {
+async function _recoverWorkflowSibling(convId, msgId, rootId, before, onSuccess) {
   const deadline = Date.now() + 200_000;
   // Our request died on the wire, so its outcome has to be read off the server:
   // a new sibling means it landed, two consecutive "nothing running" answers
@@ -366,6 +382,7 @@ async function _recoverWorkflowSibling(convId, msgId, rootId, before) {
     );
     if ([...now].some((id) => !before.has(id))) {
       if (S.activeConvId !== convId) return true;
+      onSuccess?.();
       setMessages(msgs);
       _reapplyInFlightSwipes();
       renderMessages();
@@ -456,7 +473,7 @@ window.workflowRegenerate = async (msgId, attId, btn) => {
   const rootId = _resolveWorkflowRootId(msgId, attId);
   if (_workflowActionInFlight.has(rootId)) return;
   _workflowActionInFlight.set(rootId, msgId);
-  const container = btn.closest(".workflow-artifact-swipe");
+  const container = btn.closest(".workflow-artifact-swipe, [data-root-id]");
   btn.disabled = true;
   const wid = _resolveWorkflowId(msgId, attId);
   const ch = `workflow:${wid || "op"}:regen:${rootId}`;
@@ -494,7 +511,7 @@ window.workflowReroll = async (msgId, attId, btn) => {
   const rootId = _resolveWorkflowRootId(msgId, attId);
   if (_workflowActionInFlight.has(rootId)) return;
   _workflowActionInFlight.set(rootId, msgId);
-  const container = btn.closest(".workflow-artifact-swipe");
+  const container = btn.closest(".workflow-artifact-swipe, [data-root-id]");
   btn.disabled = true;
   const wid = _resolveWorkflowId(msgId, attId);
   const ch = `workflow:${wid || "op"}:reroll:${rootId}`;
@@ -515,6 +532,7 @@ window.workflowReroll = async (msgId, attId, btn) => {
       convUrl(convId, "messages", msgId, "workflow-attachments", attId, "reroll-gen"),
       extra ? { params: extra } : {},
     );
+    if (result?.attachment_id != null) _notifyWorkflowRerollSuccess(wid, msgId, attId);
     const incoming = result && Array.isArray(result.rejected_workflow_atts) ? result.rejected_workflow_atts : [];
     _mergeWorkflowRejections(msgId, rootId, incoming);
     setMessages(await api.get(convUrl(convId, "messages")));
@@ -523,7 +541,12 @@ window.workflowReroll = async (msgId, attId, btn) => {
     _scrollArtifactIntoView(msgId, rootId);
     broadcastWorkflowMutation({ convId, msgId });
   } catch (e) {
-    if (_isNetworkError(e) && (await _recoverWorkflowSibling(convId, msgId, rootId, beforeSiblings))) {
+    if (
+      _isNetworkError(e) &&
+      (await _recoverWorkflowSibling(convId, msgId, rootId, beforeSiblings, () =>
+        _notifyWorkflowRerollSuccess(wid, msgId, attId),
+      ))
+    ) {
     } else {
       console.error("Reroll failed:", e);
       _showActionFailure(container, "workflow-reroll-error", "Reroll", e);

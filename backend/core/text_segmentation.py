@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 
 __all__ = [
     "CLOSE_QUOTES",
@@ -11,13 +11,13 @@ __all__ = [
     "OPEN_QUOTES",
     "PARA_SPLIT",
     "PROTECTED_MARKUP_RE",
-    "SENT_SPLIT",
     "TOGGLE_QUOTES",
     "count_sentences",
     "ends_with_question",
     "ends_with_sentence_terminator",
     "extract_unquoted_text",
     "find_quote_spans",
+    "map_prose",
     "remove_quoted_spans",
     "sentence_boundary_ends",
     "split_paragraphs",
@@ -30,12 +30,6 @@ __all__ = [
 # pattern for callers that need to preserve or inspect the separators.
 HARD_LINE_BREAK_RE = re.compile(r"\r\n|[\n\v\f\r\x1c-\x1e\x85\u2028\u2029]")
 PARA_SPLIT = re.compile(r"(?:\r\n|[\n\r\x85\u2028\u2029])\s*(?:\r\n|[\n\r\x85\u2028\u2029])")
-
-# Compatibility pattern for older consumers that call ``SENT_SPLIT.split``.
-# Public splitting uses the scanner below for abbreviations and Unicode marks.
-SENT_SPLIT = re.compile(
-    r"(?:(?<=[.!?…])[\"\u201d\u2019'*_)\]]*\s+|(?:\r\n|[\n\v\f\r\x1c-\x1e\x85\u2028\u2029])+)",
-)
 
 _QUOTE_PAIRS = {
     "“": "”",
@@ -56,10 +50,7 @@ CLOSE_QUOTES = frozenset(_QUOTE_PAIRS.values())
 # text. A double prime after a digit is a measurement (12″) and is skipped like 12".
 TOGGLE_QUOTES = frozenset({'"', "＂", "″"})
 
-# Formatting runs that are not roleplay markup: fenced code, **bold** / __bold__
-# (and their triple forms), and a lone *** or ___ scene divider. The
-# format-consistency classifier hides them from its coverage ratio and the markup
-# classifier's input shaping removes them identically, so both read this one pattern.
+# Markdown formatting is excluded from roleplay markup by both classifiers.
 PROTECTED_MARKUP_RE = re.compile(
     r"```.*?```"  # fenced code (may span lines)
     r"|\*{2,}[^\n]*?\*{2,}"  # **bold** / ***bold-italic*** (one line)
@@ -72,6 +63,20 @@ PROTECTED_MARKUP_RE = re.compile(
 def strip_protected_markup(text: str) -> str:
     """Replace every protected formatting run with one space."""
     return PROTECTED_MARKUP_RE.sub(" ", text)
+
+
+def map_prose(text: str, fn: Callable[[str], str]) -> str:
+    """Apply *fn* between protected runs, preserving those runs verbatim."""
+    out: list[str] = []
+    idx = 0
+    for match in PROTECTED_MARKUP_RE.finditer(text):
+        if match.start() > idx:
+            out.append(fn(text[idx : match.start()]))
+        out.append(match.group(0))
+        idx = match.end()
+    if idx < len(text):
+        out.append(fn(text[idx:]))
+    return "".join(out)
 
 
 _TERMINATORS = frozenset(".!?…。！？؟۔｡．।॥")
@@ -135,11 +140,7 @@ _NUMBER_ABBREVIATIONS = frozenset(
     }
 )
 _ABBREVIATION_BEFORE_PERIOD = re.compile(r"(?:[^\W\d_]+\.)+$", re.UNICODE)
-# A trailing-off ellipsis is only a sentence end when what follows starts one.
-# Roleplay prose uses `...` mid-sentence as a beat -- "her eyes seem a bit...
-# more still than usual" -- and splitting there manufactures a fragment the
-# editor can address by id. Patching that fragment leaves the lowercase
-# remainder stranded behind the replacement's full stop.
+# A trailing ellipsis before lowercase text is a mid-sentence beat, not a boundary.
 _ELLIPSIS_RUN = re.compile(r"\.{2,}|…+")
 
 

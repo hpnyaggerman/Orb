@@ -9,28 +9,17 @@ from .detectors.phrase_repetition import PhraseResult
 from .detectors.slop_detector import DetectionResult
 from .detectors.structural_repetition import StructuralResult
 from .detectors.template_repetition import FlaggedTemplate, TemplateResult
-from .format_consistency import (
-    AxisStyle,
-    Dialogue,
-    FormatDriftReport,
-    Narration,
-    baseline_axes,
-    classify_axes,
-    narration_only,
-    normalize_to_baseline,
-    protected_runs,
-    spoken_lines,
-    stable_label,
-    vote_axes,
-)
 from .patching import (
     PatchError,
     PatchErrorKind,
     apply_id_patches,
     filter_audit_report_to_text,
 )
+from .speech import speech_input, speech_segments
 from .targets import Target, build_targets, format_numbered_report, target_ids_for
-from .text.text_segmentation import split_narration_sentences
+from .text.markup import classify_axes, narration_only, protected_runs, spoken_lines
+from .text.roleplay import AxisStyle, Dialogue, Narration
+from .text.roleplay_segmentation import split_narration_sentences
 
 __all__ = [
     "AUDIT_TYPES",
@@ -56,15 +45,12 @@ __all__ = [
     "EchoResult",
     "AxisStyle",
     "Dialogue",
-    "FormatDriftReport",
     "Narration",
-    "baseline_axes",
     "classify_axes",
     "narration_only",
-    "normalize_to_baseline",
     "protected_runs",
     "spoken_lines",
-    "stable_label",
-    "vote_axes",
+    "speech_segments",
+    "speech_input",
     "split_narration_sentences",
 ]

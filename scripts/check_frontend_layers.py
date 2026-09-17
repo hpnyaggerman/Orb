@@ -147,6 +147,7 @@ FROZEN_ABI = {
     "registerWorkflowEventHandler",
     "registerAttachmentRenderer",
     "registerRerollParams",
+    "registerRerollSuccess",
     "registerAction",
     # http / dom helpers
     "api",
@@ -160,6 +161,7 @@ FROZEN_ABI = {
     "setModalCloseGuard",
     "sseEvents",
     "streamPost",
+    "workflowAttachmentUrl",
     # audio
     "playAudio",
     "stopChannel",
@@ -194,6 +196,7 @@ FROZEN_ABI = {
     "getWorkflowState",
     "setWorkflowState",
     "localMlReady",
+    "refreshLocalMlStatus",
 }
 
 # ── Parsing helpers ──────────────────────────────────────────────────────────
