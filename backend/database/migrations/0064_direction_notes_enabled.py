@@ -10,4 +10,4 @@ def migrate(conn: sqlite3.Connection) -> None:
     if not cols or "enabled" in cols:
         return
     conn.execute("ALTER TABLE direction_notes ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1")
-    print("[migrations] 0062: added enabled column to direction_notes")
+    print("[migrations] 0064: added enabled column to direction_notes")
