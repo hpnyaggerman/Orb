@@ -15,9 +15,11 @@ from ..toolkit import (
 from .config import normalize_config
 from .engine.router import get_adapter, list_backends
 from .synth import (
+    WORKFLOW_ID,
     audio_mime_ext,
     build_generation_metadata,
     compute_seed,
+    consumption_blocks,
     normalize_profile,
     synthesize,
     synthesize_blocks,
@@ -26,7 +28,6 @@ from .synth import (
 
 logger = logging.getLogger(__name__)
 
-WORKFLOW_ID = "tts"
 PREVIEW_TEXT = "Hey, this is a voice preview. How do I sound?"
 
 
@@ -37,14 +38,17 @@ def _attachment(text: str, profile: dict, audio: bytes, mime: str, backend: str,
     pauses the frontend reads to slice and play individual blocks.
     """
     _, ext = audio_mime_ext(backend)
+    duration_ms = sum(
+        max(0, int(block.get("duration_ms") or 0)) + max(0, int(block.get("pause_after_ms") or 0)) for block in blocks
+    )
     return {
         "workflow_id": WORKFLOW_ID,
         "filename": f"speech.{ext}",
         "mime": mime,
         "data": audio,
-        "seed": compute_seed(text, profile),
-        "generation_metadata": build_generation_metadata(text, profile),
-        "consumption_metadata": {"blocks": blocks},
+        "seed": compute_seed(text, profile, blocks),
+        "generation_metadata": build_generation_metadata(text, profile, blocks),
+        "consumption_metadata": {"duration_ms": duration_ms, "blocks": consumption_blocks(blocks)},
     }
 
 
@@ -67,7 +71,7 @@ async def post_pipeline(ctx):
         return
     yield {"event": "phase_status", "data": {"channel": f"workflow:{WORKFLOW_ID}", "label": "Synthesizing speech..."}}
     try:
-        audio, mime, blocks = await synthesize_blocks(text, profile)
+        audio, mime, blocks = await synthesize_blocks(text, profile, settings=ctx.settings)
     except Exception:
         logger.exception("tts auto-generation failed")
         return
@@ -95,7 +99,7 @@ async def regenerate(ctx, body):
         return []
     profile = normalize_profile(await get_workflow_character_state(ctx.character_id, WORKFLOW_ID) if ctx.character_id else None)
     try:
-        audio, mime, blocks = await synthesize_blocks(text, profile)
+        audio, mime, blocks = await synthesize_blocks(text, profile, settings=ctx.settings)
     except Exception:
         logger.exception("tts regenerate failed for attachment %s", ctx.attachment_id)
         return []
@@ -114,7 +118,10 @@ async def reroll_gen(ctx, params, seed):
     a 500.
     """
     audio, _, blocks = await synthesize_blocks_from_metadata(params if isinstance(params, dict) else {})
-    return audio, {"blocks": blocks}
+    duration_ms = sum(
+        max(0, int(block.get("duration_ms") or 0)) + max(0, int(block.get("pause_after_ms") or 0)) for block in blocks
+    )
+    return audio, {"duration_ms": duration_ms, "blocks": consumption_blocks(blocks)}
 
 
 async def on_demand(ctx, body):
@@ -142,7 +149,7 @@ async def _create(ctx, body) -> dict:
         return {"error": "message has no text"}
     profile = normalize_profile(await get_workflow_character_state(ctx.character_id, WORKFLOW_ID) if ctx.character_id else None)
     try:
-        audio, mime, blocks = await synthesize_blocks(text, profile)
+        audio, mime, blocks = await synthesize_blocks(text, profile, settings=ctx.settings)
     except Exception:
         logger.exception("tts create failed for message %s", mid)
         return {"error": "synthesis failed"}
@@ -227,6 +234,14 @@ async def _preview(body) -> dict:
     text = body.get("text") or PREVIEW_TEXT
     try:
         audio, mime = await synthesize(text, profile)
+    except ValueError as exc:
+        # An adapter raises ValueError for the refusals a user can act on: no
+        # voice enrolled yet, a model that is not downloaded, a missing API
+        # key. That message IS the fix, so it reaches the panel's status line;
+        # "preview synthesis failed" would send the user looking for a bug that
+        # is not there. Anything else IS a bug and stays generic below.
+        logger.info("tts preview refused: %s", exc)
+        return {"error": str(exc) or "preview synthesis failed"}
     except Exception:
         logger.exception("tts preview failed")
         return {"error": "preview synthesis failed"}

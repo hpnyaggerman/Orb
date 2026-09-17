@@ -28,6 +28,7 @@ import { modelPickerState } from "./model_picker.js";
 import {
   addableProviders,
   COMFY_CONNECTION,
+  cardSummary,
   connectionLabel,
   connectionList,
   DEFAULT_PROMPT_FORMAT,
@@ -53,6 +54,7 @@ const REFERENCE_SOURCES = [
   ["character_and_previous", "Character references and the previous image"],
 ];
 const MAX_USER_GRAPHS = 32;
+const MAX_SCENE_SKILLS = 32;
 
 const DEFAULT_EDGE = 1024;
 const styleSize = (style) => [Number(style?.width) || DEFAULT_EDGE, Number(style?.height) || DEFAULT_EDGE];
@@ -77,7 +79,7 @@ const optionList = (pairs, selected) =>
 let cfg;
 let pendingGraph = null;
 let backends = { sources: [], providers: [] };
-let draft = { styles: [], graphs: [], comfy: {}, connections: {} };
+let draft = { styles: [], scene_skills: [], graphs: [], comfy: {}, connections: {} };
 let connections = [];
 let modelsByConnection = {};
 let probeIds = {};
@@ -85,10 +87,11 @@ let pendingConnections = new Set();
 
 export function initConfigPanel(sharedConfig) {
   cfg = sharedConfig;
-  registerAction(WORKFLOW_ID, "settings", () => openSettings());
+  registerAction(WORKFLOW_ID, "settings", (el) => openSettings(el?.dataset?.styleId || ""));
   registerAction(WORKFLOW_ID, "pickStyle", async (el) => {
     await saveConfigPatch({ default_style: el.value }, "Could not save default style");
     refreshCardReadiness();
+    probeStyleWorkflow(el.value);
   });
   registerAction(WORKFLOW_ID, "pickPov", (el) => saveConfigPatch({ pov_mode: el.value }, "Could not save the camera"));
   registerAction(WORKFLOW_ID, "editStyle", (el) => openSettings(el.dataset.styleId));
@@ -100,6 +103,8 @@ export function initConfigPanel(sharedConfig) {
   registerAction(WORKFLOW_ID, "styleAdd", () => addStyle());
   registerAction(WORKFLOW_ID, "styleRemove", (el) => removeStyle(Number(el.dataset.styleIndex)));
   registerAction(WORKFLOW_ID, "styleChange", (el) => refreshStyleState(el));
+  registerAction(WORKFLOW_ID, "skillAdd", () => addSceneSkill());
+  registerAction(WORKFLOW_ID, "skillRemove", (el) => removeSceneSkill(Number(el.dataset.skillIndex)));
   registerAction(WORKFLOW_ID, "styleConnection", (el) => relinkStyle(el));
   registerAction(WORKFLOW_ID, "resolutionToggle", (el, event) => toggleResolutionMenu(el, event));
   registerAction(WORKFLOW_ID, "resolutionPick", (el) => pickResolution(el));
@@ -116,7 +121,7 @@ function query(action, extra) {
   return api.post(`/workflows/${WORKFLOW_ID}/query`, { action, ...extra });
 }
 
-let cardReadiness = { text: "", ready: true };
+let cardReadiness = { text: "", ready: true, styleId: "", failure: null };
 let cardPov = { classifier: true, fallback: "third" };
 let cardStyles = [];
 
@@ -131,19 +136,35 @@ function cardStyleOptions() {
   );
 }
 
+const settingsButton = (label, styleId, extraClass = "") =>
+  `<button class="btn btn-sm ${extraClass}" data-wf-action="image_gen:settings" data-style-id="${escAttr(styleId || "")}">${esc(label)}</button>`;
+
+function failureStrip() {
+  const failure = cardReadiness.failure;
+  if (!failure) return "";
+  const on = failure.style_label ? ` — ${failure.style_label}` : "";
+  return `<div class="image-gen-card-alert">
+    <div class="image-gen-card-alert-head">${esc(`This style cannot render${on}`)}</div>
+    <div class="image-gen-card-alert-detail">${esc(failure.detail)}</div>
+    ${settingsButton("Fix", failure.style_id, "image-gen-card-btn")}
+  </div>`;
+}
+
 function configPanelBody() {
   if (!cardReadiness.ready) {
     return `<div class="image-gen-card-setup">
-      <span class="image-gen-card-status" title="${escAttr(cardReadiness.text)}">Setup required</span>
-      <button class="btn btn-sm btn-accent image-gen-card-btn" data-wf-action="image_gen:settings">Finish setup</button>
-    </div>`;
+        <span class="image-gen-card-status image-gen-card-unready">Setup required</span>
+        ${settingsButton("Finish setup", cardReadiness.styleId, "btn-accent image-gen-card-btn")}
+      </div>
+      <div class="image-gen-card-alert-detail">${esc(cardReadiness.text || "Not configured")}</div>`;
   }
 
   const stylePicker = cardStyles.length
     ? `<label for="ig-card-style">Style</label><select id="ig-card-style" class="tool-card-select" data-wf-action="image_gen:pickStyle" data-wf-on="change">${cardStyleOptions()}</select>`
     : "";
-  return `<div class="image-gen-card-controls">${stylePicker}${povPicker()}</div>
-    <button class="btn btn-sm tool-card-btn" data-wf-action="image_gen:settings">Settings</button>`;
+  return `${failureStrip()}<div class="image-gen-card-controls">${stylePicker}${povPicker()}</div>
+    <div class="image-gen-card-summary">${esc(cardSummary(cfg, cardStyles, backends.providers))}</div>
+    ${settingsButton("Settings", "", "tool-card-btn")}`;
 }
 
 function cardPovOptions() {
@@ -166,10 +187,10 @@ export function configPanelRenderer() {
 }
 
 async function saveConfigPatch(patch, failure) {
-  Object.assign(cfg, patch);
+  const next = { ...cfg, ...patch };
   try {
-    const res = await api.put(`/workflows/${WORKFLOW_ID}/config`, { config: { ...cfg, ...patch } });
-    if (res?.config) Object.assign(cfg, res.config);
+    const res = await api.put(`/workflows/${WORKFLOW_ID}/config`, { config: next });
+    Object.assign(cfg, res?.config || next);
   } catch {
     toast(failure, "error");
   }
@@ -190,6 +211,8 @@ export async function refreshCardReadiness() {
     const status = await query("status");
     cardReadiness = {
       ready: !!status?.ready,
+      styleId: status?.default_style || "",
+      failure: status?.failure || null,
       text: status?.ready
         ? `Ready — ${status.style_count} style${status.style_count === 1 ? "" : "s"}`
         : status?.detail || "Not configured",
@@ -200,8 +223,31 @@ export async function refreshCardReadiness() {
       providers: Array.isArray(status?.providers) ? status.providers : backends.providers,
     };
   } catch {
-    cardReadiness = { ready: false, text: "" };
+    cardReadiness = {
+      ready: false,
+      styleId: "",
+      failure: null,
+      text: "Orb could not read the image settings. Check that the app is still running, then reload.",
+    };
   }
+  refreshCard();
+}
+
+/** Probe the selected ComfyUI workflow. */
+async function probeStyleWorkflow(styleId, { draft: fromDraft = false } = {}) {
+  if (!styleId) return;
+  probeIds[styleId] = (probeIds[styleId] || 0) + 1;
+  const probeId = probeIds[styleId];
+  let failure = null;
+  try {
+    const body = fromDraft ? { style_id: styleId, config: readConfig() } : { style_id: styleId };
+    failure = (await query("probe", body))?.failure || null;
+  } catch {
+    return;
+  }
+  if (probeIds[styleId] !== probeId) return;
+  if (styleId !== (cfg?.default_style || "")) return;
+  cardReadiness = { ...cardReadiness, failure };
   refreshCard();
 }
 
@@ -414,7 +460,8 @@ function comfyReferenceFields(style) {
 }
 
 function backendFields(style, connection) {
-  if (connection && connection.source === "cloud") return cloudStyleFields(style, connection);
+  if (!connection) return "";
+  if (connection.source === "cloud") return cloudStyleFields(style, connection);
   return `<div class="ig-grid">
       <label>Checkpoint${checkpointField(style.checkpoint || "")}</label>
       <label>Workflow${workflowField(style.workflow || "")}</label>
@@ -498,7 +545,7 @@ function styleTargetBadge(style, connection) {
 function styleSummary(style, connection) {
   const id = styleConnectionId(style, cfg);
   return `<span class="ig-style-name">${esc(style.label || style.id)}</span>
-      <span class="ig-style-conn${connection?.ready === false ? " ig-unready" : ""}">${esc(connection?.label || id || "No connection")}</span>
+      <span class="ig-style-conn${connection?.ready ? "" : " ig-unready"}">${esc(connection?.label || id || "No connection")}</span>
       <span class="ig-style-model">${esc(styleTargetBadge(style, connection))}</span>
       <span class="ig-style-format">${promptFormatBadge(style.prompt_format)}</span>`;
 }
@@ -620,6 +667,68 @@ function removeStyle(index) {
   renderStyles(open);
 }
 
+function sceneSkillRows() {
+  if (!draft.scene_skills.length) return `<div class="image-gen-note">No composition skills saved.</div>`;
+  return draft.scene_skills
+    .map(
+      (skill, index) => `<details class="ig-skill" data-skill-index="${index}">
+        <summary><span class="ig-style-name">${esc(skill.label || skill.id)}</span><span class="ig-summary-note">${skill.enabled === false ? "disabled" : "enabled"}</span></summary>
+        <div class="ig-skill-body">
+          <label class="ig-toggle"><input type="checkbox" data-ig-skill-field="enabled"${skill.enabled === false ? "" : " checked"}><span>Enabled</span></label>
+          <label>Name<input maxlength="80" data-ig-skill-field="label" value="${escAttr(skill.label || "")}"></label>
+          <label>When to use<textarea maxlength="500" data-ig-skill-field="description" placeholder="Describe when the selector should choose this skill.">${esc(skill.description || "")}</textarea></label>
+          <label>Instructions<textarea maxlength="4000" data-ig-skill-field="instructions" placeholder="Authoritative spatial-composition guidance.">${esc(skill.instructions || "")}</textarea></label>
+          <button class="btn btn-sm ig-danger" data-wf-action="image_gen:skillRemove" data-skill-index="${index}">Remove skill</button>
+        </div>
+      </details>`,
+    )
+    .join("");
+}
+
+function captureSceneSkills() {
+  draft.scene_skills = draft.scene_skills.map((skill, index) => {
+    const row = document.querySelector(`[data-skill-index="${index}"]`);
+    if (!row) return skill;
+    const value = (name) => row.querySelector(`[data-ig-skill-field="${name}"]`)?.value ?? "";
+    return {
+      ...skill,
+      enabled: row.querySelector('[data-ig-skill-field="enabled"]')?.checked === true,
+      label: value("label").trim() || skill.label || skill.id,
+      description: value("description"),
+      instructions: value("instructions"),
+    };
+  });
+}
+
+function renderSceneSkills() {
+  const host = document.getElementById("ig-skill-list");
+  if (host) host.innerHTML = sceneSkillRows();
+  const count = document.getElementById("ig-skill-summary");
+  if (count) count.textContent = draft.scene_skills.length ? `${draft.scene_skills.length} saved` : "none";
+}
+
+function addSceneSkill() {
+  captureSceneSkills();
+  if (draft.scene_skills.length >= MAX_SCENE_SKILLS) {
+    toast(`You can save up to ${MAX_SCENE_SKILLS} composition skills.`, "error");
+    return;
+  }
+  // The config normalizer assigns a stable, label-derived ID on save. Keeping
+  // the draft row identifier-free lets custom skills use the same readable IDs
+  // as skills supplied through presets or the API.
+  draft.scene_skills.push({ label: "New skill", description: "", instructions: "", enabled: true });
+  renderSceneSkills();
+  const row = document.querySelector(`[data-skill-index="${draft.scene_skills.length - 1}"]`);
+  if (row) row.open = true;
+}
+
+function removeSceneSkill(index) {
+  captureSceneSkills();
+  if (!Number.isInteger(index) || index < 0 || index >= draft.scene_skills.length) return;
+  draft.scene_skills.splice(index, 1);
+  renderSceneSkills();
+}
+
 const STRUCTURAL_STYLE_FIELDS = ["model", "reference_source", "workflow"];
 
 function refreshStyleSummary(row) {
@@ -647,6 +756,8 @@ function refreshStyleState(el) {
   const row = el.closest("[data-style-index]");
   if (STRUCTURAL_STYLE_FIELDS.includes(el.dataset.igField)) {
     rebuildStyleRow(row);
+    if (el.dataset.igField === "workflow")
+      probeStyleWorkflow(draft.styles[Number(row?.dataset.styleIndex)]?.id, { draft: true });
     return;
   }
   captureStyles();
@@ -743,7 +854,7 @@ function comfyFields() {
       <label>Server URL<input ${connField("api_url")} value="${escAttr(comfy.api_url || "http://127.0.0.1:8188")}"></label>
       <label>API key<input type="password" ${connField("api_key")} value="${escAttr(comfy.api_key || "")}"></label>
     </div>
-    <div class="image-gen-note">ComfyUI is the built-in local connection and cannot be removed. Styles using a removed cloud connection fall back to ComfyUI.</div>`;
+    <div class="image-gen-note">ComfyUI is the built-in local connection and cannot be removed.</div>`;
 }
 
 function cloudFields(connection) {
@@ -806,8 +917,8 @@ function addRowHtml() {
 }
 
 function setupTargets() {
-  if (cardReadiness.ready) return [];
-  return [connections.find((c) => !c.ready)?.id || COMFY_CONNECTION];
+  const unready = connections.find((c) => !c.ready);
+  return unready ? [unready.id] : [];
 }
 
 const SUMMARY_NAMES = 2;
@@ -858,6 +969,7 @@ function captureConnections() {
 
 function captureForm() {
   captureStyles();
+  captureSceneSkills();
   captureConnections();
 }
 
@@ -882,12 +994,9 @@ function removeConnection(id) {
   delete draft.connections[id];
   delete modelsByConnection[id];
   pendingConnections.delete(id);
-  const orphaned = draft.styles.filter((s) => s.connection === id).length;
-  draft.styles = draft.styles.map((s) => (s.connection === id ? { ...s, connection: COMFY_CONNECTION } : s));
   rebuildConnections();
   renderConnections();
   renderStyles(openStyleIds());
-  if (orphaned) toast(`${orphaned} style${orphaned > 1 ? "s" : ""} moved to ComfyUI`);
 }
 
 function refreshConnectionState(el) {
@@ -982,12 +1091,14 @@ function openSettings(expandStyleId = "") {
   resetCharacterProfile();
   draft = {
     styles: (Array.isArray(cfg.styles) ? cfg.styles : []).map((s) => ({ ...s })),
+    scene_skills: (Array.isArray(cfg.scene_skills) ? cfg.scene_skills : []).map((skill) => ({ ...skill })),
     graphs: (Array.isArray(ext.user_graphs) ? ext.user_graphs : []).map((g) => ({ ...g })),
     comfy: { api_url: ext.api_url || "", api_key: ext.api_key || "" },
     connections: Object.fromEntries(Object.entries(cloud.providers || {}).map(([id, entry]) => [id, { ...entry }])),
     default_style: cfg.default_style || "",
   };
   rebuildConnections();
+  const connectionTargets = setupTargets();
   showModal(`<h2>Image Generation</h2><div class="image-gen-settings">
     <section class="ig-section">
       <div class="ig-heading">Styles</div>
@@ -1007,15 +1118,23 @@ function openSettings(expandStyleId = "") {
       <div class="ig-grid">
         <label>Render timeout (seconds)<input id="ig-timeout" type="number" min="10" max="900" value="${escAttr(cfg.timeout_seconds || 180)}"></label>
       </div>
-      <label class="ig-toggle"><input id="ig-scene-analysis" type="checkbox"${cfg.scene_analysis === true ? " checked" : ""}><span class="ig-toggle-body"><span class="ig-toggle-label">Analyze complex scenes</span><span class="image-gen-note">More accurate outfits and positions for scenes; one extra model call.</span></span></label>
-      <label class="ig-toggle"><input id="ig-prompter-reasoning" type="checkbox"${cfg.prompter_reasoning === true ? " checked" : ""}><span class="ig-toggle-body"><span class="ig-toggle-label">Enable prompter thinking</span><span class="image-gen-note">Uses thinking for scene analysis and prompt composition. For best prompt-cache reuse, match Editor reasoning config.</span></span></label>
+      <label class="ig-toggle"><input id="ig-scene-skills-enabled" type="checkbox"${cfg.scene_skills_enabled === true ? " checked" : ""}><span class="ig-toggle-body"><span class="ig-toggle-label">Use scene skills</span><span class="image-gen-note">Selects relevant composition guidance before writing the prompt; one extra model call when usable skills exist.</span></span></label>
+      <label class="ig-toggle"><input id="ig-prompter-reasoning" type="checkbox"${cfg.prompter_reasoning === true ? " checked" : ""}><span class="ig-toggle-body"><span class="ig-toggle-label">Enable prompter thinking</span><span class="image-gen-note">Uses thinking for skill selection and prompt composition. For best prompt-cache reuse, match Editor reasoning config.</span></span></label>
     </section>
     <div class="ig-drawers">
-      <details class="ig-advanced" id="ig-connections"${cardReadiness.ready ? "" : " open"}>
+      <details class="ig-advanced">
+        <summary>Composition skills<span class="ig-summary-note" id="ig-skill-summary">${draft.scene_skills.length ? `${draft.scene_skills.length} saved` : "none"}</span></summary>
+        <div class="ig-advanced-body">
+          <div class="image-gen-note">The selector sees names and “When to use” summaries. Only selected instruction bodies are sent to the prompt composer.</div>
+          <div id="ig-skill-list" class="ig-skill-list">${sceneSkillRows()}</div>
+          <button class="btn btn-sm" data-wf-action="image_gen:skillAdd">Add skill</button>
+        </div>
+      </details>
+      <details class="ig-advanced" id="ig-connections"${connectionTargets.length ? " open" : ""}>
         <summary>Connections<span class="ig-summary-note" id="ig-conn-summary">${esc(connectionSummaryText())}</span></summary>
         <div class="ig-advanced-body">
           <div class="image-gen-note">Where images render. Every style links to a connection, which can be local or cloud-based. ComfyUI is always available and cannot be removed.</div>
-          <div id="ig-conn-list" class="ig-conn-list">${connectionRows(setupTargets())}</div>
+          <div id="ig-conn-list" class="ig-conn-list">${connectionRows(connectionTargets)}</div>
           <div id="ig-conn-add-row" class="image-gen-row">${addRowHtml()}</div>
         </div>
       </details>
@@ -1069,7 +1188,8 @@ function readConfig() {
       ? draft.default_style
       : styles[0]?.id || cfg.default_style || "realistic",
     pov_mode: cfg.pov_mode || "auto",
-    scene_analysis: document.getElementById("ig-scene-analysis")?.checked === true,
+    scene_skills_enabled: document.getElementById("ig-scene-skills-enabled")?.checked === true,
+    scene_skills: draft.scene_skills,
     prompter_reasoning: document.getElementById("ig-prompter-reasoning")?.checked === true,
     timeout_seconds: readTimeout(),
     styles: draft.styles,
