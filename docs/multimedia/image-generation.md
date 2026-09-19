@@ -269,13 +269,10 @@ skills or writes the image prompt. It applies to both calls when selection runs 
 only to composition when skills are off or no usable skills exist. It can increase
 token use. Stable thinking settings generally give better prompt-cache reuse.
 
-**Prompter thinking budget** is the reply budget each prompt step gets while
-thinking, reasoning and answer together (default 8192). Raise it when a
-high-effort model returns no prompt because its reasoning was cut off. With
-thinking off, each step keeps its own smaller budget. The Agent endpoint's
-configured **Max Tokens** raises either budget when that setting is higher; a
-lower setting is left to the writing it was chosen for and never shrinks a
-prompt step below what it needs to finish.
+Each prompt step has its own reply budget, and the Agent endpoint's configured
+**Max Tokens** raises it when that setting is higher — room a thinking model can
+spend before it answers. A lower setting is left to the writing it was chosen for:
+it never shrinks a prompt step below what the step needs to finish.
 
 ## Troubleshooting
 

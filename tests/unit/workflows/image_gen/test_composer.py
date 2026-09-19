@@ -225,28 +225,9 @@ async def test_reasoning_offer_order_and_token_floors_reach_both_calls(monkeypat
     )
 
     assert [call["tool_name"] for call in calls] == ["read_image_skills", "compose_image_prompt"]
-    assert [call["token_floor"] for call in calls] == [composer.DEFAULT_THINKING_TOKENS] * 2
+    assert [call["token_floor"] for call in calls] == [1_024, 4_096]
     assert all(call["reasoning_on"] is True for call in calls)
     assert all(call["offer_tools"] == prompts.OFFER_TOOLS for call in calls)
-
-
-async def test_thinking_swaps_the_answer_sized_floors_for_the_configured_budget(monkeypatch):
-    """The per-call floors size a bare answer. A thinking model spends the same budget
-    on its reasoning first, so with the toggle on both calls get the configured
-    thinking budget as their floor instead -- capped at the answer size, DeepSeek at
-    high effort came back truncated mid-thought with no arguments."""
-
-    async def floors(**kwargs) -> list[int]:
-        calls: list[dict] = []
-        await _select(monkeypatch, {"skill_ids": [], "visible_subjects": []}, skills=[_skill("hug")], calls=calls, **kwargs)
-        await _compose(monkeypatch, {"scene": "1girl, solo", "avoid": None, "visible_subjects": []}, calls=calls, **kwargs)
-        return [call["token_floor"] for call in calls]
-
-    assert await floors(reasoning_on=False) == [1_024, 4_096]
-    assert await floors(reasoning_on=True) == [composer.DEFAULT_THINKING_TOKENS] * 2
-    assert await floors(reasoning_on=True, thinking_tokens=32_000) == [32_000, 32_000]
-    # With thinking off the budget is inert: the answer floors hold whatever it says.
-    assert await floors(reasoning_on=False, thinking_tokens=32_000) == [1_024, 4_096]
 
 
 async def test_empty_composition_remains_failure_critical(monkeypatch):

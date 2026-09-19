@@ -6,14 +6,11 @@ from backend.workflows.image_gen.composer import enabled_scene_skills
 from backend.workflows.image_gen.config import (
     DEFAULT_PROMPT_FORMAT,
     DEFAULT_SCENE_SKILLS,
-    DEFAULT_THINKING_TOKENS,
     MAX_CLOUD_PROVIDERS,
     MAX_REFERENCE_IMAGE_B64,
     MAX_REFERENCE_SLOTS,
     MAX_SCENE_SKILLS,
-    MAX_THINKING_TOKENS,
     MAX_USER_GRAPHS,
-    MIN_THINKING_TOKENS,
     PROMPT_FORMATS,
     normalize_config,
     normalize_profile,
@@ -111,15 +108,6 @@ def test_prompter_reasoning_is_an_explicit_boolean_defaulting_off():
     assert normalize_config({})["prompter_reasoning"] is False
     assert normalize_config({"prompter_reasoning": True})["prompter_reasoning"] is True
     assert normalize_config({"prompter_reasoning": "true"})["prompter_reasoning"] is False
-
-
-def test_prompter_thinking_budget_is_bounded_and_defaults_to_the_forced_call_budget():
-    budget = lambda raw: normalize_config(raw)["prompter_thinking_tokens"]  # noqa: E731
-    assert budget({}) == DEFAULT_THINKING_TOKENS
-    assert budget({"prompter_thinking_tokens": "16384"}) == 16_384
-    assert budget({"prompter_thinking_tokens": 1}) == MIN_THINKING_TOKENS
-    assert budget({"prompter_thinking_tokens": 10**9}) == MAX_THINKING_TOKENS
-    assert budget({"prompter_thinking_tokens": "lots"}) == DEFAULT_THINKING_TOKENS
 
 
 def test_scene_skills_migrate_legacy_flag_and_current_flag_wins():

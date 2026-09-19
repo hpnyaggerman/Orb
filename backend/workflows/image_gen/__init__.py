@@ -3,13 +3,7 @@
 from __future__ import annotations
 
 from ..toolkit import Workflow
-from .config import (
-    CONFIG_DEFAULTS,
-    MAX_THINKING_TOKENS,
-    MIN_THINKING_TOKENS,
-    SOURCES,
-    normalize_config,
-)
+from .config import CONFIG_DEFAULTS, SOURCES, normalize_config
 from .pov import POV_MODES
 from .prompts import COMPOSE_TOOL, READ_IMAGE_SKILLS_TOOL
 
@@ -27,12 +21,6 @@ _CONFIG_SCHEMA = {
         "scene_skills_enabled": {"type": "boolean", "title": "Use scene skills"},
         "scene_skills": {"type": "array", "title": "Composition skills"},
         "prompter_reasoning": {"type": "boolean", "title": "Enable prompter thinking"},
-        "prompter_thinking_tokens": {
-            "type": "integer",
-            "minimum": MIN_THINKING_TOKENS,
-            "maximum": MAX_THINKING_TOKENS,
-            "title": "Prompter thinking budget",
-        },
         "timeout_seconds": {
             "type": "number",
             "minimum": 10,

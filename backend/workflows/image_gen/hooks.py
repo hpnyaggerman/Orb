@@ -396,7 +396,6 @@ async def _generate_fresh(
             skills=config.get("scene_skills") or (),
             pov=pov,
             reasoning_on=bool(config.get("prompter_reasoning")),
-            thinking_tokens=config["prompter_thinking_tokens"],
             subjects=subjects,
         )
         if config.get("scene_skills_enabled")
@@ -421,7 +420,6 @@ async def _generate_fresh(
         prompt_format=selected_style["prompt_format"],
         pov=pov,
         reasoning_on=bool(config.get("prompter_reasoning")),
-        thinking_tokens=config["prompter_thinking_tokens"],
         subjects=subjects,
         selected_skills=selection.skills,
         visible_subjects=selected_visible,

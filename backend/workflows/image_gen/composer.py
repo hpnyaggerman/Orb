@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 from typing import Any, NamedTuple
 
 from ..toolkit import forced_tool_call
-from .config import DEFAULT_PROMPT_FORMAT, DEFAULT_THINKING_TOKENS, resolve_style
+from .config import DEFAULT_PROMPT_FORMAT, resolve_style
 from .pov import THIRD
 from .prompts import OFFER_TOOLS, compose_ooc, select_skills_ooc
 from .scrub import (
@@ -25,13 +25,6 @@ from .subjects import Subject
 
 logger = logging.getLogger(__name__)
 
-# What each call needs to answer in full with thinking off: a short list of skill
-# ids, and the prompt itself. With thinking on the configured prompter budget
-# replaces both: a thinking model spends the same budget on its reasoning first
-# (DeepSeek counts reasoning_content against it), and capped at the answer size a
-# high-effort model came back cut off mid-thought with no arguments at all. The
-# agent endpoint's configured max_tokens raises whichever floor applies when it is
-# higher (see `agent_lane_max_tokens`).
 _SELECT_TOKENS = 1_024
 _COMPOSE_TOKENS = 4_096
 
@@ -86,7 +79,6 @@ async def read_image_skills(
     skills: Sequence[Mapping[str, Any]],
     pov: str = THIRD,
     reasoning_on: bool = False,
-    thinking_tokens: int = DEFAULT_THINKING_TOKENS,
     subjects: Sequence[Subject] = (),
 ) -> SkillSelection:
     """Select up to four skills; degrade every selector failure to no selection."""
@@ -101,7 +93,7 @@ async def read_image_skills(
             tail=[{"role": "user", "content": select_skills_ooc(pov, _sheets(subjects), catalog)}],
             tool_name="read_image_skills",
             settings=settings,
-            token_floor=thinking_tokens if reasoning_on else _SELECT_TOKENS,
+            token_floor=_SELECT_TOKENS,
             reasoning_on=reasoning_on,
         )
     except Exception:
@@ -158,7 +150,6 @@ async def compose_scene(
     prompt_format: str = DEFAULT_PROMPT_FORMAT,
     pov: str = THIRD,
     reasoning_on: bool = False,
-    thinking_tokens: int = DEFAULT_THINKING_TOKENS,
     subjects: Sequence[Subject] = (),
     selected_skills: Sequence[dict] = (),
     visible_subjects: Sequence[str] | None = None,
@@ -196,7 +187,7 @@ async def compose_scene(
         ],
         tool_name="compose_image_prompt",
         settings=settings,
-        token_floor=thinking_tokens if reasoning_on else _COMPOSE_TOKENS,
+        token_floor=_COMPOSE_TOKENS,
         reasoning_on=reasoning_on,
     )
 
