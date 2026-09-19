@@ -1,7 +1,8 @@
 import { api } from "./api.js";
-import { loadConversations, refreshSceneCardFragments, resetChatUI, stashCardFragments } from "./chat.js";
+import { loadConversations, refreshSceneCardFragments, renderMessages, resetChatUI, stashSceneCards } from "./chat.js";
 import { createChipInput } from "./chips.js";
 import { CLOSE_ICON, EDIT_ICON } from "./icons.js";
+import { mountCardScriptsEditor } from "./library_card_scripts.js";
 import {
   initCardFragments,
   readCardFragments,
@@ -58,6 +59,7 @@ let _pendingImportSourceFormat = null;
 let _pendingTags = null;
 let _pendingCharacterBook = null;
 let _pendingExtensions = null;
+let _readCardScripts = null;
 export const _avatarBust = new Map();
 
 /** The query that busts a card's cached avatar once it has changed this session, else "". */
@@ -206,6 +208,7 @@ export function triggerAvatarCrop(prefix, _cardId) {
     _pendingAvatar = { b64, mime };
     const el = $(`${prefix}-avatar-preview`);
     if (el) el.innerHTML = `<img src="data:${mime};base64,${b64}">`;
+    clearCharEditStatus(); // A new avatar is an unsaved edit like any other.
   });
 }
 
@@ -307,10 +310,18 @@ function charFormTabs(prefix, d, isEdit, worlds = []) {
       <div class="field"><label>Creator's Note</label><textarea id="${prefix}-creator-notes" rows="1">${esc(d.creator_notes || "")}</textarea></div>
       <div class="field"><label>System Prompt Override</label><textarea id="${prefix}-sysprompt" rows="1">${esc(d.system_prompt || "")}</textarea></div>
       <div class="field"><label>Post-History Instructions</label><textarea id="${prefix}-posthist" rows="1">${esc(d.post_history_instructions || "")}</textarea></div>
+      <div class="form-divider">Card rendering</div>
+      <div class="field"><label><input type="checkbox" id="${prefix}-scripts-enabled" ${d.extensions?.orb?.card_scripts_enabled === false ? "" : "checked"}> Enable card text scripts</label>
+        <div class="modal-hint">Scripts change how messages are displayed or sent to the model, in list order. Saving re-renders history and may break the KV cache.</div>
+      </div>
+      <div id="${prefix}-scripts-editor"></div>
+      <div class="field"><label>Message stylesheet (CSS)</label><textarea id="${prefix}-display-css" rows="4">${esc(d.extensions?.orb?.display_css || "")}</textarea>
+        <div class="modal-hint">Styles assistant messages from this character. Copy any desired CSS from creator notes here.</div>
+      </div>
       <div class="form-divider">Group chat</div>
       <div class="field"><label>Public cast appearance</label><textarea id="${prefix}-public-appearance" rows="2" placeholder="${escAttr(PUBLIC_APPEARANCE_PLACEHOLDER)}">${esc(publicProfile.appearance || "")}</textarea></div>
       <div class="field"><label>Public cast role</label><textarea id="${prefix}-public-role" rows="2" placeholder="${escAttr(PUBLIC_ROLE_PLACEHOLDER)}">${esc(publicProfile.role || "")}</textarea></div>
-      ${d.id ? `<button type="button" class="btn btn-sm" id="${prefix}-generate-public-profile">Generate editable draft</button><div class="modal-hint">Only these confirmed public fields enter a group's shared cast prompt.</div>` : ""}
+      ${d.id ? `<button type="button" class="btn btn-sm" id="${prefix}-generate-public-profile">Generate editable draft</button><div class="modal-hint">Only these public fields enter a group's shared cast prompt.</div>` : ""}
       ${
         d.id
           ? `<div class="form-divider">Expression images</div>
@@ -377,6 +388,8 @@ function _validateCharForm(prefix, { advanced = false } = {}) {
 
 function _readCharEditForm() {
   const ext = structuredClone(_pendingExtensions || {});
+  const scripts = _readCardScripts?.();
+  if (scripts !== undefined) ext.regex_scripts = scripts;
   const frags = readCardFragments();
   if (frags && (frags.mood.length || frags.interactive.length)) {
     ext.orb = { ...(ext.orb || {}), fragments: frags };
@@ -384,6 +397,18 @@ function _readCharEditForm() {
     delete ext.orb.fragments;
     if (!Object.keys(ext.orb).length) delete ext.orb;
   }
+  if ($("ce-scripts-enabled")?.checked === false) {
+    ext.orb = { ...(ext.orb || {}), card_scripts_enabled: false };
+  } else if (ext.orb) {
+    delete ext.orb.card_scripts_enabled;
+  }
+  const css = $("ce-display-css")?.value.trim() || "";
+  if (css) {
+    ext.orb = { ...(ext.orb || {}), display_css: css };
+  } else if (ext.orb) {
+    delete ext.orb.display_css;
+  }
+  if (ext.orb && !Object.keys(ext.orb).length) delete ext.orb;
   const appearance = $("ce-public-appearance")?.value.trim() || "";
   const role = $("ce-public-role")?.value.trim() || "";
   if (appearance || role) {
@@ -455,12 +480,12 @@ export async function showCharEditModal(idOrData) {
   _pendingAvatar = null;
   const isNew = typeof idOrData === "object";
   const c = isNew ? idOrData : await api.get(`/characters/${idOrData}`);
+  _pendingImportId = isNew ? c.id || null : null;
+  _pendingImportSourceFormat = isNew ? c.source_format || null : null;
 
   let av;
   if (isNew && c.avatar_b64) {
     _pendingAvatar = { b64: c.avatar_b64, mime: c.avatar_mime || "image/png" };
-    _pendingImportId = c.id || null;
-    _pendingImportSourceFormat = c.source_format || null;
     av = `<img src="data:${_pendingAvatar.mime};base64,${_pendingAvatar.b64}">`;
   } else {
     const bust = _avatarBust.has(c.id) ? `?v=${_avatarBust.get(c.id)}` : "";
@@ -497,8 +522,9 @@ export async function showCharEditModal(idOrData) {
     <div class="modal-actions">
       ${!isNew ? `<button class="btn btn-danger btn-sm" onclick="deleteCharacter('${c.id}')">Delete</button>` : ""}
       <div style="flex:1"></div>
+      ${!isNew ? `<span id="ce-save-status" class="modal-action-status" role="status" aria-live="polite"></span>` : ""}
       ${!isNew ? `<button class="btn btn-sm" onclick="saveCharEdit('${c.id}', true)">Export PNG</button>` : ""}
-      <button class="btn" onclick="closeModal()">Cancel</button>
+      <button class="btn" id="ce-cancel-btn" onclick="closeModal()">Cancel</button>
       ${
         isNew
           ? `<button class="btn btn-accent" onclick="saveImportedChar()">Save</button>`
@@ -506,6 +532,7 @@ export async function showCharEditModal(idOrData) {
       }
     </div>`);
   _charTagChips.render();
+  _readCardScripts = mountCardScriptsEditor($("ce-scripts-editor"), _pendingExtensions.regex_scripts);
   renderCardFragmentsTab();
   $("ce-tab-frag")?.addEventListener("click", (e) => switchTab(e.currentTarget, "ce-tf"));
   $("ce-card-frag-add-mood")?.addEventListener("click", () => showCardMoodFragmentModal());
@@ -520,6 +547,10 @@ export async function showCharEditModal(idOrData) {
       toast(error.message, true);
     }
   });
+  // The editor stays open after a save, so a stale "Saved" must not outlive the
+  // edits it described.
+  const modalEl = $("modal-root").querySelector(".modal");
+  for (const event of ["input", "change"]) modalEl?.addEventListener(event, clearCharEditStatus);
   if (c.id) {
     api
       .get(`/characters/${c.id}/expressions`)
@@ -531,10 +562,26 @@ export async function showCharEditModal(idOrData) {
   }
 }
 
+/** Report on the Save button beside it; the editor no longer closes to confirm. */
+function setCharEditStatus(message, { error = false } = {}) {
+  const el = $("ce-save-status");
+  if (!el) return;
+  el.textContent = message;
+  el.classList.toggle("is-error", error);
+  // Nothing is pending after a clean save, so the escape hatch stops reading as
+  // a discard. The next edit clears the status and puts "Cancel" back.
+  const cancel = $("ce-cancel-btn");
+  if (cancel) cancel.textContent = message && !error ? "Close" : "Cancel";
+}
+
+function clearCharEditStatus() {
+  if ($("ce-save-status")?.textContent) setCharEditStatus("");
+}
+
 export async function saveCharEdit(id, exportAfter = false) {
   const validation = _validateCharForm("ce", { advanced: true });
   if (!validation.valid) {
-    toast(validation.error, true);
+    setCharEditStatus(validation.error, { error: true });
     return;
   }
 
@@ -545,10 +592,10 @@ export async function saveCharEdit(id, exportAfter = false) {
     d.avatar_mime = _pendingAvatar.mime;
   }
   const avatarChanged = !!_pendingAvatar;
-  _pendingAvatar = null;
   try {
     const updated = await api.put(`/characters/${id}`, d);
-    if (S.activeCharId === id) stashCardFragments(updated);
+    _pendingAvatar = null;
+    if (S.activeCharId === id) stashSceneCards(updated);
     else if ((S.groupCast?.members || []).some((member) => member.character_card_id === id)) {
       await refreshSceneCardFragments();
     }
@@ -559,7 +606,6 @@ export async function saveCharEdit(id, exportAfter = false) {
         if (av) av.innerHTML = avatarCell(`${avatarUrl(id)}?v=${_avatarBust.get(id)}`, { icon: CHAT_AVATAR_ICON });
       }
     }
-    closeModal();
     await loadCharacters();
     await loadConversations();
     const activeConv = S.conversations.find((c) => c.id === S.activeConvId);
@@ -567,10 +613,11 @@ export async function saveCharEdit(id, exportAfter = false) {
       const titleEl = document.getElementById("chat-title-text");
       if (titleEl) titleEl.textContent = activeConv.title || activeConv.character_name || "";
     }
-    toast("Saved");
+    renderMessages();
+    setCharEditStatus("Saved");
     if (exportAfter) exportCharacter(id, name);
   } catch (e) {
-    toast(e.message, true);
+    setCharEditStatus(e.message, { error: true });
   }
 }
 

@@ -42,6 +42,19 @@ connection from being dropped.
 what an event means or unescape the payload. `chat_stream.js` dispatches by event
 name; other streaming features use the same parser with their own handlers.
 
+Token paints are coalesced to one per animation frame. Each snapshot still goes
+through the message sanitiser, but the live body patches compatible DOM nodes
+in place and uses a stable CSS scope for that bubble. This keeps existing images,
+controls and animations alive while text grows. Incomplete tags and style blocks
+are held until complete; structural markup changes can still cause layout shifts.
+Finalisation and editor rewrites render the authoritative complete body.
+
+The status bar describes the step that is running. `director_start` and
+`step_start` mark where each core step begins, and while the turn streams a
+workflow hook's `phase_status` label describes its own step. The text holds
+until the next step starts, so the indicator follows stream events rather than
+timers.
+
 Only `token` is normally raw text. Other payloads are JSON, with `error` also
 accepting a legacy string.
 
@@ -54,6 +67,7 @@ pass being skipped.
 |---|---|---|
 | `user_message_created` | `{id, content}` | Replaces the optimistic user row with its saved id and text. `/send` only. |
 | `director_start` | — | Starts the directing phase. |
+| `step_start` | `{step}` | Names the step that is starting: `lorebook`, `direction_notes`, `writer`, `output_auditor`, `length_guard`, `post_processing`, `feedback`, `world_changes`, or `sheet_updates`. |
 | `reasoning` | `{pass, delta}` | Adds thinking text to a pass's reasoning buffer. |
 | `director_done` | Director data | Updates the inspector. |
 | `token` | Text delta | Appends visible Writer output. |

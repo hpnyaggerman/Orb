@@ -13,6 +13,10 @@ export const S = {
   interactiveFragments: [],
   cardMoodFragments: [],
   cardInteractiveFragments: [],
+  // The solo card's Scenario and Creator's Note, shown above the opening line.
+  // Carries the conversation it was read for so a repaint mid-switch cannot
+  // paint the outgoing character's framing over the incoming one's.
+  sceneIntro: null,
 
   personas: [],
   activePersonaId: null,
@@ -73,7 +77,7 @@ export const S = {
   pendingUserMsg: null,
   attachments: [],
   wasAborted: false,
-  generationPhase: null,
+  generationStep: null, // empty while waiting; null when idle
   hideStreamingBox: false,
   contextSize: null,
   pendingRefineDiff: null, // writer/editor diff for the current stream

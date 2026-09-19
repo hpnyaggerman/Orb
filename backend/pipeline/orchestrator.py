@@ -6,7 +6,7 @@ import logging
 from collections.abc import AsyncIterator, Mapping, Sequence
 from typing import Any, TypeVar
 
-from ..core import CastMember, ChatMessage, GroupContextMode, Macros
+from ..core import CardScripts, CastMember, ChatMessage, GroupContextMode, Macros
 from ..database.models import PhraseGroup
 from ..inference import LLMClient, _KVCacheTracker
 from .config import _resolve_pipeline_config, _split_interactive_fragments
@@ -54,11 +54,8 @@ def _make_result(state: TurnState, staged: list[dict] | None = None, staged_stat
 
 
 async def _consume_direction_note_step(gen: AsyncIterator[dict], state: TurnState, pass_label: str) -> AsyncIterator[dict]:
-    """Drain a direction-note step: stream its reasoning under *pass_label*, keep the notes.
-
-    Notes accumulate across the turn's two placements; the event carries the running total so
-    the inspector shows every note recorded this turn regardless of which step produced it.
-    """
+    """Announce and drain a direction-note step, preserving accumulated notes."""
+    yield {"event": "step_start", "data": {"step": "direction_notes"}}
     async for ev in gen:
         if ev["type"] == "reasoning":
             yield {"event": "reasoning", "data": {"pass": pass_label, "delta": state.add_reasoning(pass_label, ev)}}
@@ -119,6 +116,10 @@ async def _run_pipeline(
         lorebook = LorebookTurn(entries=(), messages=(), agentic=False)
 
     user_message = macros.resolve_message(user_message)
+    if card and speaker is None:
+        user_message = CardScripts.from_extensions(card.get("extensions")).apply(
+            user_message, "prompt", "user", macros.resolve_message
+        )
 
     # Resolved once; cfg.enabled_tools is the length-guard-folded map.
     cfg = _resolve_pipeline_config(
@@ -365,7 +366,7 @@ async def _run_pipeline(
     if run_exchange_final and sheet_update is not None and state.resp_text.strip() and not client.is_aborted:
         async for ev in _staged(
             STAGE_EDITOR,
-            sheet_update_stage(cfg, state, turn=sheet_update),
+            sheet_update_stage(cfg, state, settings=settings, turn=sheet_update),
         ):
             yield ev
 
