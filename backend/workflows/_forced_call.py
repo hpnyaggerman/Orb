@@ -31,7 +31,8 @@ def _usage_line(usage: Mapping[str, Any] | None, message: Mapping[str, Any]) -> 
     reasoning split -- or no usage at all -- must not hide a call that spent its
     whole budget thinking.
     """
-    reasoning_chars = len(message.get("reasoning_content") or "")
+    # The client keeps reasoning under the name the provider streamed it as.
+    reasoning_chars = len(message.get("reasoning_content") or message.get("reasoning") or "")
     answer_chars = len(message.get("content") or "") + sum(
         len(str((call.get("function") or {}).get("arguments") or "")) for call in message.get("tool_calls") or []
     )

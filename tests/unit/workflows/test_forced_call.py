@@ -627,6 +627,8 @@ class TestUsageLogging:
         )
         # An empty reply is a real zero, not an unreported count.
         assert "completion=0 reasoning=?" in _usage_line({"prompt_tokens": 10, "completion_tokens": 0}, message)
+        # vLLM and OpenRouter stream it as `reasoning`, and the client keeps that name.
+        assert _usage_line(None, {"reasoning": "thought" * 3, "content": "answer"}) == _usage_line(None, message)
 
     async def test_every_finished_call_logs_one_accounting_line(self, caplog):
         done = {
