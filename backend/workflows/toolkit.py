@@ -29,6 +29,7 @@ from ..analysis.text.roleplay_segmentation import (
     find_emphasis_spans,
 )
 from ..core import (
+    CardScripts,
     Macros,
     workflow_character_state_lock,
     workflow_config_lock,
@@ -49,6 +50,7 @@ from ..database import (
     get_character_card,
     get_conversation,
     get_director_state,
+    get_group_member_scripts,
     get_interactive_fragments,
     get_message_by_id,
     get_messages,
@@ -150,7 +152,10 @@ __all__ = [
     "local_model_identity",
     "narration_only",
     "overlay_enable_tools",
+    "spark_voice_clean_reference_text",
+    "spark_voice_clean_reference_tokens",
     "spark_voice_clean_tokens",
+    "spark_voice_reference_audio",
     "spark_voice_speak",
     "protected_runs",
     "run_audit",
@@ -231,13 +236,37 @@ def spark_voice_clean_tokens(raw: object) -> list[int]:
     return _spark_tts_host.clean_tokens(raw)
 
 
+def spark_voice_clean_reference_tokens(raw: object) -> list[int]:
+    """A stored advanced reference's semantic tokens, validated, or ``[]``."""
+    return _spark_tts_host.clean_reference_tokens(raw)
+
+
+def spark_voice_clean_reference_text(raw: object) -> str:
+    """A stored advanced reference's transcript on one line, within the model's limit."""
+    return _spark_tts_host.clean_reference_text(raw)
+
+
 async def spark_voice_speak(
     text: str,
     speaker_tokens: Sequence[int],
     settings: Mapping[str, Any],
+    *,
+    reference_tokens: Sequence[int] = (),
+    reference_text: str = "",
 ) -> tuple[bytes, int]:
-    """Speak *text* in an enrolled voice. Returns ``(pcm16, sample_rate)``."""
-    return await _spark_tts_host.synthesize(text, speaker_tokens, settings)
+    """Speak *text* in an enrolled voice."""
+    return await _spark_tts_host.synthesize(
+        text,
+        speaker_tokens,
+        settings,
+        reference_tokens=reference_tokens,
+        reference_text=reference_text,
+    )
+
+
+async def spark_voice_reference_audio(reference_tokens: Sequence[int], speaker_tokens: Sequence[int]) -> tuple[bytes, int]:
+    """An advanced voice's reference excerpt as ``(pcm16, sample_rate)``, rebuilt from its tokens."""
+    return await _spark_tts_host.reference_audio(reference_tokens, speaker_tokens)
 
 
 async def get_scene_cast(conversation_id: str) -> TurnCast:
@@ -285,6 +314,7 @@ async def build_offturn_prefix(
         settings, macro_char, persona, seed=conv.get("macro_seed") or conv.get("id", ""), cast=cast_names
     )
     speaker_names = await get_speaker_names(conversation_id) if turn_cast.grouped else {}
+    speaker_scripts = await get_group_member_scripts(conversation_id) if turn_cast.grouped else {}
     user_description = persona.get("description", "") if persona else settings.get("user_description", "")
     return _build_prefix(
         system_prompt,
@@ -298,4 +328,6 @@ async def build_offturn_prefix(
         constant_lorebook_block=_compute_constant_lorebook_block(await get_active_lorebook_entries(), macros),
         cast=turn_cast,
         speaker_names=speaker_names,
+        scripts=CardScripts.from_extensions(card.get("extensions") if card else None),
+        speaker_scripts=speaker_scripts,
     )

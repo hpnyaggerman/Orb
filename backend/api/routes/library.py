@@ -1,4 +1,4 @@
-"""Routes for library tag vocabulary management and auto-tagging."""
+"""Library Manager tools: tags, duplicate finding, and character generation."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ import logging
 import httpx
 from fastapi import APIRouter, HTTPException, Request
 
-from ...core import agent_lane_max_tokens, scrub_log
+from ...core import scrub_log
 from ...database import (
     VocabularyConflict,
     add_dismissals,
@@ -33,6 +33,12 @@ from ...database import (
     remove_dismissals,
     replace_vocabulary,
 )
+from ...features.card_generator import (
+    CardGenerationUnavailable,
+    build_library_digest,
+    generate_card,
+    generate_deep_card,
+)
 from ...features.library_dedupe import (
     DEDUPE_REVISION,
     body_hash,
@@ -54,10 +60,12 @@ from ...inference import (
     LLMCallError,
     agent_lane_from_settings,
     client_from_settings,
+    provider_sentence,
 )
 from ..deps import _CleanupStreamingResponse, _sse_stream
 from ..schemas import (
     AutoTagRunRequest,
+    CardGeneratorRunRequest,
     DuplicateDismissRequest,
     DuplicateResolveGroupRequest,
     DuplicateResolveRequest,
@@ -73,7 +81,47 @@ _run_lock = asyncio.Lock()
 
 _MAX_CONSECUTIVE_FAILURES = 5
 
-_MAX_TOKENS_FLOOR = 512
+
+@router.post("/api/library/card-generator/run")
+async def api_run_card_generator(data: CardGeneratorRunRequest, request: Request):
+    """Stream a draft for review; saving remains the character editor's job."""
+    settings = await get_settings()
+    abort_token = AbortToken()
+
+    async def _gen():
+        yield {"event": "start", "data": {}}
+        try:
+            digest = ""
+            if data.tailoring != "off":
+                yield {"event": "progress", "data": {"label": "Reading your library preferences…"}}
+                digest = await build_library_digest()
+            if abort_token.is_aborted:
+                return
+            client = client_from_settings(settings, abort_token=abort_token)
+            agent_client, model = agent_lane_from_settings(settings, writer_client=client, abort_token=abort_token)
+            if data.tailoring == "deep":
+                async for event in generate_deep_card(agent_client, model, data.idea, settings=settings, digest=digest):
+                    if event["type"] == "progress":
+                        yield {"event": "progress", "data": {"label": event["label"]}}
+                    elif not abort_token.is_aborted:
+                        yield {"event": "done", "data": {"card": event["card"]}}
+                return
+            yield {"event": "progress", "data": {"label": "Drafting your character…"}}
+            card = await generate_card(
+                agent_client, model, data.idea, settings=settings, reasoning_on=data.reasoning, library_digest=digest
+            )
+            if not abort_token.is_aborted:
+                yield {"event": "done", "data": {"card": card}}
+        except CardGenerationUnavailable as exc:
+            yield {"event": "error", "data": str(exc)}
+        except LLMCallError as exc:
+            yield {"event": "error", "data": exc.sentence or "The Agent endpoint failed"}
+        except httpx.HTTPStatusError as exc:
+            yield {"event": "error", "data": provider_sentence(exc.response.text) or "The Agent endpoint failed"}
+        except httpx.HTTPError:
+            yield {"event": "error", "data": "The Agent endpoint could not be reached"}
+
+    return _CleanupStreamingResponse(_sse_stream(_gen(), request, abort_token=abort_token), media_type="text/event-stream")
 
 
 async def _tag_state() -> dict:
@@ -140,7 +188,6 @@ async def api_run_auto_tag(data: AutoTagRunRequest, request: Request):
             tool = build_tag_tool(vocabulary)
             client = client_from_settings(settings, abort_token=abort_token)
             agent_client, model = agent_lane_from_settings(settings, writer_client=client, abort_token=abort_token)
-            max_tokens = agent_lane_max_tokens(settings, floor=_MAX_TOKENS_FLOOR)
 
             tagged = 0
             failed = 0
@@ -159,7 +206,7 @@ async def api_run_auto_tag(data: AutoTagRunRequest, request: Request):
                         vocabulary=vocabulary,
                         system=system,
                         tool=tool,
-                        max_tokens=max_tokens,
+                        settings=settings,
                         reasoning_on=data.reasoning,
                     )
                 except AutoTagUnavailable as e:

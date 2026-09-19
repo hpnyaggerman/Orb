@@ -1,4 +1,5 @@
 import { api } from "./api.js";
+import { messageDisplaySource } from "./card_scripts.js";
 import { renderTurnError } from "./chat_error.js";
 import {
   _refreshWorkflowViewportObserver,
@@ -8,6 +9,7 @@ import {
 import { reconcileChildren } from "./dom_reconcile.js";
 import { sceneEmptyStateHtml, speakerAvatarCell, speakerLabel } from "./group_cast.js";
 import { CHEVRON_LEFT_ICON, CHEVRON_RIGHT_ICON, EDIT_ICON_PATHS } from "./icons.js";
+import { fitMessageCards } from "./message_fit.js";
 import { renderMessageDiffHtml, renderMessageHtml } from "./message_html.js";
 import { preserveScrollDistance } from "./scroll_follow.js";
 import { effectiveWorkflowEnabled, localMlReady, S, subscribe } from "./state.js";
@@ -301,6 +303,37 @@ export function swipeNavHtml(m) {
         </span>`;
 }
 
+// The card's framing, above the opening line: what the scene is, and what its
+// author wanted the reader to know before it starts. Neither has another home
+// in the chat pane.
+//
+// These are card metadata, not turns. They carry no id, so nothing in the
+// message paths can address them, and no toolbar, branch pager or avatar -- the
+// blocks take the bubble's shape and nothing else. They render only when the
+// window starts at the top of the conversation, where the greeting is.
+const SCENE_INTRO_BLOCKS = [
+  ["notes", "Creator's Note", "creatorNotes"],
+  ["scenario", "Scenario", "scenario"],
+];
+
+export function sceneIntroEntries() {
+  const intro = S.sceneIntro;
+  if (!intro || intro.convId !== S.activeConvId) return [];
+  const entries = [];
+  for (const [kind, label, field] of SCENE_INTRO_BLOCKS) {
+    const text = (intro[field] || "").trim();
+    if (!text) continue;
+    entries.push({
+      key: `scene-${kind}`,
+      html: `<div class="message scene-intro scene-intro-${kind}">
+        <div class="msg-role">${esc(label)}</div>
+        <div class="msg-body">${renderMessageHtml(resolvePlaceholders(text))}</div>
+      </div>`,
+    });
+  }
+  return entries;
+}
+
 function _messageHtml(m, avatars) {
   const isForkEditing = S.forkEditMsgId !== null && S.forkEditMsgId === m.id;
   const isEditing =
@@ -326,7 +359,7 @@ function _messageHtml(m, avatars) {
     : `<div class="msg-body">${
         S.pendingRefineDiff?.msgId && m.id === S.pendingRefineDiff.msgId && S.showEditorDiff
           ? renderMessageDiffHtml(S.pendingRefineDiff.ops)
-          : renderMessageHtml(resolvePlaceholders(m.content))
+          : renderMessageHtml(messageDisplaySource(m))
       }</div>`;
   const attachmentsHtml = renderUserAttachments(m.user_attachments);
   const workflowArtifactsHtml = _renderWorkflowArtifacts(m);
@@ -404,11 +437,18 @@ export function renderMessages(forceBottom = false) {
         // instead of replaying the whole list's entrance animation and layout.
         const fresh = reconcileChildren(
           ct,
-          // An aborted turn can leave two id-less rows in the list (the pending user
-          // message and the unpersisted reply), so they key by position, not by role.
-          msgs.map((m, i) => ({ key: m.id ? `m${m.id}` : `p${i}`, html: _messageHtml(m, avatars) })),
+          [
+            ...(start === 0 ? sceneIntroEntries() : []),
+            // An aborted turn can leave two id-less rows in the list (the pending user
+            // message and the unpersisted reply), so they key by position, not by role.
+            ...msgs.map((m, i) => ({ key: m.id ? `m${m.id}` : `p${i}`, html: _messageHtml(m, avatars) })),
+          ],
           "msg-swap",
         );
+        // Rescue desktop-width card layouts first: it changes a collapsed
+        // bubble's height by thousands of pixels, so it has to settle before
+        // anything records that height.
+        fitMessageCards(fresh);
         // Seed the new bubbles' intrinsic sizes before the scroll math below
         // reads scrollHeight, or a node that has never been rendered still
         // counts as the 300px placeholder and the restore lands short.

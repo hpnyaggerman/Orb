@@ -91,6 +91,7 @@ from .queries.group_members import (
     convert_to_group,
     create_group_conversation,
     get_group_member,
+    get_group_member_scripts,
     get_group_members,
     get_speaker_names,
     resolve_cast,
@@ -114,6 +115,7 @@ from .queries.library_dedupe import (
     relink_card,
     remove_dismissals,
 )
+from .queries.library_sql import run_library_query
 from .queries.library_tags import (
     VocabularyConflict,
     apply_auto_tags,
@@ -182,6 +184,7 @@ from .queries.user_personas import (
     create_user_persona,
     delete_user_persona,
     get_persona_avatar,
+    get_persona_conversation_counts,
     get_user_persona,
     get_user_personas,
     update_user_persona,
@@ -325,6 +328,7 @@ __all__ = [
     "get_global_stats",
     "get_group_member",
     "get_group_members",
+    "get_group_member_scripts",
     "get_interactive_fragment",
     "get_interactive_fragments",
     "get_lorebook_entries",
@@ -348,6 +352,7 @@ __all__ = [
     "get_user_attachment_by_id",
     "get_user_attachments_for_message",
     "get_persona_avatar",
+    "get_persona_conversation_counts",
     "get_user_persona",
     "get_user_personas",
     "get_vocabulary",
@@ -386,6 +391,7 @@ __all__ = [
     "reject_sheet_proposal",
     "render_public_profile",
     "reroll_unfrozen_greetings",
+    "run_library_query",
     "reset_to_defaults",
     "resolve_cast",
     "resolve_char_context",

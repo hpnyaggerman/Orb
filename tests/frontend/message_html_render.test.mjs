@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { patchHtml } from "../../frontend/dom_reconcile.js";
 
 // The render boundary, driven end to end against a real DOM: escapeUnknownTags
 // -> formatProse -> DOMPurify -> chrome rebuild -> CSS containment -> serialise
@@ -54,6 +55,91 @@ if (dom) {
 const it = dom ? test : test.skip;
 const render = (text) => mod.renderMessageHtml(text);
 
+it("streaming retains styled nodes and media without rewriting their attributes or stylesheet", () => {
+  const body = document.createElement("div");
+  document.body.appendChild(body);
+  const prefix = '<style>@keyframes pulse { to { opacity: .5 } }.card { animation: pulse 2s infinite }</style>' +
+    '<div class="card"><img src="https://cdn.test/a.png"><span>';
+  const paint = (tail) => patchHtml(body, mod.renderMessageHtml(prefix + tail, { streaming: true, scope: "msg-stream-test" }));
+  paint("Hello");
+  const card = body.querySelector(".custom-card");
+  const img = body.querySelector("img");
+  const style = body.querySelector("style");
+  const text = body.querySelector("span").firstChild;
+  const observer = new dom.window.MutationObserver(() => {});
+  observer.observe(body, { subtree: true, childList: true, attributes: true, characterData: true });
+  paint("Hello world</span></div>");
+  assert.equal(body.querySelector(".custom-card"), card);
+  assert.equal(body.querySelector("img"), img);
+  assert.equal(body.querySelector("style"), style);
+  assert.equal(body.querySelector("span").firstChild, text);
+  assert.equal(text.data, "Hello world");
+  const mutations = observer.takeRecords();
+  assert.ok(mutations.length > 0);
+  assert.ok(mutations.every((record) => record.type === "characterData" && record.target === text));
+  assert.match(style.textContent, /msg-stream-test-pulse/);
+  observer.disconnect();
+  body.remove();
+});
+
+it("streaming preserves open disclosures and edited controls as their text grows", () => {
+  const body = document.createElement("div");
+  const prefix = '<details><summary>Notes</summary><input type="checkbox"><input value="initial"><p>';
+  const paint = (tail) => patchHtml(body, mod.renderMessageHtml(prefix + tail, { streaming: true }));
+  paint("First");
+  const details = body.querySelector("details");
+  const checkbox = body.querySelector('input[type="checkbox"]');
+  const input = body.querySelector('input[value]');
+  details.open = true;
+  checkbox.checked = true;
+  input.value = "typed while streaming";
+  paint("First sentence.</p></details>");
+  assert.equal(body.querySelector("details"), details);
+  assert.equal(details.open, true);
+  assert.equal(body.querySelector('input[type="checkbox"]'), checkbox);
+  assert.equal(checkbox.checked, true);
+  assert.equal(input.value, "typed while streaming");
+});
+
+it("patched streams apply changed attributes, remove old content and retain sanitisation", () => {
+  const body = document.createElement("div");
+  const paint = (source) => patchHtml(body, mod.renderMessageHtml(source, { streaming: true }));
+  paint('<div title="old"><img src="https://cdn.test/a.png"><b>old</b><i>removed</i></div>');
+  const img = body.querySelector("img");
+  paint('<div><img src="https://cdn.test/b.png" onerror="alert(1)"><em>new</em><script>alert(2)</script></div>');
+  assert.equal(body.querySelector("img"), img);
+  assert.equal(img.getAttribute("src"), "https://cdn.test/b.png");
+  assert.equal(body.firstChild.hasAttribute("title"), false);
+  assert.equal(body.querySelector("em").textContent, "new");
+  assert.equal(body.querySelector("b, i, script, [onerror]"), null);
+  paint("");
+  assert.equal(body.childNodes.length, 0);
+});
+
+it("custom streaming scopes stay isolated from cached and other bubbles' CSS", () => {
+  const source = '<style>p { color: red }</style><p>Hello</p>';
+  const cached = render(source);
+  const first = mod.renderMessageHtml(source, { streaming: true, scope: "msg-stream-one" });
+  const second = mod.renderMessageHtml(source, { streaming: true, scope: "msg-stream-two" });
+  assert.match(first, /\.msg-stream-one p/);
+  assert.match(second, /\.msg-stream-two p/);
+  assert.ok(!second.includes("msg-stream-one"));
+  mod.renderMessageHtml(source, { scope: "msg-stream-final" });
+  assert.equal(render(source), cached);
+});
+
+it("incomplete streaming markup waits without replacing already rendered content", () => {
+  const body = document.createElement("div");
+  const paint = (source) => patchHtml(body, mod.renderMessageHtml(source, { streaming: true }));
+  paint('<p>Hello</p><img src="https://cdn.test/a');
+  const paragraph = body.firstChild;
+  assert.equal(body.textContent, "Hello");
+  assert.equal(body.querySelector("img"), null);
+  paint('<p>Hello</p><img src="https://cdn.test/a.png">');
+  assert.equal(body.firstChild, paragraph);
+  assert.equal(body.querySelector("img").getAttribute("src"), "https://cdn.test/a.png");
+});
+
 /** Re-parse rendered markup the way `innerHTML` does at the call sites. */
 function reparse(html) {
   const holder = globalThis.document.createElement("div");
@@ -68,15 +154,50 @@ it("script elements and inline handlers do not survive", () => {
   assert.match(html, />hi</);
 });
 
-it("no data attribute survives from message source", () => {
-  // This is what makes the app's three global dispatchers unreachable from a
-  // bubble: [data-chat-action] (app.js), [data-wf-action] (workflow_api.js) and
-  // [data-orb-action] (message_html.js) can none of them be written by a model.
+it("a data attribute survives only under a name no app dispatcher selects on", () => {
+  // This is what makes the app's global dispatchers unreachable from a bubble:
+  // [data-chat-action] (app.js), [data-wf-action] (workflow_api.js),
+  // [data-orb-action] (message_html.js) and [data-wc-action] (lorebooks.js) can
+  // none of them be written by a model, while a card's own `data-text` still is.
   const html = render(
-    '<span data-wf-action="image_gen:generate" data-chat-action="inspector" data-orb-action="copy" data-msg-id="1">go</span>',
+    '<span data-wf-action="image_gen:generate" data-chat-action="inspector" data-orb-action="copy" ' +
+      'data-wc-action="apply" data-msg-id="1" data-text="Glitch" data-custom-kept="k">go</span>',
   );
-  assert.ok(!/data-/i.test(html), html);
+  const span = reparse(html).querySelector("span");
+  const names = span.getAttributeNames().filter((n) => n.startsWith("data-"));
+  assert.ok(names.length && names.every((n) => n.startsWith("data-custom-")), html);
+  assert.equal(span.getAttribute("data-custom-text"), "Glitch");
+  assert.equal(span.getAttribute("data-custom-chat-action"), "inspector");
+  assert.equal(span.getAttribute("data-custom-kept"), "k");
   assert.match(html, />go</);
+});
+
+it("a card's attr(data-*) effect reads the attribute the sanitiser renamed", () => {
+  const html = render(
+    '<style>.glitch::before { content: attr(data-text) } [data-mood=calm] { color: teal }</style>' +
+      '<span class="glitch" data-text="Glitch" data-mood="calm">Glitch</span>',
+  );
+  const root = reparse(html);
+  const sheet = root.querySelector("style")?.textContent || "";
+  assert.match(sheet, /attr\(data-custom-text\)/);
+  assert.match(sheet, /\[data-custom-mood=calm\]/);
+  assert.ok(root.querySelector(".custom-glitch[data-custom-text=Glitch][data-custom-mood=calm]"), html);
+});
+
+it("the world-proposal dispatcher ignores a proposal forged in a bubble", async () => {
+  const doc = globalThis.document;
+  const { initWorldProposalActions } = await import("../../frontend/lorebooks.js");
+  initWorldProposalActions();
+  // The first lock is the rename above; this is the second, with the attribute
+  // names written as the dispatcher reads them, as if the rename had failed.
+  doc.body.innerHTML =
+    '<div class="msg-body"><div data-wc-id="c" data-wc-world="w"><button data-wc-action="apply">ok</button></div></div>';
+  const button = doc.querySelector("button");
+  const event = new globalThis.MouseEvent("click", { bubbles: true, cancelable: true });
+  button.dispatchEvent(event);
+  assert.equal(event.defaultPrevented, false);
+  assert.equal(button.disabled, false);
+  doc.body.innerHTML = "";
 });
 
 it("a comment is dropped rather than shown as text", () => {
@@ -122,15 +243,38 @@ it("a control that would paint outside the bubble does not survive", () => {
 });
 
 it("a model-written form still cannot be built around them", () => {
-  const html = render('<form action="https://evil.test"><input name="p" type="password"></form>');
-  assert.ok(!/<form/i.test(html), html);
-  assert.ok(!/<select|<textarea|<button/i.test(render("<select></select><textarea></textarea><button>b</button>")));
+  // A form submits: with no action it navigates the app, with one it posts what
+  // was typed off-site. Its controls stay, and submit nowhere.
+  const html = render('<form action="https://evil.test"><input name="p" type="password"><button>Go</button></form>');
+  assert.ok(!/<form|action=/i.test(html), html);
+  assert.match(html, /<input[^>]*type="password"/);
+  assert.match(html, /<button>Go<\/button>/);
 });
 
-it("a model-written button is dropped, and its label stays as text", () => {
-  const html = render('<button data-wf-action="image_gen:generate">Generate an image</button>');
-  assert.ok(!/<button/i.test(html), html);
-  assert.match(html, /Generate an image/);
+it("buttons, selects and textareas render, and reach nothing in the app", () => {
+  const html = render(
+    '<button data-wf-action="image_gen:generate" form="composer" formaction="https://evil.test">Generate</button>' +
+      '<select><option>Left</option><option selected>Right</option></select><textarea rows="2">notes</textarea>',
+  );
+  const root = reparse(html);
+  const button = root.querySelector("button");
+  assert.equal(button?.textContent, "Generate");
+  // No dispatcher name, and no way to borrow an app form or a submit target.
+  assert.deepEqual(button.getAttributeNames().sort(), ["data-custom-wf-action"]);
+  assert.equal(root.querySelector("select")?.value, "Right");
+  assert.equal(root.querySelector("textarea")?.value, "notes");
+});
+
+it("a textarea's text is kept verbatim rather than laid out as prose", () => {
+  const root = reparse(render("<textarea>line one\n\nline *two*</textarea>"));
+  assert.equal(root.querySelector("textarea")?.value.trim(), "line one\n\nline *two*");
+});
+
+it("marquee keeps its own tuning attributes", () => {
+  const html = render('<marquee behavior="alternate" scrollamount="20" scrolldelay="60">hi</marquee>');
+  assert.match(html, /behavior="alternate"/);
+  assert.match(html, /scrollamount="20"/);
+  assert.match(html, /scrolldelay="60"/);
 });
 
 it("an id cannot collide with one the app looks up", () => {
@@ -326,4 +470,57 @@ it("a message too large for the cache still renders, and renders the same way", 
   // A small message takes the cached path and must round-trip identically too.
   const small = "*hello* `world`";
   assert.equal(render(small), render(small));
+});
+
+it("card dialogue transforms survive the real sanitizer, with explicit scoped CSS", async () => {
+  const { projectCardDisplay } = await import("../../frontend/card_scripts.js");
+  const card = {
+    display_scripts: [
+      { findRegex: "/<dialogue>/ig", replaceString: '<div class="dialogue-outer"><div class="dialogue">', placement: [2] },
+      { findRegex: "/<\\/dialogue>/ig", replaceString: "</div></div>", placement: [2] },
+    ],
+    display_css: ".custom-dialogue { color: red; } body { position: fixed; }",
+  };
+  const html = render(projectCardDisplay("<dialogue>Hello.</dialogue>", card, "assistant"));
+  const parsed = reparse(html);
+  assert.equal(parsed.querySelector(".custom-dialogue")?.textContent, "Hello.");
+  assert.ok(!html.includes("&lt;dialogue"), html);
+  assert.match(parsed.querySelector("style")?.textContent || "", /color:\s*red/);
+  assert.match(parsed.querySelector("style")?.textContent || "", /\.msg-body \.msg-s[0-9a-z]+ body/);
+});
+
+it("a card stylesheet pasted with its style tags keeps its web font", async () => {
+  const { projectCardDisplay } = await import("../../frontend/card_scripts.js");
+  const card = {
+    display_css:
+      '<style>@font-face { font-family: board; src: url("https://fonts.invalid/b.ttf"); }\n.custom-dialogue { font-family: board !important; }</style>',
+  };
+  const sheet = reparse(render(projectCardDisplay("Hello.", card, "assistant"))).querySelector("style")?.textContent || "";
+  const face = sheet.match(/@font-face \{ font-family: "([^"]+)"/)?.[1];
+  assert.ok(face?.endsWith("-board"), sheet);
+  assert.ok(sheet.includes(`font-family: "${face}" !important`), sheet);
+});
+
+it("card edits change HTML cache keys for the same raw message", async () => {
+  const { projectCardDisplay } = await import("../../frontend/card_scripts.js");
+  const raw = "<dialogue>Hello.</dialogue>";
+  const card = {
+    display_scripts: [{ findRegex: "/dialogue/g", replaceString: "strong", placement: [2] }],
+  };
+  const before = render(projectCardDisplay(raw, card, "assistant"));
+  card.display_scripts[0].replaceString = "em";
+  const after = render(projectCardDisplay(raw, card, "assistant"));
+  assert.notEqual(before, after);
+  assert.equal(reparse(before).querySelector("strong")?.textContent, "Hello.");
+  assert.equal(reparse(after).querySelector("em")?.textContent, "Hello.");
+  card.display_css = "em { color: blue; }";
+  assert.notEqual(render(projectCardDisplay(raw, card, "assistant")), after);
+});
+
+it("script replacements still cross the HTML trust boundary", async () => {
+  const { projectCardDisplay } = await import("../../frontend/card_scripts.js");
+  const source = projectCardDisplay("hello", { display_scripts: [{ findRegex: "/hello/g", replaceString: '<script>alert(1)</script><div onclick="alert(2)" data-chat-action="delete">safe</div>', placement: [2] }] }, "assistant");
+  const html = render(source);
+  assert.ok(!/<script|onclick|data-chat-action/.test(html), html);
+  assert.match(html, /safe/);
 });

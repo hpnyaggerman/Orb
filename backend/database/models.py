@@ -531,6 +531,21 @@ class ActiveLorebookEntryRow(LorebookEntryRow):
     world_name: str
 
 
+LibrarySqlCell = str | int | float | None
+
+
+class LibraryQueryResult(TypedDict, total=False):
+    """One sandboxed library query: rows, or an ``error`` sentence instead.
+
+    ``more_rows`` is set when the row limit or the result-size cap cut rows off.
+    """
+
+    columns: list[str]
+    rows: list[list[LibrarySqlCell]]
+    more_rows: bool
+    error: str
+
+
 class UserPersonaRow(TypedDict):
     """A user persona without avatar bytes."""
 
@@ -656,6 +671,8 @@ class CharacterCardRow(TypedDict, total=False):
     has_avatar: bool
     has_expressions: bool
     def_chars: int
+    display_scripts: list[dict]
+    display_css: str
 
 
 class CharacterExpressionRow(TypedDict):
