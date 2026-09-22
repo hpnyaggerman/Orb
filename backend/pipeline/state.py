@@ -179,7 +179,7 @@ class LorebookTurn:
     entries: Sequence[Mapping[str, Any]]
     messages: Sequence[Mapping[str, Any]]
     agentic: bool
-    block: str = ""  # Director-facing lore context in substring mode.
+    block: str = ""  # Keyword-scanned trailing block in substring mode.
     catalog: str = ""  # Director-facing pick catalog in agentic mode.
     # Frozen so replayed prompts see the same macro values.
     depth_block: str = ""
@@ -189,7 +189,11 @@ class LorebookTurn:
         return AGENTIC_LOREBOOK_SCAN_DEPTH if self.agentic else LOREBOOK_SCAN_DEPTH
 
     def writer_block(self, director_selected: Sequence[str], macros: Macros | None = None) -> str:
-        """Return the lorebook block appended to the Writer prompt."""
+        """Return the turn's trailing lorebook block.
+
+        Read by the Director's scene-direction prompts and appended to the Writer
+        prompt, so the scene is directed on the lore the writer gets.
+        """
         if not self.agentic:
             return self.block
         return compute_lorebook_block(

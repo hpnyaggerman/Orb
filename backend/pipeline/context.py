@@ -337,14 +337,15 @@ async def _prepare_turn(
         enabled_tools_pre_merge = {k: False for k in enabled_tools_setting}
 
     # When agentic lorebook is active the keyword scan is skipped; the Director
-    # picks entries from a catalog instead and the writer block is built post-director.
+    # picks entries from a catalog instead and the trailing block is built from
+    # its picks at the start of the director stage.
     agentic_active = agentic_lorebook_active(settings, ctx.lorebook_entries, agent_on=agent_enabled(settings))
     lorebook = LorebookTurn(
         entries=ctx.lorebook_entries,
         messages=lorebook_messages,
         agentic=agentic_active,
-        # Director-facing context: the agentic catalog, or the keyword-scanned block
-        # (which the writer block reuses verbatim in substring mode).
+        # The agentic pick catalog, or the keyword-scanned trailing block (returned
+        # verbatim by writer_block in substring mode).
         catalog=build_lorebook_catalog(ctx.lorebook_entries) if agentic_active else "",
         block="" if agentic_active else compute_lorebook_injection_block(lorebook_messages, ctx.lorebook_entries, macros),
         # Rolled once here, so the writer and the editor replaying its content

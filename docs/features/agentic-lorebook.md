@@ -32,5 +32,7 @@ toggle must also be on.
 The Director receives a short catalog of non-constant entries and selects the
 ones that fit the current scene. This uses one additional lightweight model call
 per turn. If there are no selectable entries, Orb uses the normal keyword scan.
+The selection runs before the Director fills its fragments, so the chosen entries
+are in view while it directs the scene.
 
 See [Lorebooks](lorebooks.md) for entry types, triggers, macros, and import rules.

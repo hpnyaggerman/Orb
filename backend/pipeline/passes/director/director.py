@@ -439,13 +439,14 @@ async def director_stage(
     macros: Macros,
     speaker_keys: str = "",
 ) -> AsyncIterator[dict]:
-    """Input-prep + director pass + all post-processing for the director stage.
+    """Input-prep + lorebook pick + director pass + post-processing for the director stage.
 
-    Runs the director pass (when the agent is on and a pre-writer tool is
-    enabled), folds the :class:`DirectorResult` into *state*, computes the
-    style-injection block (→ ``director_done``), and computes the writer's
-    lorebook block (agentic selection or keyword scan). Returns early on a stop
-    during the director pass so ``director_done`` and lorebook work are skipped.
+    Picks the turn's lorebook entries first (agentic mode) and computes the
+    trailing lorebook block from them, so the director pass (when the agent is
+    on and a pre-writer tool is enabled) directs the scene on the same lore the
+    writer will read. Folds the :class:`DirectorResult` into *state* and computes
+    the style-injection block (→ ``director_done``). Returns early on a stop
+    during the pick or the director pass so the rest of the stage is skipped.
     """
     # Prior progressive state: the seed for this turn, filtered to the fragments
     # currently marked progressive. Used to feed the director pass and (as prior
@@ -459,52 +460,14 @@ async def director_stage(
     direction_notes = director.get("direction_notes") or []
     notes_block = macros.resolve_message(render_direction_notes_block(direction_notes)) if direction_notes else ""
 
-    has_director_loop_tools = any(cfg.enabled_tools.get(n, False) for n in DIRECTOR_LOOP_TOOL_NAMES)
-    if cfg.agent_on and has_director_loop_tools:
+    runs_director = cfg.agent_on and any(cfg.enabled_tools.get(n, False) for n in DIRECTOR_LOOP_TOOL_NAMES)
+    if runs_director:
         yield {"event": "director_start"}
-        async for event in director_pass(
-            cfg.agent_lane.client,
-            cfg.agent_lane.base,
-            state.user_message,
-            settings,
-            director,
-            mood_fragments,
-            writer_fragments,
-            cfg.enabled_tools,
-            attachments=attachments,
-            kv_tracker=kv_tracker,
-            reasoning_on=cfg.director_reasoning_on,
-            reasoning_prefill=cfg.director_reasoning_prefill,
-            lorebook_block=lorebook.block,
-            progressive_state=prior_progressive,
-            direction_notes_block=notes_block if direction_note_to_director(settings) else "",
-            speaker_keys=speaker_keys,
-        ):
-            if event["type"] == "reasoning":
-                yield {
-                    "event": "reasoning",
-                    "data": {"pass": "director", "delta": state.add_reasoning("director", event)},
-                }
-            elif event["type"] == "done":
-                result: DirectorResult = event["result"]
-                state.active_moods = result.active_moods
-                state.agent_raw = result.agent_raw
-                state.calls = result.calls
-                state.latency = result.latency
-                state.extra_fields = result.extra_fields
-                state.progressive_fields = progressive.select(state.extra_fields, writer_fragments)
-
-    # Bail out if stop was clicked during the director pass: skip style injection,
-    # director_done, and the writer-lorebook computation, exactly as before. The
-    # orchestrator's own post-stage abort check then halts the pipeline before the
-    # writer. The writer and agent clients share one abort token, so checking
-    # either is equivalent.
-    if cfg.agent_lane.client.is_aborted:
-        return
 
     # Its own forced select_lorebook call, independent of direct_scene, so agentic
     # lorebook works whether or not the Director's scene-direction tool is enabled.
-    # Runs before director_done so its picks ride state.calls into the inspector/log.
+    # It runs before the scene-direction steps so they decide with the picked lore
+    # in view; its call rides state.calls into the inspector/log either way.
     if lorebook.agentic:
         yield {"event": "step_start", "data": {"step": "lorebook"}}
         async for event in lorebook_select_step(
@@ -523,9 +486,64 @@ async def director_stage(
             elif event["type"] == "done":
                 sel: LorebookSelectResult = event["result"]
                 state.selected_lorebook_entries = sel.selected
-                # Append to the turn's calls so the picks stay visible in the
-                # conversation log / inspector.
                 state.calls = [*state.calls, *sel.calls]
+
+    # The turn's trailing lorebook block, computed once from the per-turn bundle.
+    # In substring mode this reuses the keyword-scanned block already built up
+    # front; in agentic mode it is the union of the current-turn keyword scan and
+    # the Director's selection. The direct_scene prompts below and the writer
+    # read this same block.
+    state.writer_lorebook_block = lorebook.writer_block(state.selected_lorebook_entries, macros)
+
+    # Bail out if stop was clicked during the pick: skip the director pass, style
+    # injection, and director_done. The orchestrator's own post-stage abort check
+    # then halts the pipeline before the writer. The writer and agent clients
+    # share one abort token, so checking either is equivalent.
+    if cfg.agent_lane.client.is_aborted:
+        return
+
+    if runs_director:
+        if lorebook.agentic:
+            # The status bar holds the lorebook step's label until the next step
+            # event, so the scene-direction calls announce themselves again.
+            yield {"event": "step_start", "data": {"step": "director"}}
+        async for event in director_pass(
+            cfg.agent_lane.client,
+            cfg.agent_lane.base,
+            state.user_message,
+            settings,
+            director,
+            mood_fragments,
+            writer_fragments,
+            cfg.enabled_tools,
+            attachments=attachments,
+            kv_tracker=kv_tracker,
+            reasoning_on=cfg.director_reasoning_on,
+            reasoning_prefill=cfg.director_reasoning_prefill,
+            lorebook_block=state.writer_lorebook_block,
+            progressive_state=prior_progressive,
+            direction_notes_block=notes_block if direction_note_to_director(settings) else "",
+            speaker_keys=speaker_keys,
+        ):
+            if event["type"] == "reasoning":
+                yield {
+                    "event": "reasoning",
+                    "data": {"pass": "director", "delta": state.add_reasoning("director", event)},
+                }
+            elif event["type"] == "done":
+                result: DirectorResult = event["result"]
+                state.active_moods = result.active_moods
+                state.agent_raw = result.agent_raw
+                # After the pick's call, so state.calls keeps execution order.
+                state.calls = [*state.calls, *result.calls]
+                state.latency = result.latency
+                state.extra_fields = result.extra_fields
+                state.progressive_fields = progressive.select(state.extra_fields, writer_fragments)
+
+    # Bail out if stop was clicked during the director pass: skip style injection
+    # and director_done, exactly as before.
+    if cfg.agent_lane.client.is_aborted:
+        return
 
     # Style injection
     direct_scene_enabled = cfg.agent_on and bool(cfg.enabled_tools.get("direct_scene", False))
@@ -574,9 +592,3 @@ async def director_stage(
             "extra_fields": state.extra_fields,
         },
     }
-
-    # The writer's lorebook block, computed once from the per-turn bundle. In
-    # substring mode this reuses the keyword-scanned block already built up front;
-    # in agentic mode it is the union of constants, the current-turn keyword scan,
-    # and the Director's selection (computed now that the selection is known).
-    state.writer_lorebook_block = lorebook.writer_block(state.selected_lorebook_entries, macros)

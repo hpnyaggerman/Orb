@@ -22,9 +22,10 @@ function backendSteps() {
 test("every backend step has its own status text", () => {
   const steps = backendSteps();
   assert.ok(steps.includes("writer"), "the step scan found nothing; did the emission shape change?");
-  // `director_start` predates `step_start` and borrows the "director" entry.
-  const labels = [...steps, "director"].map(generationStepLabel);
-  for (const [i, label] of labels.entries()) assert.ok(label, `no status text for ${steps[i] ?? "director"}`);
+  // `director_start` shares the "director" entry with the scene-direction step.
+  const ids = [...new Set([...steps, "director"])];
+  const labels = ids.map(generationStepLabel);
+  for (const [i, label] of labels.entries()) assert.ok(label, `no status text for ${ids[i]}`);
   assert.equal(new Set(labels).size, labels.length);
 });
 

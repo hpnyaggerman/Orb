@@ -67,7 +67,7 @@ pass being skipped.
 |---|---|---|
 | `user_message_created` | `{id, content}` | Replaces the optimistic user row with its saved id and text. `/send` only. |
 | `director_start` | — | Starts the directing phase. |
-| `step_start` | `{step}` | Names the step that is starting: `lorebook`, `direction_notes`, `writer`, `output_auditor`, `length_guard`, `post_processing`, `feedback`, `world_changes`, or `sheet_updates`. |
+| `step_start` | `{step}` | Names the step that is starting: `lorebook`, `director` (the scene-direction calls, after a `lorebook` step), `direction_notes`, `writer`, `output_auditor`, `length_guard`, `post_processing`, `feedback`, `world_changes`, or `sheet_updates`. |
 | `reasoning` | `{pass, delta}` | Adds thinking text to a pass's reasoning buffer. |
 | `director_done` | Director data | Updates the inspector. |
 | `token` | Text delta | Appends visible Writer output. |
