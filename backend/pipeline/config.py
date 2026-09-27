@@ -11,6 +11,7 @@ from ..inference import (
     CachedBase,
     LLMClient,
 )
+from ..prompting.group_context import resolve_char_in_descriptions
 from ..prompting.tool_catalog import enabled_schemas
 from ..prompting.tool_schemas import build_direction_note_tool
 from ..workflows.enablement import disabled_workflow_tool_names
@@ -144,11 +145,18 @@ def _build_writer_tools_blob(
     agentic_lorebook: bool = False,
     dynamic_world: bool = False,
     grouped: bool = False,
+    schema_char: str = "",
 ) -> dict:
-    """Build the tool schemas shared by cached calls."""
+    """Build the tool schemas shared by cached calls.
+
+    *schema_char*, when set, is what ``{{char}}`` reads as in the ``direct_scene``
+    field descriptions; the send-time macro pass never reaches tool schemas.
+    """
     writer_fragments, feedback_fragments, direction_note_fragments, post_processing_fragments = _split_interactive_fragments(
         interactive_fragments
     )
+    if schema_char:
+        writer_fragments = resolve_char_in_descriptions(writer_fragments, schema_char)
     direct_scene = build_direct_scene_override(writer_fragments, grouped=grouped)
     # Per-fragment mode fills one field per call, so requiredness on the shared blob
     # is meaningless -- and a non-empty `required` contradicts the "Fill ONLY X, leave

@@ -178,6 +178,7 @@ async def _run_pipeline(
                 kv_tracker=kv_tracker,
                 lorebook=lorebook,
                 macros=macros,
+                speaker_name=speaker.name if speaker is not None else "",
             ),
         ):
             yield ev

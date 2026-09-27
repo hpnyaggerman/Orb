@@ -77,6 +77,7 @@ export async function loadSettings() {
 
   S.feedbackEnabled = Boolean(S.settings.feedback_enabled);
   S.directorIndividualFragments = Boolean(S.settings.director_individual_fragments);
+  S.directorIndividualSpeakers = Boolean(S.settings.director_individual_speakers);
   S.directionNotesRecord = Boolean(S.settings.direction_notes_record);
   S.directionNotesInject = S.settings.direction_notes_inject || "off";
   updateDirectionNotesButton();
@@ -194,6 +195,7 @@ const SETTING_TOGGLES = {
   hideUntilBaked: toggleHideUntilBaked,
   showChatAvatars: toggleShowChatAvatars,
   preventPromptOverrides: togglePreventPromptOverrides,
+  directorIndividualSpeakers: toggleDirectorIndividualSpeakers,
 };
 
 function wireSettingsToggles(el) {
@@ -457,6 +459,12 @@ export async function toggleDirectorIndividualFragments(on) {
   await persistSettings({ director_individual_fragments: on });
 }
 
+export async function toggleDirectorIndividualSpeakers(on) {
+  S.directorIndividualSpeakers = on;
+  renderToolsPanel();
+  await persistSettings({ director_individual_speakers: on });
+}
+
 export async function setDirectionNotesRecord(on) {
   S.directionNotesRecord = on;
   renderToolsPanel();
@@ -648,6 +656,10 @@ export function renderToolsPanel() {
                <input type="checkbox" ${S.directorIndividualFragments ? "checked" : ""} onchange="toggleDirectorIndividualFragments(this.checked)">
                Individual fragment processing
              </label>
+             <label class="lg-enforce-label" title="Group chats: the Director runs for each speaker right before its reply, and {{char}} in fragment descriptions names that speaker. More focused output; more calls and latency.">
+               <input type="checkbox" ${S.directorIndividualSpeakers ? "checked" : ""} data-setting-toggle="directorIndividualSpeakers">
+               Individual speaker processing
+             </label>
            </div>`;
     cardById[t.id] = `<div class="tool-card ${on ? "tool-on" : ""}">
       <div class="tool-card-header">
@@ -742,6 +754,7 @@ export function renderToolsPanel() {
     cardById.editor_apply_patch +
     lengthGuardCard +
     feedbackCard;
+  wireSettingsToggles($("tools-list"));
 
   const secEl = $("tools-list-secondary");
   if (secEl) {

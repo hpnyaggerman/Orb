@@ -23,7 +23,11 @@ from ....inference import (
     parse_tool_calls,
     reasoning_cfg,
 )
-from ....prompting import compute_style_injection_block, resolve_mood_fragment_randoms
+from ....prompting import (
+    compute_style_injection_block,
+    resolve_char_in_descriptions,
+    resolve_mood_fragment_randoms,
+)
 from ....prompting.tool_catalog import require_tool
 from ....prompting.tool_schemas import build_direct_scene_tool, wire_field
 from ...predicates import direction_note_to_director, direction_note_to_writer
@@ -213,11 +217,16 @@ async def director_pass(
     progressive_state: dict | None = None,
     direction_notes_block: str = "",
     speaker_keys: str = "",
+    speaker_name: str = "",
 ) -> AsyncIterator[dict]:
     """Yield reasoning chunks during each tool call, then a single done dict.
 
     *speaker_keys* is the exchange's castable roster, comma-joined. It reaches the
     model only through the trailing request, never the cached tool blob.
+
+    *speaker_name* is set when the pass directs one group speaker: ``{{char}}`` in
+    the fragment descriptions it reads names that speaker, and the pass does not
+    plan speakers, since the exchange's plan is already made.
 
     Yields:
         ``{"type": "reasoning", "delta": str}``       — zero or more reasoning chunks
@@ -239,6 +248,19 @@ async def director_pass(
             "result": DirectorResult(active_moods=active_moods),
         }
         return
+
+    # The shared schema cannot carry the speaker's name, so a one-call request
+    # restates the field descriptions that name it.
+    named_fields: list[Mapping[str, Any]] = []
+    if speaker_name:
+        mood_fragments = resolve_char_in_descriptions(mood_fragments, speaker_name)
+        named = resolve_char_in_descriptions(interactive_fragments, speaker_name)
+        named_fields = [
+            fragment
+            for fragment, raw in zip(named, interactive_fragments, strict=True)
+            if fragment["description"] != raw["description"]
+        ]
+        interactive_fragments = named
 
     # The tools blob is resolved once into the shared base; the director reads it
     # rather than rebuilding it, so it cannot drift from the writer/editor blobs.
@@ -267,9 +289,10 @@ async def director_pass(
             break
         tool_schema = next((s for s in tool_schemas if s["function"]["name"] == name), None)
         # Only the group driver widens direct_scene with a speaking plan, so its
-        # presence in the schema is what says "this turn schedules speakers".
+        # presence in the schema is what says "this turn schedules speakers" --
+        # unless the pass directs one speaker, which the plan already chose.
         scene_fields = tool_schema["function"]["parameters"]["properties"] if name == "direct_scene" and tool_schema else {}
-        plans_speakers = SPEAKING_PLAN_FIELD in scene_fields
+        plans_speakers = SPEAKING_PLAN_FIELD in scene_fields and not speaker_name
         if name == "direct_scene" and per_fragment_on and (interactive_fragments or plans_speakers):
             reasoning_params = reasoning_cfg(reasoning_on, reasoning_prefill)
             hyperparams = extract_hyperparams(settings, lane="agent", defaults={"temperature": 0.25})
@@ -361,6 +384,7 @@ async def director_pass(
             progressive_state=progressive_state,
             tool_schema=tool_schema,
             cast_instruction=speaking_plan_instruction(speaker_keys) if speaker_keys else "",
+            named_fields=named_fields,
         )
         tail = lorebook_prefix + (notes_prefix if name == "direct_scene" else "") + tool_tail
         content = build_multimodal_content(tail, attachments)
@@ -438,6 +462,7 @@ async def director_stage(
     lorebook: LorebookTurn,
     macros: Macros,
     speaker_keys: str = "",
+    speaker_name: str = "",
 ) -> AsyncIterator[dict]:
     """Input-prep + lorebook pick + director pass + post-processing for the director stage.
 
@@ -447,6 +472,9 @@ async def director_stage(
     writer will read. Folds the :class:`DirectorResult` into *state* and computes
     the style-injection block (→ ``director_done``). Returns early on a stop
     during the pick or the director pass so the rest of the stage is skipped.
+
+    *speaker_name* is the group speaker this stage directs, if any (see
+    :func:`director_pass`).
     """
     # Prior progressive state: the seed for this turn, filtered to the fragments
     # currently marked progressive. Used to feed the director pass and (as prior
@@ -524,6 +552,7 @@ async def director_stage(
             progressive_state=prior_progressive,
             direction_notes_block=notes_block if direction_note_to_director(settings) else "",
             speaker_keys=speaker_keys,
+            speaker_name=speaker_name,
         ):
             if event["type"] == "reasoning":
                 yield {

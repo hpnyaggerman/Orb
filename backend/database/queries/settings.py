@@ -304,6 +304,7 @@ async def update_settings(data: dict) -> SettingsRow:
             "agent_shared_system_prompt",
             "feedback_enabled",
             "director_individual_fragments",
+            "director_individual_speakers",
             "direction_notes_record",
             "direction_notes_inject",
             "inspector_open_states",

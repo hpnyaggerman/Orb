@@ -73,7 +73,10 @@ trunk. Shared dossier has one common body containing every member's dossier.
 
 The Director runs before a speaker is selected, so it uses the neutral group
 base. The first speaker must still rebuild when the mode makes the prefix
-speaker-specific.
+speaker-specific. With `director_individual_speakers` on, only the speaking-plan
+call uses the neutral base: each speaker's Director runs on the base its Writer
+reads, and the shared `direct_scene` schema names no speaker, so every call of
+the exchange still ships one tools blob.
 
 ### Treat tools as part of the prompt
 

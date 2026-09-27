@@ -39,7 +39,7 @@ from ..inference import (
     client_from_settings,
     separate_agent_lane_configured,
 )
-from ..prompting import build_prefix, macro_identity
+from ..prompting import SPEAKING_CHARACTER, build_prefix, macro_identity
 from ..prompting.lorebook import (
     build_lorebook_catalog,
     compute_constant_lorebook_block,
@@ -369,6 +369,12 @@ async def _prepare_turn(
         else None
     )
 
+    # A group's schema serves every speaker, so {{char}} in it is the group name,
+    # or a neutral phrase when each speaker's own Director request names it.
+    schema_char = ""
+    if ctx.cast.grouped:
+        schema_char = SPEAKING_CHARACTER if settings.get("director_individual_speakers") else macro_char
+
     # Builds direct_scene plus any active fragment-driven Editor tools; must be
     # called once so all passes get byte-identical tool blobs (KV cache
     # Invariants 3 & 5).
@@ -379,6 +385,7 @@ async def _prepare_turn(
         agentic_lorebook=agentic_active,
         dynamic_world=world_proposal is not None,
         grouped=ctx.cast.grouped,
+        schema_char=schema_char,
     )
     schema_overrides = MappingProxyType(overrides)
     accumulators = {

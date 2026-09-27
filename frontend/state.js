@@ -40,6 +40,7 @@ export const S = {
   agenticLorebookEnabled: false,
   feedbackEnabled: false,
   directorIndividualFragments: false,
+  directorIndividualSpeakers: false,
   directionNotesRecord: false, // global direction-note switch
   directionNotesInject: "off", // where direction notes are injected
   hideUntilBaked: false, // keep the streaming reply out of the DOM until final

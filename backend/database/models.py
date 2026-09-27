@@ -96,6 +96,7 @@ class _SettingsBase(TypedDict):
     agent_shared_system_prompt: str
     feedback_enabled: int
     director_individual_fragments: int
+    director_individual_speakers: int
     direction_notes_record: int
     direction_notes_inject: str
     workflows_globally_enabled: int

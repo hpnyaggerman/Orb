@@ -31,7 +31,7 @@ from backend.database.migrations import MIGRATIONS
 from backend.features.presets import engine
 
 # Every fork migration id this fork has shipped. Append only.
-_SHIPPED = ("8001_direction_notes_enabled",)
+_SHIPPED = ("8001_direction_notes_enabled", "8002_director_individual_speakers")
 
 
 def _fork_migrations() -> list[str]:

@@ -57,6 +57,7 @@ class SettingsUpdate(BaseModel):
     agent_shared_system_prompt: str | None = None
     feedback_enabled: bool | None = None
     director_individual_fragments: bool | None = None
+    director_individual_speakers: bool | None = None
     direction_notes_record: bool | None = None
     direction_notes_inject: Literal["off", "director", "writer", "both"] | None = None
     inspector_open_states: dict | None = None

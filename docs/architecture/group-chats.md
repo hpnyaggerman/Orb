@@ -62,7 +62,10 @@ The following rules apply in every mode:
 - A card's post-history instructions belong only to the active speaker. The
   scene's own post-history instructions are shared by every speaker.
 - `{{cast}}` is always the roster. `{{char}}` is the group title outside member
-  card text and the member's name inside that member's context.
+  card text and the member's name inside that member's context. With
+  `director_individual_speakers` on, `{{char}}` in the fragment descriptions a
+  speaker's Director run reads is that speaker, and the shared `direct_scene`
+  schema words it as "the speaking character".
 - Card-linked Worlds and card fragments are scene-wide. Context mode does not
   make lore private.
 
@@ -90,7 +93,11 @@ super-regenerate, and Magic Rewrite follow the speaker already recorded on the
 message and do not consume a pin.
 
 The Director and pre-pipeline setup run once per exchange. Each planned speaker
-then runs the Writer, Editor, feedback, and post-workflow path. Messages form
+then runs the Writer, Editor, feedback, and post-workflow path. With
+`director_individual_speakers` on, only pre-pipeline setup and, in `director`
+mode, one speaking-plan call run per exchange; each speaker then runs its own
+Director stage (agentic lore pick, fragments, moods, pre-writer notes) before its
+Writer, starting from the previous speaker's Director state. Messages form
 
 ```text
 user → speaker 1 → speaker 2 → …
@@ -98,8 +105,8 @@ user → speaker 1 → speaker 2 → …
 
 All replies share the exchange id and receive increasing turn indices. Later
 speakers see earlier replies in history, but lore selection is frozen for the
-exchange. Post-turn notes and Dynamic Worlds run after the last successful
-speaker.
+exchange, apart from the agentic picks each speaker's own Director run makes.
+Post-turn notes and Dynamic Worlds run after the last successful speaker.
 
 A group regenerate creates a same-speaker sibling and does not replay later
 speakers. Fork-edit creates a new user branch and starts a fresh exchange.
@@ -136,7 +143,7 @@ from unrelated conversation state.
 | Scope | Examples |
 |---|---|
 | Scene | Worlds, persona, macros, compression, checkpoints, fragments, context size |
-| Exchange | Director, agentic lore selection, direction notes, Dynamic World proposals |
+| Exchange | Director, agentic lore selection, direction notes, Dynamic World proposals (with `director_individual_speakers`, the Director, its lore picks, and pre-writer notes are per speaker) |
 | Speaker | Editor, feedback, regenerate, image generation, TTS, character expressions |
 
 Off-turn calls use the same scene prefix as the turn: speaker-labelled history,

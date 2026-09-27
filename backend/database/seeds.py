@@ -243,6 +243,7 @@ DEFAULT_SETTINGS = {
     "agent_shared_system_prompt": "",
     "feedback_enabled": 0,
     "director_individual_fragments": 0,
+    "director_individual_speakers": 0,
     "direction_notes_record": 0,
     "direction_notes_inject": "off",
     "workflows_globally_enabled": 1,

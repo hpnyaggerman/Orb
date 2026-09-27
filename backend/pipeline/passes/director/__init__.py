@@ -13,6 +13,7 @@ from .director import (
     speaking_plan_instruction,
 )
 from .lorebook_select import LorebookSelectResult, lorebook_select_step
+from .speaking_plan import speaking_plan_step
 
 __all__ = [
     "DirectorResult",
@@ -27,4 +28,5 @@ __all__ = [
     "direction_note_step",
     "LorebookSelectResult",
     "lorebook_select_step",
+    "speaking_plan_step",
 ]

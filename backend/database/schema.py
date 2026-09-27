@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS settings (
     agent_shared_system_prompt TEXT NOT NULL DEFAULT '',
     feedback_enabled INTEGER NOT NULL DEFAULT 0,
     director_individual_fragments INTEGER NOT NULL DEFAULT 0,
+    director_individual_speakers INTEGER NOT NULL DEFAULT 0,
     direction_notes_record INTEGER NOT NULL DEFAULT 0,
     direction_notes_inject TEXT NOT NULL DEFAULT 'off',
     inspector_open_states TEXT NOT NULL DEFAULT '{"reasoning":true,"tool_calls":false,"injection_block":false,"context_size":true}',

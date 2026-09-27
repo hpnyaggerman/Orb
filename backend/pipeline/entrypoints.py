@@ -22,7 +22,12 @@ from .context import (
 )
 from .failures import describe_failure
 from .orchestrator import _consume_direction_note_step, _run_pipeline
-from .passes.director import direction_note_step, director_stage, progressive
+from .passes.director import (
+    direction_note_step,
+    director_stage,
+    progressive,
+    speaking_plan_step,
+)
 from .passes.editor.editor import AUDIT_BASELINE_WINDOW
 from .persistence import _consume_pipeline, _conversation_log_writer
 from .predicates import direction_note_recording_active
@@ -145,6 +150,32 @@ async def _load_direction_notes(ctx: PipelineContext, conversation_id: str, path
     ctx.director["direction_notes"] = [
         {**db.direction_note_projection(r), "turn_index": turn_by_message.get(r["message_id"])} for r in rows
     ]
+
+
+async def _carry_director_state(
+    ctx: PipelineContext, conversation_id: str, res: TurnState, path: Sequence[Mapping[str, Any]]
+) -> None:
+    """Start the next group speaker's Director where the previous speaker's ended.
+
+    Each reply saves its own Director state. Directed from the exchange's opening
+    state instead, the next speaker would not build on the moods, progressive
+    values and notes just recorded, and would re-roll the ``{{random}}`` picks the
+    previous speaker stored, overwriting them when it saves.
+    """
+    ctx.director["active_moods"] = list(res.active_moods)
+    ctx.director["macro_choices"] = dict(res.macro_choices)
+    ctx.director["progressive_fields"] = dict(res.progressive_fields)
+    await _load_direction_notes(ctx, conversation_id, path)
+
+
+def _keep_result(log_writer: Callable, kept: list[TurnState]) -> Callable:
+    """Wrap a conversation-log callback so the persisted turn state is also kept."""
+
+    async def _on_result(res: TurnState, asst_id: int | None) -> None:
+        kept.append(res)
+        await log_writer(res, asst_id)
+
+    return _on_result
 
 
 async def _resolve_target_and_parent(
@@ -288,7 +319,12 @@ async def _generate_group_exchange(
     source_user_message_id: int | None = None,
     editor_audit_msgs: list[str] | None = None,
 ) -> AsyncIterator[dict]:
-    """Run one shared Director setup followed by zero or more speaker pipelines."""
+    """Run the exchange's Director setup followed by zero or more speaker pipelines.
+
+    One Director run serves every speaker by default. With
+    ``director_individual_speakers`` on, the speakers are chosen first and each
+    one runs its own Director stage right before its reply.
+    """
     settings = ctx.settings
     rows = list(ctx.group_members)
     eligible = [m for m in rows if not m.get("muted")]
@@ -333,69 +369,110 @@ async def _generate_group_exchange(
         phrase_bank=ctx.phrase_bank,
         schema_overrides=setup.schema_overrides,
     )
-    writer_fragments, _, direction_note_fragments, _ = _split_interactive_fragments(ctx.interactive_fragments)
-    shared = TurnState(
-        user_message=setup.macros.resolve_message(user_message),
-        effective_msg=setup.macros.resolve_message(user_message),
-        active_moods=ctx.director["active_moods"],
-        macro_choices=dict(ctx.director.get("macro_choices") or {}),
-    )
-    async for ev in director_stage(
-        cfg,
-        shared,
-        settings=settings,
-        director=ctx.director,
-        mood_fragments=ctx.mood_fragments,
-        writer_fragments=writer_fragments,
-        attachments=attachments,
-        kv_tracker=setup.kv_tracker,
-        lorebook=setup.lorebook,
-        macros=setup.macros,
-        # The castable roster rides the Director's request, not the shared tool
-        # blob: mute is otherwise prefix-neutral, and a schema that named the cast
-        # turned every mute toggle into a full re-prefill (kv-cache.md, Invariant 3).
-        # Same list the plan is validated against below, so the request cannot
-        # advertise a key `parse_speaking_plan` would then reject.
-        speaker_keys=", ".join(str(member["speaker_key"]) for member in eligible),
-    ):
-        yield ev
-    if ctx.client.is_aborted:
-        yield {"event": "done"}
-        return
-
-    # The pre-writer note step reflects on the scene direction the Director just
-    # set, and in a group that direction is set once for the whole exchange — so the
-    # step belongs here beside it, not inside a speaker's pipeline (which runs
-    # with the Director already done and would repeat it per reply). Its notes
-    # ride the exchange's first reply, the row `_consume_pipeline` anchors them to.
-    pre_writer_notes = [df for df in direction_note_fragments if df.get("direction_note_timing") == "pre_writer"]
-    if direction_note_recording_active(settings, pre_writer_notes, agent_on=cfg.agent_on) and cfg.enabled_tools.get(
-        "direct_scene"
-    ):
-        async for ev in _consume_direction_note_step(
-            direction_note_step(
+    # The castable roster rides the Director's request, not the shared tool
+    # blob: mute is otherwise prefix-neutral, and a schema that named the cast
+    # turned every mute toggle into a full re-prefill (kv-cache.md, Invariant 3).
+    # Same list the plan is validated against below, so the request cannot
+    # advertise a key `parse_speaking_plan` would then reject.
+    speaker_keys = ", ".join(str(member["speaker_key"]) for member in eligible)
+    per_speaker = bool(settings.get("director_individual_speakers"))
+    shared: TurnState | None = None
+    raw_plan: object = None
+    if per_speaker:
+        # Only `director` mode needs a model to pick the speakers. A pin and
+        # round-robin already name theirs, and each speaker's own Director run
+        # directs it, so they skip the call and go without a cue.
+        if (
+            not pinned_speaker_id
+            and ctx.conv.get("group_turn_mode") == "director"
+            and cfg.agent_on
+            and cfg.enabled_tools.get("direct_scene")
+        ):
+            yield {"event": "director_start"}
+            plan_reasoning = TurnState()
+            async for ev in speaking_plan_step(
                 cfg.agent_lane.client,
                 cfg.agent_lane.base,
                 settings=settings,
-                direction_note_fragments=pre_writer_notes,
-                active_notes=ctx.director.get("direction_notes") or [],
-                placement="pre_writer",
-                inj_block=shared.scene_direction,
+                user_message=setup.macros.resolve_message(user_message),
+                attachments=attachments,
+                speaker_keys=speaker_keys,
+                lorebook=setup.lorebook,
+                direction_notes=ctx.director.get("direction_notes") or [],
+                macros=setup.macros,
                 kv_tracker=setup.kv_tracker,
                 reasoning_on=cfg.director_reasoning_on,
                 reasoning_prefill=cfg.director_reasoning_prefill,
-            ),
+            ):
+                if ev["type"] == "reasoning":
+                    yield {
+                        "event": "reasoning",
+                        "data": {"pass": "director", "delta": plan_reasoning.add_reasoning("director", ev)},
+                    }
+                elif ev["type"] == "done":
+                    raw_plan = ev["plan"]
+            if ctx.client.is_aborted:
+                yield {"event": "done"}
+                return
+    else:
+        writer_fragments, _, direction_note_fragments, _ = _split_interactive_fragments(ctx.interactive_fragments)
+        shared = TurnState(
+            user_message=setup.macros.resolve_message(user_message),
+            effective_msg=setup.macros.resolve_message(user_message),
+            active_moods=ctx.director["active_moods"],
+            macro_choices=dict(ctx.director.get("macro_choices") or {}),
+        )
+        async for ev in director_stage(
+            cfg,
             shared,
-            "director",
+            settings=settings,
+            director=ctx.director,
+            mood_fragments=ctx.mood_fragments,
+            writer_fragments=writer_fragments,
+            attachments=attachments,
+            kv_tracker=setup.kv_tracker,
+            lorebook=setup.lorebook,
+            macros=setup.macros,
+            speaker_keys=speaker_keys,
         ):
             yield ev
+        if ctx.client.is_aborted:
+            yield {"event": "done"}
+            return
+
+        # The pre-writer note step reflects on the scene direction the Director just
+        # set, and in a group that direction is set once for the whole exchange — so the
+        # step belongs here beside it, not inside a speaker's pipeline (which runs
+        # with the Director already done and would repeat it per reply). Its notes
+        # ride the exchange's first reply, the row `_consume_pipeline` anchors them to.
+        pre_writer_notes = [df for df in direction_note_fragments if df.get("direction_note_timing") == "pre_writer"]
+        if direction_note_recording_active(settings, pre_writer_notes, agent_on=cfg.agent_on) and cfg.enabled_tools.get(
+            "direct_scene"
+        ):
+            async for ev in _consume_direction_note_step(
+                direction_note_step(
+                    cfg.agent_lane.client,
+                    cfg.agent_lane.base,
+                    settings=settings,
+                    direction_note_fragments=pre_writer_notes,
+                    active_notes=ctx.director.get("direction_notes") or [],
+                    placement="pre_writer",
+                    inj_block=shared.scene_direction,
+                    kv_tracker=setup.kv_tracker,
+                    reasoning_on=cfg.director_reasoning_on,
+                    reasoning_prefill=cfg.director_reasoning_prefill,
+                ),
+                shared,
+                "director",
+            ):
+                yield ev
+        raw_plan = shared.extra_fields.get("speaking_plan")
 
     # Who speaks is settled here; what the Director wrote for whoever that turns
     # out to be is settled by `plan_cue`. The two are separate questions -- a pin
     # and round-robin answer the first without the plan and still deserve the
     # second, or the Director is half-ignored on every path but `director`.
     plan_rows: list[tuple[Mapping[str, Any], str]]
-    raw_plan = shared.extra_fields.get("speaking_plan")
     if pinned_speaker_id:
         pinned = next(m for m in eligible if m["id"] == pinned_speaker_id)
         plan_rows = [(pinned, plan_cue(raw_plan, rows, pinned_speaker_id))]
@@ -549,19 +626,20 @@ async def _generate_group_exchange(
             speaker=speaker,
             speaker_cue=speaker_cue,
             context_mode=ctx.cast.context_mode,
-            run_director=False,
+            run_director=per_speaker,
             director_seed=shared,
             run_exchange_final=is_final,
         )
         persisted_id: int | None = None
         persisted_content = ""
+        kept: list[TurnState] = []
         async for event in _consume_pipeline(
             pipeline,
             conversation_id,
             settings,
             current_parent,
             turn_index,
-            extra_on_result=_conversation_log_writer(conversation_id, turn_index),
+            extra_on_result=_keep_result(_conversation_log_writer(conversation_id, turn_index), kept),
             speaker_member_id=speaker.member_id,
             exchange_id=exchange_id,
             speaker_name=speaker.name,
@@ -579,7 +657,8 @@ async def _generate_group_exchange(
         # The exchange's pre-writer notes have now landed on its first reply. They are
         # one recording, not one per speaker, so the seed stops carrying them
         # before the next speaker copies (and re-persists) the same rows.
-        shared.direction_notes = []
+        if shared is not None:
+            shared.direction_notes = []
         grown_history.append(
             {
                 "id": persisted_id,
@@ -592,6 +671,8 @@ async def _generate_group_exchange(
             }
         )
         current_parent = persisted_id
+        if per_speaker and kept:
+            await _carry_director_state(ctx, conversation_id, kept[-1], grown_history)
     yield {"event": "done"}
 
 

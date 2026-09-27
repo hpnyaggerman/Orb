@@ -2,10 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from ..core import CastMember, GroupContextMode, Macros, TurnCast
+
+# How the shared direct_scene schema words {{char}} while each speaker is directed
+# separately: the schema rides every speaker's cached prompt, so it cannot name any
+# one of them. The speaker's own Director request carries the name instead.
+SPEAKING_CHARACTER = "the speaking character"
 
 CAST_HEADING = "## Cast"
 DOSSIER_HEADING = "## Character dossier: "
@@ -85,6 +90,17 @@ def member_macros(macros: Macros | None, member: CastMember, roster: str) -> Mac
     if macros is None:
         return None
     return macros._replace(char=member.name, cast=roster)
+
+
+def resolve_char_in_descriptions(fragments: Sequence[Mapping[str, Any]], char_name: str) -> list[dict]:
+    """Copies of *fragments* whose ``description`` has ``{{char}}`` set to *char_name*.
+
+    Only ``{{char}}`` is filled in: with no user name or cast set, ``{{user}}`` and
+    ``{{cast}}`` stay for the send-time resolution every description already gets.
+    An empty *char_name* leaves the descriptions as they are.
+    """
+    macros = Macros(user="", char=char_name)
+    return [{**fragment, "description": macros.resolve_prompt(fragment["description"])} for fragment in fragments]
 
 
 def _resolver(macros: Macros | None):

@@ -34,8 +34,13 @@ def build_director_tool_prompt(
     progressive_state: dict | None = None,
     tool_schema: dict | None = None,
     cast_instruction: str = "",
+    named_fields: Sequence[Mapping[str, Any]] = (),
 ) -> str:
-    """Build the combined Director request for one tool."""
+    """Build the combined Director request for one tool.
+
+    *named_fields* are fields whose description names the speaker being directed,
+    which the shared schema words neutrally; they are restated with the name.
+    """
     tool = get_tool(tool_name)
     if not tool:
         return ""
@@ -45,6 +50,11 @@ def build_director_tool_prompt(
     if tool_name == "direct_scene":
         if cast_instruction:
             parts.append(cast_instruction)
+        if named_fields:
+            parts.append(
+                "Field descriptions for this reply:\n"
+                + "\n".join(f"* [{wire_field(fragment['id'])}] {fragment['description']}" for fragment in named_fields)
+            )
         progressive_lines = [
             f"* [{wire_field(fragment['id'])}] ({fragment['description']}): {(progressive_state or {}).get(fragment['id'])}"
             for fragment in (interactive_fragments or [])

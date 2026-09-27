@@ -1375,6 +1375,113 @@ async def test_a_missing_plan_falls_back_rather_than_resting(client, llm_mock):
     assert [item["member_id"] for item in plan["plan"]] == [members[0]["id"]]
 
 
+# -- Individual speaker processing -------------------------------------------
+
+
+def _tail(call: dict) -> str:
+    content = call["messages"][-1]["content"]
+    return content if isinstance(content, str) else "\n".join(part.get("text", "") for part in content)
+
+
+def _goal_description(call: dict) -> str:
+    schema = next(tool for tool in call["tools"] if tool["function"]["name"] == "direct_scene")
+    return schema["function"]["parameters"]["properties"]["goal"]["description"]
+
+
+async def _goal_fragment(client) -> None:
+    response = await client.post(
+        "/api/interactive-fragments",
+        json={"id": "goal", "label": "Goal", "description": "What {{char}} wants", "injection_label": "Goal"},
+    )
+    assert response.status_code == 200
+
+
+async def test_the_shared_director_reads_char_as_the_group_name(client, llm_mock):
+    """By default one Director run serves the exchange, and the schema it reads names
+    the group the same way its request text does."""
+    await _goal_fragment(client)
+    conv, _ = await _two_card_group(client)
+    await _run_two_speaker_exchange(client, llm_mock, conv)
+
+    directors = [call for call in llm_mock.captured if call["pass"] == "director"]
+    assert len(directors) == 1
+    assert _goal_description(directors[0]) == "What Campfire wants"
+
+
+async def test_individual_speaker_processing_directs_each_speaker_by_name(client, llm_mock):
+    """The speakers are planned first; each one's own Director run then reads the
+    descriptions with its name and starts from the previous speaker's moods."""
+    assert (await client.put("/api/settings", json={"director_individual_speakers": True})).status_code == 200
+    response = await client.post(
+        "/api/fragments",
+        json={"id": "cornered", "label": "Cornered", "description": "{{char}} is cornered", "prompt_text": "Stay tense."},
+    )
+    assert response.status_code == 200
+    await _goal_fragment(client)
+    conv, _ = await _two_card_group(client)
+    llm_mock.enqueue_director(_direct_scene(speaking_plan=["aria - Notice the trail", "kael - Explain the ward"]))
+    llm_mock.enqueue_director(_direct_scene(moods=["cornered"], goal="find the trail"))
+    llm_mock.enqueue_director(_direct_scene(moods=[], goal="mend the ward"))
+    llm_mock.enqueue_writer("I found tracks.")
+    llm_mock.enqueue_writer("The ward is broken.")
+
+    response = await client.post(f"/api/conversations/{conv['id']}/send", json={"content": "What happened?"})
+    assert response.status_code == 200
+    plan = next(data for name, data in _sse_events(response.text) if name == "speaking_plan")
+    assert [item["name"] for item in plan["plan"]] == ["Aria", "Kael"]
+
+    directors = [call for call in llm_mock.captured if call["pass"] == "director"]
+    assert len(directors) == 3  # the plan, then one run per speaker
+    plan_request, aria_request, kael_request = (_tail(call) for call in directors)
+    assert "'speaking_plan'" in plan_request and "What Aria wants" not in plan_request
+    assert "* [goal] What Aria wants" in aria_request and "Aria is cornered" in aria_request
+    assert "* [goal] What Kael wants" in kael_request and "Kael is cornered" in kael_request
+    assert "Previously active moods: cornered" in kael_request
+    assert {_goal_description(call) for call in directors} == {"What the speaking character wants"}
+
+    writers = [_tail(call) for call in llm_mock.captured if call["pass"] == "writer"]
+    assert "find the trail" in writers[0] and "mend the ward" not in writers[0]
+    assert "mend the ward" in writers[1] and "find the trail" not in writers[1]
+
+
+async def test_individual_speaker_processing_needs_no_plan_for_a_known_speaker(client, llm_mock):
+    """Round-robin already names its speaker, so only that speaker's own run calls the Director."""
+    await update_settings({"director_individual_speakers": 1})
+    await _goal_fragment(client)
+    conv, _ = await _two_card_group(client)
+    assert (await client.put(f"/api/conversations/{conv['id']}", json={"group_turn_mode": "round_robin"})).status_code == 200
+    llm_mock.enqueue_director(_direct_scene(goal="look around"))
+    llm_mock.enqueue_writer("I found tracks.")
+
+    response = await client.post(f"/api/conversations/{conv['id']}/send", json={"content": "What happened?"})
+    assert response.status_code == 200
+    directors = [call for call in llm_mock.captured if call["pass"] == "director"]
+    assert len(directors) == 1
+    assert "* [goal] What Aria wants" in _tail(directors[0])
+
+
+async def test_a_speakers_field_by_field_run_never_plans(client, llm_mock):
+    """With both switches on, a speaker's run fills each field and the moods but no
+    speaking plan: the plan was settled before the run started."""
+    await update_settings({"director_individual_fragments": 1, "director_individual_speakers": 1})
+    await _goal_fragment(client)
+    conv, _ = await _two_card_group(client)
+    assert (await client.put(f"/api/conversations/{conv['id']}", json={"group_turn_mode": "round_robin"})).status_code == 200
+    await _enqueue_per_fragment_director(llm_mock, goal="look around")
+    llm_mock.enqueue_writer("I found tracks.")
+
+    response = await client.post(f"/api/conversations/{conv['id']}/send", json={"content": "What happened?"})
+    assert response.status_code == 200
+    fields = [
+        f
+        for f in await get_interactive_fragments()
+        if f.get("enabled", True) and f.get("field_type") not in ("feedback", "direction_note", "post_processing")
+    ]
+    directors = [call for call in llm_mock.captured if call["pass"] == "director"]
+    assert len(directors) == len(fields) + 1  # one per field, then the moods
+    assert not any("'speaking_plan'" in _tail(call) for call in directors)
+
+
 async def test_group_steering_excludes_the_reply_it_replaces_from_the_audit(client, llm_mock):
     """The steered paths hand the editor an explicit baseline window so the new
     draft is not penalised for resembling the reply being replaced. A group exchange

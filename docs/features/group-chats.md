@@ -60,7 +60,9 @@ only to that character's replies. Group style instructions apply to everyone.
 
 The [pinned persona](persona-pinning.md) applies to the whole group chat.
 [Macros](macros.md) expand `{{cast}}` to the roster names and `{{char}}` to the
-group title outside a member's card text.
+group title outside a member's card text. With **Individual speaker processing**
+on, `{{char}}` in the fragment descriptions the Director reads names the speaker
+it is directing.
 
 ## Public profiles and scene sheets
 
@@ -95,7 +97,7 @@ to start another conversation with the same cast.
 
 | Feature | Group behavior |
 |---|---|
-| Director and direction notes | Run once for an exchange and guide all replies. |
+| Director and direction notes | Run once for an exchange and guide all replies. With **Individual speaker processing** on, the Director and pre-writer notes run for each speaker, right before its reply. |
 | Lorebooks and Dynamic Worlds | Apply to the whole scene. |
 | Card-embedded fragments | Merge across the cast. |
 | Editor checks | Use each speaker's settings for that speaker's reply. |

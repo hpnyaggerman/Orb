@@ -2,11 +2,13 @@
 
 from .base import build_prefix, format_message_with_attachments, group_speaker_label
 from .group_context import (
+    SPEAKING_CHARACTER,
     context_size_components,
     macro_identity,
     member_macros,
     prefix_is_speaker_scoped,
     render_cast_section,
+    resolve_char_in_descriptions,
     tail_carries_identity,
 )
 from .scene_direction import (
@@ -16,6 +18,7 @@ from .scene_direction import (
 )
 
 __all__ = [
+    "SPEAKING_CHARACTER",
     "build_prefix",
     "build_style_injection",
     "compute_style_injection_block",
@@ -26,6 +29,7 @@ __all__ = [
     "member_macros",
     "prefix_is_speaker_scoped",
     "render_cast_section",
+    "resolve_char_in_descriptions",
     "resolve_mood_fragment_randoms",
     "tail_carries_identity",
 ]
