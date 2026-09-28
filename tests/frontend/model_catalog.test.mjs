@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { filterModelChoices, mergeModelChoices } from "../../frontend/model_catalog.js";
+import { filterModelChoices, mergeModelChoices, profileLabel } from "../../frontend/model_catalog.js";
 
 test("merges saved configs with discovered models without duplicate choices", () => {
   assert.deepEqual(
@@ -56,4 +56,17 @@ test("model search normalizes compatibility characters", () => {
     filterModelChoices(choices, "ＧＥＭＭＡ ４").map((item) => item.value),
     ["google/Gemma-4"],
   );
+});
+
+test("a named profile is labelled by its name", () => {
+  assert.equal(profileLabel({ name: "  Local Gemma ", model_name: "gemma", endpoint_url: "http://a:5000/v1" }), "Local Gemma");
+});
+
+test("an unnamed profile is labelled by its model and server", () => {
+  assert.equal(profileLabel({ name: "", model_name: "gemma", endpoint_url: "http://localhost:5000/v1" }), "gemma @ localhost:5000");
+  assert.equal(
+    profileLabel({ name: "", model_name: "gemma", endpoint_url: "http://localhost:5000/v1", role: "agent" }),
+    "gemma (agent) @ localhost:5000",
+  );
+  assert.equal(profileLabel({ model_name: "", endpoint_url: "not a url" }), "default @ not a url");
 });

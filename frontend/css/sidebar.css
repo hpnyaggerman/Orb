@@ -100,6 +100,8 @@
 
 #endpoints-section {
   padding-top: 6px;
+  /* An Agent lane with no profile yet ends the section on its picker, whose list must open past it. */
+  overflow: visible;
 }
 
 .sidebar-section-body.collapsed { display: none; }
@@ -120,6 +122,16 @@
 }
 
 .ep-group > summary:hover { color: var(--text-primary); }
+
+.ep-profile-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.ep-profile-row .cb-root { flex: 1; min-width: 0; }
+
+.ep-profile-row .cb-input { cursor: pointer; }
 
 .conv-item {
   display: flex;
@@ -546,6 +558,7 @@
   padding: 0 4px;
   vertical-align: middle;
 }
+.frag-type-badge.frag-badge-inactive { opacity: 0.4; }
 .frag-toggle-wrapper {
   display: flex;
   align-items: center;

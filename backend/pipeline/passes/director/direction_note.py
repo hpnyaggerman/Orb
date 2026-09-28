@@ -5,8 +5,8 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import AsyncIterator, Mapping, Sequence
-from dataclasses import dataclass, field
-from typing import Any
+from dataclasses import dataclass, field, replace
+from typing import TYPE_CHECKING, Any
 
 from ....core import ChatMessage, ContentPart, extract_hyperparams
 from ....inference import (
@@ -20,6 +20,9 @@ from ....prompting.tool_schemas import (
     build_direction_note_tool,
 )
 from .direction_note_prompts import build_direction_note_prompt
+
+if TYPE_CHECKING:
+    from ...state import FragmentModel
 
 logger = logging.getLogger(__name__)
 
@@ -74,11 +77,13 @@ async def direction_note_step(
     kv_tracker=None,
     reasoning_on: bool = False,
     reasoning_prefill: str = "",
+    fragment_models: Mapping[int, FragmentModel] | None = None,
 ) -> AsyncIterator[dict]:
     """Yield reasoning chunks during the call(s), then a single done dict.
 
     One forced ``record_direction_note`` call for the whole group, or one per fragment
     when the per-fragment director toggle is on; notes from every call are combined.
+    A fragment's own call runs on its profile in *fragment_models*, if it has one.
 
     Yields:
         ``{"type": "reasoning", "delta": str}``
@@ -104,6 +109,12 @@ async def direction_note_step(
     for group in groups:
         if client.is_aborted:
             break
+        step_client, step_base, step_hyperparams = client, base, hyperparams
+        own_id = group[0].get("model_config_id") if per_fragment_on else None
+        if own_id and fragment_models and (own := fragment_models.get(own_id)):
+            step_client, step_base, step_hyperparams = own.client, replace(base, model=own.model), own.hyperparams
+            endpoint = getattr(own.client, "base_url", "")
+            logger.info("Direction-note call for %s: on %s at %s", group[0]["id"], own.model, endpoint)
 
         request = build_direction_note_prompt(
             active_notes,
@@ -124,14 +135,14 @@ async def direction_note_step(
 
         resp: dict = {}
         try:
-            async for event in base.complete_into(
-                client,
+            async for event in step_base.complete_into(
+                step_client,
                 resp,
                 label="direction_note",
                 trailing=trailing,
                 tool_choice=RECORD_DIRECTION_NOTE_CHOICE,
                 kv_tracker=kv_tracker,
-                **hyperparams,
+                **step_hyperparams,
                 **reasoning_cfg(reasoning_on, reasoning_prefill),
             ):
                 yield event

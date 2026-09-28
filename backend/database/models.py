@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal, TypedDict
+from typing import Literal, NotRequired, TypedDict
 
 from ..core.domain_types import AgentLane, CompletionMode, MessageRole
 
@@ -415,6 +415,21 @@ class ModelConfigRow(TypedDict):
     reasoning_effort_value: str
     extra_headers: str
     extra_body: str
+    name: str
+
+
+class ProfileRow(ModelConfigRow):
+    """A profile: a model config joined with the connection of its endpoint row.
+
+    The connection keys are spelled the way a settings row spells the Writer
+    lane's, so ``client_from_settings`` and ``extract_hyperparams`` read a
+    profile exactly as they read settings.
+    """
+
+    endpoint_url: str
+    api_key: str
+    completion_mode: CompletionMode
+    proxy: str
 
 
 class WorldRow(TypedDict):
@@ -573,6 +588,9 @@ class InteractiveFragmentRow(TypedDict):
     sort_order: int
     # 'pre_writer' | 'post_turn'; which recording step fills the note. Read only for direction_note fragments.
     direction_note_timing: str
+    # The profile the fragment's own Director call runs on under individual fragment
+    # processing. Absent on card-embedded fragments: a profile id is local to one install.
+    model_config_id: NotRequired[int | None]
 
 
 class MoodFragmentRow(TypedDict):

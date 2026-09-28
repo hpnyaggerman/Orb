@@ -27,7 +27,7 @@ from .passes.editor.length_guard import (
     resolve_length_guard,
 )
 from .predicates import agent_enabled, direction_note_recording_active, is_dual_model
-from .state import ModelLane, _PipelineConfig
+from .state import FragmentModel, ModelLane, _PipelineConfig
 
 
 def _resolve_pipeline_config(
@@ -41,6 +41,7 @@ def _resolve_pipeline_config(
     prefix: list[ChatMessage],
     phrase_bank: list[PhraseGroup] | None,
     schema_overrides: Mapping[str, dict],
+    fragment_models: Mapping[int, FragmentModel] | None = None,
 ) -> _PipelineConfig:
     """Build the immutable per-turn config.
 
@@ -112,6 +113,7 @@ def _resolve_pipeline_config(
         do_edit=audit_enabled or length_guard is not None,
         writer_lane=writer_lane,
         agent_lane=agent_lane,
+        fragment_models=fragment_models or {},
     )
 
 

@@ -1,4 +1,9 @@
-"""Endpoint and model-config CRUD routes."""
+"""Endpoint, model-config, and profile CRUD routes.
+
+A profile is one model config plus the endpoint row created with it. It is
+listed, created, and deleted here as a unit; its fields are edited through the
+endpoint and model-config routes, each of which owns one of its two rows.
+"""
 
 from __future__ import annotations
 
@@ -8,11 +13,14 @@ from fastapi import APIRouter, HTTPException
 from ...database import (
     create_endpoint,
     create_model_config,
+    create_profile,
     delete_endpoint,
     delete_model_config,
+    delete_profile,
     get_endpoint,
     get_endpoints,
     get_model_configs,
+    get_profiles,
     update_endpoint,
     update_model_config,
 )
@@ -22,6 +30,7 @@ from ..schemas import (
     EndpointUpdate,
     ModelConfigCreate,
     ModelConfigUpdate,
+    ProfileCreate,
 )
 
 router = APIRouter()
@@ -114,4 +123,21 @@ async def api_update_model_config(config_id: int, data: ModelConfigUpdate):
 async def api_delete_model_config(config_id: int):
     if not await delete_model_config(config_id):
         raise HTTPException(status_code=404, detail="Model config not found")
+    return {"ok": True}
+
+
+@router.get("/api/profiles")
+async def api_get_profiles():
+    return await get_profiles()
+
+
+@router.post("/api/profiles")
+async def api_create_profile(data: ProfileCreate):
+    return await create_profile(data.model_dump())
+
+
+@router.delete("/api/profiles/{config_id}")
+async def api_delete_profile(config_id: int):
+    if not await delete_profile(config_id):
+        raise HTTPException(status_code=404, detail="Profile not found")
     return {"ok": True}

@@ -4,17 +4,14 @@ import { CLOSE_ICON } from "./icons.js";
 import { renderInteractiveFragments } from "./library_fragments.js";
 import { closeModal, confirmDelete, showModal, showSubConfirmModal } from "./modal.js";
 import { closeUtilityPanel, isUtilityPanelOpen, openUtilityPanel } from "./panels.js";
-import { initComboboxes, loadAgentModelConfigs, loadEndpoints, renderEndpoints } from "./settings_models.js";
+import { loadEndpoints, renderEndpoints } from "./settings_models.js";
 import { loadPersonas, updateUserBtn } from "./settings_personas.js";
 import { effectiveWorkflowEnabled, localMlReady, S } from "./state.js";
 import { $, esc, escAttr, formatBytes, toast } from "./utils.js";
 import { validate } from "./validate.js";
 
 export {
-  loadAgentModelConfigs,
   loadEndpoints,
-  loadModelConfigs,
-  onHybridInput,
   renderEndpoints,
   saveAgentSetting,
   saveSetting,
@@ -118,11 +115,6 @@ export async function loadSettings() {
 
   if (typeof S.settings.agent_same_as_writer === "number") S.agentSameAsWriter = S.settings.agent_same_as_writer !== 0;
   else if (typeof S.settings.agent_same_as_writer === "boolean") S.agentSameAsWriter = S.settings.agent_same_as_writer;
-  S.agentEndpointId = S.settings.agent_endpoint_id || null;
-
-  if (S.agentEndpointId) {
-    await loadAgentModelConfigs(S.agentEndpointId);
-  }
 
   const endpointsSection = $("endpoints-section");
   if (endpointsSection && (!S.settings.endpoint_url || S.settings.endpoint_url.trim() === "")) {
@@ -134,10 +126,9 @@ export async function loadSettings() {
     endpointsSection.classList.remove("collapsed");
   }
 
-  renderEndpoints();
   renderSettings();
   await loadEndpoints();
-  initComboboxes(); // Re-initialize comboboxes with loaded endpoints
+  renderEndpoints();
   renderToolsPanel();
   await loadPersonas();
   updateUserBtn();
@@ -456,6 +447,7 @@ export async function toggleFeedbackEnabled(on) {
 export async function toggleDirectorIndividualFragments(on) {
   S.directorIndividualFragments = on;
   renderToolsPanel();
+  renderInteractiveFragments();
   await persistSettings({ director_individual_fragments: on });
 }
 

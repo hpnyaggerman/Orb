@@ -15,6 +15,7 @@ from ..core import (
     ChatMessage,
     Macros,
     TurnCast,
+    extract_hyperparams,
     folded_collisions,
 )
 from ..database.models import (
@@ -48,7 +49,7 @@ from ..prompting.lorebook import (
 )
 from .config import _build_writer_tools_blob
 from .predicates import agent_enabled, resolve_persona_id, world_proposal_active
-from .state import LorebookTurn, WorldProposalTurn
+from .state import FragmentModel, LorebookTurn, WorldProposalTurn
 from .workflow_bridge import _iterate_pre_pipeline_hooks
 
 logger = logging.getLogger(__name__)
@@ -110,13 +111,40 @@ class PipelineContext:
     speaker_scripts: Mapping[str, CardScripts] = field(default_factory=dict)
     card_scripts: CardScripts = field(default_factory=CardScripts)
     group_members: tuple[Mapping[str, Any], ...] = ()
+    fragment_models: Mapping[int, FragmentModel] = field(default_factory=dict)
+
+
+async def _fragment_models(
+    settings: Mapping[str, Any],
+    fragments: Sequence[Mapping[str, Any]],
+    abort_token: AbortToken,
+) -> dict[int, FragmentModel]:
+    """The profiles the turn's fragments run their own Director calls on, by id.
+
+    Only individual fragment processing gives a fragment a call of its own; the
+    combined call directs every fragment at once on the Agent lane.
+    """
+    if not (agent_enabled(settings) and settings.get("director_individual_fragments")):
+        return {}
+    wanted = {df["model_config_id"] for df in fragments if df.get("model_config_id")}
+    if not wanted:
+        return {}
+    return {
+        profile["id"]: FragmentModel(
+            client=client_from_settings(profile, abort_token=abort_token),
+            model=profile["model_name"],
+            hyperparams=extract_hyperparams(profile),
+        )
+        for profile in await db.get_profiles()
+        if profile["id"] in wanted
+    }
 
 
 async def _load_pipeline_context(conversation_id: str, *, abort_token: AbortToken | None = None) -> PipelineContext | None:
     """Load all per-conversation data needed by the pipeline.
 
     Fetches settings, conversation, card, director state, fragments, phrase bank,
-    lorebook entries, and builds LLM clients. Both clients share the same
+    lorebook entries, and builds LLM clients. Every client shares the same
     *abort_token* so a single stop cancels every pass; a private token is created
     when none is supplied.
 
@@ -183,6 +211,7 @@ async def _load_pipeline_context(conversation_id: str, *, abort_token: AbortToke
         card_scripts=CardScripts.from_extensions(card.get("extensions") if card else None),
         speaker_names={m["id"]: m["display_name"] for m in all_group_members},
         group_members=tuple(m for m in all_group_members if m.get("active")),
+        fragment_models=await _fragment_models(settings, interactive_fragments, abort_token),
     )
 
 

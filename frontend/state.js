@@ -24,13 +24,13 @@ export const S = {
   settings: {},
   localMlFeatures: {}, // last /local-ml/status features map; other cards gate on it
   endpoints: [],
+  // Every endpoint profile: a model config joined with its endpoint row's connection.
+  profiles: [],
   activeEndpointId: null,
-  modelConfigs: [],
-  activeModelConfigId: null,
+  activeModelConfigId: null, // the Writer's profile
   agentSameAsWriter: true,
   agentEndpointId: null,
-  agentModelConfigs: [],
-  agentModelConfigId: null,
+  agentModelConfigId: null, // the Agent's profile when it has its own
   agentEnabled: true,
   enabledTools: {},
   lengthGuardEnabled: false,

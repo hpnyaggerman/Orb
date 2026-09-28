@@ -174,7 +174,7 @@ function reflectAssistedToggle() {
   if (summary) summary.textContent = `How to prompt (${docAssisted ? "Assisted" : "Raw"})`;
   const cap = $("doc-help-maxtok");
   if (cap) {
-    const cfg = S.modelConfigs?.find((m) => m.id === S.activeModelConfigId);
+    const cfg = S.profiles?.find((m) => m.id === S.activeModelConfigId);
     cap.textContent = cfg?.max_tokens || 512;
   }
 }

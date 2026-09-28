@@ -2,11 +2,15 @@ import { api } from "./api.js";
 import { initDragReorder } from "./drag_reorder.js";
 import { GRIP_ICON } from "./icons.js";
 import { closeModal, closeSubModal, confirmDelete, showModal, showSubModal } from "./modal.js";
+import { profileLabel } from "./model_catalog.js";
 import { S } from "./state.js";
 import { $, boolFlag, esc, escAttr, escHandlerArg, toast } from "./utils.js";
 import { validate } from "./validate.js";
 
 const _dragAndDropContainers = new WeakSet();
+
+// The field types individual fragment processing gives a Director call of their own.
+const OWN_CALL_TYPES = new Set(["string", "array", "progressive", "direction_note"]);
 
 export async function loadMoodFragments() {
   try {
@@ -168,7 +172,7 @@ export function renderInteractiveFragments() {
     .map((f) => {
       const enabled = boolFlag(f.enabled);
       const toggleId = `interactive-frag-toggle-${f.id}`;
-      const userBadge = _interactiveTypeBadge(f);
+      const userBadge = _interactiveTypeBadge(f) + _profileBadge(f);
       const { disabled: featureDisabled, title: itemTitle } = _featureGate(f);
       return `
     <div class="fragment-item${featureDisabled ? " frag-feature-disabled" : ""}" data-id="${escAttr(f.id)}" title="${escAttr(itemTitle)}" onclick="showInteractiveFragmentModal('${escHandlerArg(f.id)}')">
@@ -295,6 +299,8 @@ export function updateInteractiveFragmentExample(fieldType) {
   if (timingRow) timingRow.style.display = fieldType === "direction_note" ? "" : "none";
   const requiredRow = document.getElementById("interactive-frag-required-row");
   if (requiredRow) requiredRow.style.display = fieldType === "post_processing" ? "none" : "";
+  const profileRow = document.getElementById("interactive-frag-profile-row");
+  if (profileRow) profileRow.style.display = OWN_CALL_TYPES.has(fieldType) ? "" : "none";
   const required = document.getElementById("interactive-frag-required");
   if (required && fieldType === "post_processing") required.checked = false;
 }
@@ -340,6 +346,23 @@ function _interactiveFragFormHtml(d, isEdit) {
     </div>`;
 }
 
+// Global fragments only: a card travels between installs, and profile ids do not.
+function _profileFieldHtml(d) {
+  const options = S.profiles
+    .map(
+      (p) => `<option value="${p.id}"${p.id === d.model_config_id ? " selected" : ""}>${esc(profileLabel(p))}</option>`,
+    )
+    .join("");
+  return `
+    <div class="field" id="interactive-frag-profile-row" style="${OWN_CALL_TYPES.has(d.field_type) ? "" : "display:none"}">
+      <label>Profile <span style="font-size:10px;color:var(--text-muted)">(runs this fragment's own call when Individual fragment processing is on)</span></label>
+      <select id="interactive-frag-profile">
+        <option value="">Agent (default)</option>
+        ${options}
+      </select>
+    </div>`;
+}
+
 function _readInteractiveFragForm() {
   const fieldType = document.getElementById("interactive-frag-type").value;
   return {
@@ -370,6 +393,7 @@ export function showInteractiveFragmentModal(fragId = null) {
   showModal(`
     <h2>${isEdit ? "Edit" : "New"} Interactive Fragment</h2>
     ${_interactiveFragFormHtml(d, isEdit)}
+    ${_profileFieldHtml(d)}
     <div class="modal-actions">
       ${isEdit ? `<button class="btn btn-danger btn-sm" onclick="deleteInteractiveFragment('${escHandlerArg(d.id)}')">Delete</button>` : ""}
       <div style="flex:1"></div>
@@ -385,6 +409,8 @@ export async function saveInteractiveFragment(isEdit) {
     toast(validation.error, true);
     return;
   }
+  const profile = document.getElementById("interactive-frag-profile").value;
+  d.model_config_id = OWN_CALL_TYPES.has(d.field_type) && profile ? Number(profile) : null;
   try {
     if (isEdit) await api.put(`/interactive-fragments/${d.id}`, d);
     else await api.post("/interactive-fragments", d);
@@ -428,6 +454,14 @@ function _interactiveTypeBadge(f) {
       : f.field_type === "post_processing"
         ? ` <span class="frag-type-badge" title="Post-processing fragment">P</span>`
         : "";
+}
+
+function _profileBadge(f) {
+  const profile = OWN_CALL_TYPES.has(f.field_type) && S.profiles.find((p) => p.id === f.model_config_id);
+  if (!profile) return "";
+  const on = S.directorIndividualFragments;
+  const title = `Runs on the profile "${profileLabel(profile)}"${on ? "" : " once Individual fragment processing is on"}`;
+  return ` <span class="frag-type-badge${on ? "" : " frag-badge-inactive"}" title="${escAttr(title)}">@</span>`;
 }
 
 function _featureGate(f) {

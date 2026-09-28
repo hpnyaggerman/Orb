@@ -119,8 +119,8 @@ async def _seed_default_persona(db) -> None:
 
 
 async def _seed_endpoint_from(db, s: dict) -> None:
-    """Create an endpoint + writer/agent model_configs from a settings-shaped dict,
-    then link both back-references on settings.id=1."""
+    """Create one profile (an endpoint + its model_config) from a settings-shaped
+    dict, then make it the Writer's on settings.id=1."""
     cur = await db.execute(
         "INSERT INTO endpoints (url, api_key) VALUES (?, ?)",
         (
@@ -143,22 +143,9 @@ async def _seed_endpoint_from(db, s: dict) -> None:
             s.get("max_tokens", 4096),
         ),
     )
-    agent = await db.execute(
-        "INSERT INTO model_configs (endpoint_id, model_name, system_prompt, temperature, min_p, top_k, top_p, repetition_penalty, max_tokens, role) VALUES (?, ?, '', ?, ?, ?, ?, ?, ?, 'agent')",
-        (
-            endpoint_id,
-            s.get("model_name", "default"),
-            s.get("temperature", 0.8),
-            s.get("min_p", 0.0),
-            s.get("top_k", 40),
-            s.get("top_p", 0.95),
-            s.get("repetition_penalty", 1.0),
-            s.get("max_tokens", 4096),
-        ),
-    )
     await db.execute(
         "UPDATE endpoints SET active_model_config_id = ?, agent_active_model_config_id = ? WHERE id = ?",
-        (writer.lastrowid, agent.lastrowid, endpoint_id),
+        (writer.lastrowid, writer.lastrowid, endpoint_id),
     )
     await db.execute(
         "UPDATE settings SET active_endpoint_id = ? WHERE id = 1",

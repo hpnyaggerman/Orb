@@ -31,6 +31,19 @@ class ModelLane:
         return self.client.sends_tool_schemas(messages, self.base.model, tools_in_prompt=tools_in_prompt)
 
 
+@dataclass(frozen=True, slots=True)
+class FragmentModel:
+    """The profile a Director fragment's own call runs on instead of the Agent lane.
+
+    Only the server, model, and samplers change: the call still extends the Agent
+    lane's prompt base, so the fragment reads exactly what it would read there.
+    """
+
+    client: LLMClient
+    model: str
+    hyperparams: Mapping[str, Any]
+
+
 @dataclass(slots=True)
 class _PipelineConfig:
     """Resolved per-turn flags, lanes, and prefixes for ``_run_pipeline``."""
@@ -53,6 +66,8 @@ class _PipelineConfig:
     # same object by construction (see :class:`ModelLane`).
     writer_lane: ModelLane
     agent_lane: ModelLane
+    # By model_config_id; empty unless individual fragment processing is on.
+    fragment_models: Mapping[int, FragmentModel] = field(default_factory=dict)
 
 
 # Fields included in the terminal ``_result`` event.

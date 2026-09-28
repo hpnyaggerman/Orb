@@ -112,20 +112,22 @@ class EndpointUpdate(BaseModel):
     @field_validator("proxy")
     @classmethod
     def _validate_proxy(cls, v: str | None) -> str | None:
-        # Empty/blank means "no proxy". A set value must use a scheme httpx
-        # accepts (http/https, or socks5/socks5h via the httpx[socks] extra);
-        # reject anything else here so a typo fails at save time, not on every
-        # LLM turn. socks5h is the curl spelling of what httpx does for socks5
-        # as well -- the target hostname is handed to the proxy unresolved -- so
-        # the two are interchangeable here.
-        if v is None:
-            return v
-        v = v.strip()
-        if not v:
-            return ""
-        if urlsplit(v).scheme.lower() not in ("http", "https", "socks5", "socks5h"):
-            raise ValueError("proxy URL must start with http://, https://, socks5://, or socks5h://")
-        return v
+        return v if v is None else _check_proxy(v)
+
+
+def _check_proxy(v: str) -> str:
+    # Empty/blank means "no proxy". A set value must use a scheme httpx
+    # accepts (http/https, or socks5/socks5h via the httpx[socks] extra);
+    # reject anything else here so a typo fails at save time, not on every
+    # LLM turn. socks5h is the curl spelling of what httpx does for socks5
+    # as well -- the target hostname is handed to the proxy unresolved -- so
+    # the two are interchangeable here.
+    v = v.strip()
+    if not v:
+        return ""
+    if urlsplit(v).scheme.lower() not in ("http", "https", "socks5", "socks5h"):
+        raise ValueError("proxy URL must start with http://, https://, socks5://, or socks5h://")
+    return v
 
 
 # RFC 7230 token: the only characters a header name may contain. h11 rejects
@@ -193,9 +195,30 @@ class ModelConfigCreate(BaseModel):
     _check_body = field_validator("extra_body")(_check_extra_body)
 
 
+class ProfileCreate(ModelConfigCreate):
+    """A model config plus the connection of the endpoint row created for it."""
+
+    name: str
+    endpoint_url: str
+    api_key: str = ""
+    completion_mode: CompletionMode = "chat"
+    proxy: str = ""
+
+    _validate_proxy = field_validator("proxy")(_check_proxy)
+
+    @field_validator("name")
+    @classmethod
+    def _require_name(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("a profile needs a name")
+        return v
+
+
 class ModelConfigUpdate(BaseModel):
     model_config = {"protected_namespaces": ()}
 
+    name: str | None = None
     model_name: str | None = None
     system_prompt: str | None = None
     temperature: float | None = None
@@ -249,6 +272,7 @@ class InteractiveFragmentCreate(BaseModel):
     injection_label: str
     sort_order: int = 0
     direction_note_timing: Literal["pre_writer", "post_turn"] = "post_turn"
+    model_config_id: int | None = None
 
 
 class InteractiveFragmentUpdate(BaseModel):
@@ -260,6 +284,8 @@ class InteractiveFragmentUpdate(BaseModel):
     injection_label: str | None = None
     sort_order: int | None = None
     direction_note_timing: Literal["pre_writer", "post_turn"] | None = None
+    # Unlike the fields above, an explicit null here is a value: it clears the override.
+    model_config_id: int | None = None
 
 
 class WorldCreate(BaseModel):

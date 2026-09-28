@@ -197,7 +197,10 @@ CREATE TABLE IF NOT EXISTS interactive_fragments (
     enabled BOOLEAN NOT NULL DEFAULT 1,
     injection_label TEXT NOT NULL,
     sort_order INTEGER NOT NULL DEFAULT 0,
-    direction_note_timing TEXT NOT NULL DEFAULT 'post_turn'
+    direction_note_timing TEXT NOT NULL DEFAULT 'post_turn',
+    -- The profile this fragment's own Director call runs on while individual
+    -- fragment processing is on; NULL keeps it on the Agent lane.
+    model_config_id INTEGER REFERENCES model_configs(id) ON DELETE SET NULL
 );
 
 CREATE TABLE IF NOT EXISTS conversation_logs (
@@ -294,7 +297,10 @@ CREATE TABLE IF NOT EXISTS model_configs (
     reasoning_effort_param TEXT NOT NULL DEFAULT '',
     reasoning_effort_value TEXT NOT NULL DEFAULT '',
     extra_headers TEXT NOT NULL DEFAULT '',
-    extra_body TEXT NOT NULL DEFAULT ''
+    extra_body TEXT NOT NULL DEFAULT '',
+    -- A profile is one model config plus an endpoints row of its own; '' for
+    -- configs saved before profiles had names.
+    name TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS worlds (

@@ -22,7 +22,13 @@ from .passes.editor import editor_stage
 from .passes.writer import strip_speaker_label, writer_stage
 from .predicates import direction_note_recording_active
 from .sheet_update import sheet_update_stage
-from .state import LorebookTurn, SheetUpdateTurn, TurnState, WorldProposalTurn
+from .state import (
+    FragmentModel,
+    LorebookTurn,
+    SheetUpdateTurn,
+    TurnState,
+    WorldProposalTurn,
+)
 from .workflow_bridge import _PostPipelineResult, _run_post_pipeline
 from .world_proposal import world_proposal_stage
 
@@ -97,6 +103,7 @@ async def _run_pipeline(
     run_director: bool = True,
     director_seed: TurnState | None = None,
     run_exchange_final: bool = True,
+    fragment_models: Mapping[int, FragmentModel] | None = None,
 ) -> AsyncIterator[dict]:
     """Run the director → writer → editor passes for one turn.
 
@@ -132,6 +139,7 @@ async def _run_pipeline(
         prefix=prefix,
         phrase_bank=phrase_bank,
         schema_overrides=schema_overrides,
+        fragment_models=fragment_models,
     )
 
     # Feedback and post-processing fragments are handled after the Writer, and
@@ -208,6 +216,7 @@ async def _run_pipeline(
                     kv_tracker=kv_tracker,
                     reasoning_on=cfg.director_reasoning_on,
                     reasoning_prefill=cfg.director_reasoning_prefill,
+                    fragment_models=cfg.fragment_models,
                 ),
                 state,
                 "director",
@@ -334,6 +343,7 @@ async def _run_pipeline(
                     kv_tracker=kv_tracker,
                     reasoning_on=cfg.editor_reasoning_on,
                     reasoning_prefill=cfg.editor_reasoning_prefill,
+                    fragment_models=cfg.fragment_models,
                 ),
                 state,
                 "editor",

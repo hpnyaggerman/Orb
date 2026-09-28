@@ -76,6 +76,8 @@ Editor, and workflow tool calls read the Agent model config's temperature,
 budget, and samplers; they fall back to the Writer's whenever the Agent lane does
 not resolve, which is what one endpoint serving both lanes means.
 
+Under **Individual fragment processing**, a scene-direction or direction-note fragment set to a profile sends its own call to that profile's endpoint and model, with that profile's samplers and budget. The call extends the Agent lane's prompt unchanged, so the fragment reads what it would read there; moods, the group speaking plan, and every other Director step stay on the Agent lane.
+
 Every call sends the configured **Max Tokens** of the lane it calls, unchanged.
 No call raises it, lowers it, or substitutes a budget of its own, so the number in
 settings is the number on the wire. A forced tool call has to fit its whole answer

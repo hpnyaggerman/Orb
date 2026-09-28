@@ -1,8 +1,9 @@
 import { api } from "./api.js";
 import { renderInspector } from "./chat.js";
-import { CLOSE_ICON } from "./icons.js";
-import { showConfirmModal } from "./modal.js";
-import { filterModelChoices, mergeModelChoices } from "./model_catalog.js";
+import { CLOSE_ICON, EDIT_ICON, PLUS_ICON } from "./icons.js";
+import { renderInteractiveFragments } from "./library_fragments.js";
+import { closeModal, showConfirmModal, showModal } from "./modal.js";
+import { filterModelChoices, mergeModelChoices, profileLabel } from "./model_catalog.js";
 import { S } from "./state.js";
 import { $, esc, escAttr, toast } from "./utils.js";
 import { validate } from "./validate.js";
@@ -109,9 +110,12 @@ const AGENT_SETTING_FIELDS = [
   },
 ];
 
+// A lane shows the profile it runs on: every field below edits that profile,
+// except the global prompt, which belongs to settings and outlives any profile.
 const WRITER_CTX = {
   role: "writer",
-  configsKey: "modelConfigs",
+  label: "Profile",
+  fieldsId: "writer-profile-fields",
   endpointIdKey: "activeEndpointId",
   configIdKey: "activeModelConfigId",
   urlField: "endpoint_url",
@@ -121,13 +125,15 @@ const WRITER_CTX = {
   proxyField: "proxy",
   activeConfigDbField: "active_model_config_id",
   settingsEndpointField: "active_endpoint_id",
+  globalKeys: ["shared_system_prompt"],
   hyperparamKeys: MODEL_HYPERPARAM_KEYS,
   hyperparamPrefix: "",
 };
 
 const AGENT_CTX = {
   role: "agent",
-  configsKey: "agentModelConfigs",
+  label: "Agent Profile",
+  fieldsId: "agent-profile-fields",
   endpointIdKey: "agentEndpointId",
   configIdKey: "agentModelConfigId",
   urlField: "agent_endpoint_url",
@@ -137,9 +143,54 @@ const AGENT_CTX = {
   proxyField: "agent_proxy",
   activeConfigDbField: "agent_active_model_config_id",
   settingsEndpointField: "agent_endpoint_id",
+  globalKeys: ["agent_shared_system_prompt"],
   hyperparamKeys: AGENT_MODEL_HYPERPARAM_KEYS,
   hyperparamPrefix: "agent_",
 };
+
+// Profile fields that live on its endpoint row, by the name that row gives them.
+const CONNECTION_COLUMNS = {
+  endpoint_url: "url",
+  api_key: "api_key",
+  completion_mode: "completion_mode",
+  proxy: "proxy",
+};
+
+// What a new profile copies from the one it starts from.
+const PROFILE_COPY_FIELDS = [
+  "endpoint_url",
+  "api_key",
+  "completion_mode",
+  "proxy",
+  "model_name",
+  "system_prompt",
+  "temperature",
+  "min_p",
+  "top_k",
+  "top_p",
+  "repetition_penalty",
+  "max_tokens",
+  "reasoning_effort",
+  "reasoning_effort_param",
+  "reasoning_effort_value",
+  "extra_headers",
+  "extra_body",
+];
+
+const CB_ARROW = `<span class="cb-arrow"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="2,4 6,8 10,4"/></svg></span>`;
+
+function _profileOf(ctx) {
+  return S.profiles.find((p) => p.id === S[ctx.configIdKey]) || null;
+}
+
+function _baseKey(ctx, key) {
+  return ctx.hyperparamPrefix ? key.replace(ctx.hyperparamPrefix, "") : key;
+}
+
+function _fieldValue(ctx, key) {
+  if (ctx.globalKeys.includes(key)) return S.settings[key] ?? "";
+  return _profileOf(ctx)?.[_baseKey(ctx, key)] ?? "";
+}
 
 export async function toggleAgentSameAsWriter(checked) {
   S.agentSameAsWriter = checked;
@@ -151,18 +202,15 @@ export async function toggleAgentSameAsWriter(checked) {
   }
   const container = document.getElementById("agent-fields");
   if (container) container.style.display = checked ? "none" : "";
-  if (!checked && S.agentEndpointId) {
-    await _loadConfigs(AGENT_CTX, S.agentEndpointId);
-    initComboboxes();
-    _fillEndpointFields(AGENT_CTX);
-  }
+  if (!checked) _fillProfileFields(AGENT_CTX);
   updateAgentModelWarning();
   renderInspector(); // the lane swap changes which endpoint gates the prefill box
 }
 
 export function renderEndpoints() {
   function renderField(f, isAgent) {
-    const v = S.settings[f.k] ?? "";
+    const ctx = isAgent ? AGENT_CTX : WRITER_CTX;
+    const v = _fieldValue(ctx, f.k);
     const saveFn = isAgent ? "saveAgentSetting" : "saveSetting";
     if (f.t === "textarea") {
       const rows = f.k === "system_prompt" || f.k === "agent_system_prompt" ? ' rows="2"' : "";
@@ -194,7 +242,7 @@ export function renderEndpoints() {
         <div class="cb-root" data-combobox="${f.k}">
           <div class="cb-control">
             <input type="text" class="cb-input" value="${v}" data-key="${f.k}" placeholder="${ph}" autocomplete="off" onchange="${saveFn}(this)">
-            <span class="cb-arrow"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><polyline points="2,4 6,8 10,4"/></svg></span>
+            ${CB_ARROW}
           </div>
           <div class="cb-dropdown" hidden><div class="cb-list"></div></div>
         </div>
@@ -211,8 +259,8 @@ export function renderEndpoints() {
     }
     if (f.t === "reasoning_effort") {
       const p = isAgent ? "agent_" : "";
-      const paramV = S.settings[`${p}reasoning_effort_param`] ?? "";
-      const valueV = S.settings[`${p}reasoning_effort_value`] ?? "";
+      const paramV = _fieldValue(ctx, `${p}reasoning_effort_param`);
+      const valueV = _fieldValue(ctx, `${p}reasoning_effort_value`);
       return `<div class="field"><label>${f.l}</label>
                 <select data-key="${f.k}" data-desired="${esc(v)}"></select>
               </div>
@@ -251,10 +299,27 @@ export function renderEndpoints() {
     return html;
   }
 
+  function renderPicker(ctx) {
+    return `<div class="field"><label>${ctx.label}</label>
+      <div class="ep-profile-row" data-profile-lane="${ctx.role}">
+        <div class="cb-root" data-combobox="${ctx.role}_profile">
+          <div class="cb-control">
+            <input type="text" class="cb-input" readonly placeholder="Choose a profile" aria-label="${ctx.label}">
+            ${CB_ARROW}
+          </div>
+          <div class="cb-dropdown" hidden><div class="cb-list"></div></div>
+        </div>
+        <button type="button" class="btn btn-sm btn-square" data-profile-action="new" title="New profile, copied from this one" aria-label="New profile">${PLUS_ICON}</button>
+        <button type="button" class="btn btn-sm btn-square" data-profile-action="rename" title="Rename profile" aria-label="Rename profile">${EDIT_ICON}</button>
+      </div>
+    </div>`;
+  }
+
   const agentHidden = S.agentSameAsWriter ? ' style="display:none"' : "";
 
   $("endpoints-form").innerHTML = `
-    ${renderForm(SETTING_FIELDS, false)}
+    ${renderPicker(WRITER_CTX)}
+    <div id="${WRITER_CTX.fieldsId}">${renderForm(SETTING_FIELDS, false)}</div>
     <div class="ep-chat-only">
       <div style="display:flex;align-items:center;gap:12px;margin:12px 0 8px"><div style="flex:1;height:1px;background:var(--accent-dim)"></div><span style="font-size:11px;text-transform:uppercase;letter-spacing:1px;color:var(--accent-dim)">Agent</span><div style="flex:1;height:1px;background:var(--accent-dim)"></div></div>
       <div class="tool-card" style="margin-bottom:12px">
@@ -268,12 +333,20 @@ export function renderEndpoints() {
         <div class="tool-card-desc">Use the same endpoint and model for Agent passes as the Writer.</div>
       </div>
       <div id="agent-fields"${agentHidden}>
-        ${renderForm(AGENT_SETTING_FIELDS, true)}
+        ${renderPicker(AGENT_CTX)}
+        <div id="${AGENT_CTX.fieldsId}">${renderForm(AGENT_SETTING_FIELDS, true)}</div>
       </div>
     </div>
   `;
+  for (const ctx of [WRITER_CTX, AGENT_CTX]) {
+    const row = document.querySelector(`[data-profile-lane="${ctx.role}"]`);
+    row?.querySelector('[data-profile-action="new"]').addEventListener("click", () => _showNewProfileModal(ctx));
+    row?.querySelector('[data-profile-action="rename"]').addEventListener("click", () => _showRenameProfileModal(ctx));
+  }
   initComboboxes();
   updateReasoningEffortFields();
+  _fillProfileFields(WRITER_CTX);
+  _fillProfileFields(AGENT_CTX);
   updateAgentModelWarning();
   updateEndpointsLabel();
 }
@@ -310,17 +383,17 @@ function updateReasoningEffortFields() {
 export function updateEndpointsLabel() {
   const el = document.getElementById("endpoints-label");
   if (!el) return;
-  const input = document.querySelector('[data-key="model_name"]');
-  const model = (input ? input.value : S.settings.model_name || "").trim();
-  if (!model || model.toLowerCase() === "default") {
+  const profile = _profileOf(WRITER_CTX);
+  const label = profile ? profileLabel(profile) : "";
+  if (!label) {
     el.textContent = "Endpoints";
     el.title = "";
     return;
   }
   const MAX = 30;
   const EDGE = 12;
-  el.textContent = model.length <= MAX ? model : `${model.slice(0, EDGE)}...${model.slice(-EDGE)}`;
-  el.title = model;
+  el.textContent = label.length <= MAX ? label : `${label.slice(0, EDGE)}...${label.slice(-EDGE)}`;
+  el.title = label;
 }
 
 function updateAgentModelWarning() {
@@ -355,14 +428,17 @@ function _invalidateAvailableModels(endpointId) {
   _availableModelRequests.delete(endpointId);
 }
 
+// Models other profiles already use on this server come first, and stay listed
+// when the server cannot enumerate its own. Id-less, so they carry no delete button.
 function _modelChoices(ctx) {
-  const endpointId = S[ctx.endpointIdKey];
-  return mergeModelChoices(S[ctx.configsKey], _availableModels.get(endpointId));
+  const url = _profileOf(ctx)?.endpoint_url;
+  const used = S.profiles.filter((p) => url && p.endpoint_url === url).map((p) => ({ model_name: p.model_name }));
+  return mergeModelChoices(used, _availableModels.get(S[ctx.endpointIdKey]));
 }
 
 async function _loadAvailableModels(ctx) {
   const endpointId = S[ctx.endpointIdKey];
-  if (!endpointId) throw new Error("Choose or save an endpoint first");
+  if (!endpointId) throw new Error("Choose a profile first");
   if (_availableModels.has(endpointId)) return;
 
   let request = _availableModelRequests.get(endpointId);
@@ -398,105 +474,42 @@ export function initComboboxes() {
     fn();
   });
   _comboboxCleanups = [];
-  const epRoot = document.querySelector('[data-combobox="endpoint_url"]');
-  if (epRoot) initCombobox(epRoot, () => S.endpoints.map((e) => ({ value: e.url, id: e.id, type: "endpoint" })));
-  const mdRoot = document.querySelector('[data-combobox="model_name"]');
-  if (mdRoot)
-    initCombobox(mdRoot, () => _modelChoices(WRITER_CTX), {
-      searchable: true,
-      loadItems: () => _loadAvailableModels(WRITER_CTX),
-    });
-  const agentEpRoot = document.querySelector('[data-combobox="agent_endpoint_url"]');
-  if (agentEpRoot)
-    initCombobox(agentEpRoot, () => S.endpoints.map((e) => ({ value: e.url, id: e.id, type: "endpoint" })), {
-      isAgent: true,
-    });
-  const agentMdRoot = document.querySelector('[data-combobox="agent_model_name"]');
-  if (agentMdRoot)
-    initCombobox(agentMdRoot, () => _modelChoices(AGENT_CTX), {
-      isAgent: true,
-      searchable: true,
-      loadItems: () => _loadAvailableModels(AGENT_CTX),
-    });
+  const profileItems = () =>
+    S.profiles.map((p) => ({
+      value: profileLabel(p),
+      id: p.id,
+      type: "profile",
+      title: `${p.model_name} @ ${p.endpoint_url}`,
+    }));
+  // Other profiles' servers, offered so a new profile can point at a known one.
+  const serverItems = () =>
+    [...new Set(S.profiles.map((p) => p.endpoint_url).filter(Boolean))].map((value) => ({ value, type: "endpoint" }));
+  for (const ctx of [WRITER_CTX, AGENT_CTX]) {
+    const isAgent = ctx === AGENT_CTX;
+    const profileRoot = document.querySelector(`[data-combobox="${ctx.role}_profile"]`);
+    if (profileRoot)
+      initCombobox(profileRoot, profileItems, { isAgent, onSelect: (item) => _selectProfile(ctx, item.id) });
+    const urlRoot = document.querySelector(`[data-combobox="${ctx.urlField}"]`);
+    if (urlRoot) initCombobox(urlRoot, serverItems, { isAgent });
+    const modelRoot = document.querySelector(`[data-combobox="${ctx.modelField}"]`);
+    if (modelRoot)
+      initCombobox(modelRoot, () => _modelChoices(ctx), {
+        isAgent,
+        searchable: true,
+        loadItems: () => _loadAvailableModels(ctx),
+      });
+  }
 }
 
-window.deleteComboboxItem = (_btn, type, id, isAgent = false) => {
-  const typeName = type === "endpoint" ? "endpoint" : "model configuration";
-  showConfirmModal(
-    {
-      title: `Delete ${typeName}?`,
-      message: `Are you sure you want to delete this ${typeName}? This action cannot be undone.`,
-      confirmText: "Delete",
-      confirmClass: "btn-danger",
-    },
-    async () => {
-      try {
-        let wasActive = false;
-        if (type === "endpoint") {
-          await api.del(`/endpoints/${id}`);
-          _invalidateAvailableModels(id);
-          const index = S.endpoints.findIndex((e) => e.id === id);
-          if (index > -1) S.endpoints.splice(index, 1);
-          if (isAgent) {
-            if (S.agentEndpointId === id) {
-              S.agentEndpointId = null;
-              S.agentModelConfigId = null;
-              S.agentModelConfigs = [];
-              wasActive = true;
-            }
-          } else {
-            if (S.activeEndpointId === id) {
-              S.activeEndpointId = null;
-              S.activeModelConfigId = null;
-              S.modelConfigs = [];
-              wasActive = true;
-            }
-          }
-        } else if (type === "model") {
-          await api.del(`/models/${id}`);
-          if (isAgent) {
-            const index = S.agentModelConfigs.findIndex((m) => m.id === id);
-            if (index > -1) S.agentModelConfigs.splice(index, 1);
-            if (S.agentModelConfigId === id) {
-              S.agentModelConfigId = null;
-              wasActive = true;
-            }
-          } else {
-            const index = S.modelConfigs.findIndex((m) => m.id === id);
-            if (index > -1) S.modelConfigs.splice(index, 1);
-            if (S.activeModelConfigId === id) {
-              S.activeModelConfigId = null;
-              wasActive = true;
-            }
-          }
-        }
-
-        if (wasActive) {
-          let inputSelector;
-          if (isAgent) {
-            inputSelector = type === "endpoint" ? '[data-key="agent_endpoint_url"]' : '[data-key="agent_model_name"]';
-          } else {
-            inputSelector = type === "endpoint" ? '[data-key="endpoint_url"]' : '[data-key="model_name"]';
-          }
-          const input = document.querySelector(inputSelector);
-          if (input) {
-            input.value = "";
-            input.dispatchEvent(new Event("change", { bubbles: true }));
-          }
-        }
-
-        initComboboxes();
-        populateEndpointDatalist();
-        populateModelDatalist();
-        toast("Deleted");
-      } catch (e) {
-        toast(`Failed to delete: ${e.message}`, true);
-      }
-    },
-  );
+window.deleteComboboxItem = (_btn, type, id) => {
+  if (type === "profile") _confirmDeleteProfile(id);
 };
 
-function initCombobox(rootEl, getItems, { isAgent = false, searchable = false, loadItems = null } = {}) {
+function initCombobox(
+  rootEl,
+  getItems,
+  { isAgent = false, searchable = false, loadItems = null, onSelect = null } = {},
+) {
   const input = rootEl.querySelector(".cb-input");
   const control = rootEl.querySelector(".cb-control");
   const dropdown = rootEl.querySelector(".cb-dropdown");
@@ -532,8 +545,9 @@ function initCombobox(rootEl, getItems, { isAgent = false, searchable = false, l
           id == null
             ? ""
             : `<button class="cb-delete-btn" title="Delete" onclick="event.stopPropagation(); deleteComboboxItem(this, '${type}', ${id}${agentArg})">${CLOSE_ICON}</button>`;
+        const titleAttr = item.title ? ` title="${escAttr(item.title)}"` : "";
         return `
-              <div class="cb-option${i === activeIdx ? " active" : ""}" data-value="${escAttr(value)}"${idAttrs} data-type="${escAttr(type)}">
+              <div class="cb-option${i === activeIdx ? " active" : ""}" data-value="${escAttr(value)}"${idAttrs} data-type="${escAttr(type)}"${titleAttr}>
                 <span class="cb-option-text">${highlightMatch(value, q)}</span>
                 ${deleteHtml}
               </div>`;
@@ -554,7 +568,7 @@ function initCombobox(rootEl, getItems, { isAgent = false, searchable = false, l
         // from under the button before its click can fire.
         if (e.target.closest(".cb-delete-btn")) return;
         e.preventDefault();
-        selectVal(el.dataset.value);
+        void selectItem(items[i]);
       };
       el.onmouseenter = () => {
         activeIdx = i;
@@ -574,6 +588,8 @@ function initCombobox(rootEl, getItems, { isAgent = false, searchable = false, l
     isLoading = Boolean(loadItems);
     loadError = "";
     render();
+    // A list opened near the sidebar's bottom edge would hang below its visible area.
+    dropdown.scrollIntoView({ block: "nearest" });
     if (!loadItems) return;
     try {
       await loadItems();
@@ -581,7 +597,10 @@ function initCombobox(rootEl, getItems, { isAgent = false, searchable = false, l
       loadError = e.message || "Model discovery failed";
     } finally {
       isLoading = false;
-      if (!destroyed && isOpen) render();
+      if (!destroyed && isOpen) {
+        render();
+        dropdown.scrollIntoView({ block: "nearest" });
+      }
     }
   }
 
@@ -592,11 +611,14 @@ function initCombobox(rootEl, getItems, { isAgent = false, searchable = false, l
     dropdown.hidden = true;
   }
 
-  async function selectVal(val) {
-    input.value = val;
+  async function selectItem(item) {
     searchQuery = "";
     closeDropdown();
-    await onHybridInput(input);
+    if (onSelect) {
+      await onSelect(item);
+      return;
+    }
+    input.value = item.value;
     input.dispatchEvent(new Event("change", { bubbles: true }));
   }
 
@@ -635,20 +657,24 @@ function initCombobox(rootEl, getItems, { isAgent = false, searchable = false, l
     } else if (e.key === "Enter" && isOpen && activeIdx >= 0) {
       e.preventDefault();
       const item = getFiltered()[activeIdx];
-      if (item) void selectVal(item.value);
+      if (item) void selectItem(item);
     }
   };
+  // A read-only picker has no text to edit, so the whole control opens it.
+  const opensDropdown = (e) => input.readOnly || e.target.closest(".cb-arrow");
   const onControlDown = (e) => {
-    if (!e.target.closest(".cb-arrow")) return;
+    if (!opensDropdown(e)) return;
     e.preventDefault();
     const opening = !isOpen;
     if (opening) void openDropdown();
     else closeDropdown();
     input.focus();
     if (opening && searchable) input.select();
+    // Focus parks the caret at the end, which scrolls a long name to its tail.
+    if (input.readOnly) input.setSelectionRange(0, 0);
   };
   const onControlTouch = (e) => {
-    if (!e.target.closest(".cb-arrow")) return;
+    if (!opensDropdown(e)) return;
     e.preventDefault();
     if (isOpen) closeDropdown();
     else void openDropdown();
@@ -688,7 +714,8 @@ function initCombobox(rootEl, getItems, { isAgent = false, searchable = false, l
       window.deleteComboboxItem(tap.deleteBtn, tap.option.dataset.type, Number(tap.option.dataset.id), isAgent);
       return;
     }
-    void selectVal(tap.option.dataset.value);
+    const item = getFiltered()[[...list.querySelectorAll(".cb-option")].indexOf(tap.option)];
+    if (item) void selectItem(item);
   };
   const onDocDown = (e) => {
     if (!rootEl.contains(e.target)) closeDropdown();
@@ -727,142 +754,222 @@ function initCombobox(rootEl, getItems, { isAgent = false, searchable = false, l
 
 export async function loadEndpoints() {
   try {
-    S.endpoints = await api.get("/endpoints");
-    S.activeEndpointId = S.settings.active_endpoint_id || null;
-    const activeEp = S.endpoints.find((e) => e.id === S.activeEndpointId);
-    S.activeModelConfigId = activeEp?.active_model_config_id || null;
-    const agentEp = S.endpoints.find((e) => e.id === S.agentEndpointId);
-    S.agentModelConfigId = agentEp?.agent_active_model_config_id || null;
-    populateEndpointDatalist();
-    if (S.activeEndpointId) {
-      await loadModelConfigs(S.activeEndpointId);
-    }
+    [S.endpoints, S.profiles] = await Promise.all([api.get("/endpoints"), api.get("/profiles")]);
   } catch (e) {
-    console.error("Failed to load endpoints:", e);
+    console.error("Failed to load profiles:", e);
     S.endpoints = [];
+    S.profiles = [];
   }
+  // Settings name each lane's endpoint row, and that row names the lane's profile.
+  S.activeEndpointId = S.settings.active_endpoint_id || null;
+  S.activeModelConfigId = S.endpoints.find((e) => e.id === S.activeEndpointId)?.active_model_config_id || null;
+  S.agentEndpointId = S.settings.agent_endpoint_id || null;
+  S.agentModelConfigId = S.endpoints.find((e) => e.id === S.agentEndpointId)?.agent_active_model_config_id || null;
 }
 
-function populateEndpointDatalist() {
-  const dl = document.getElementById("endpoint-datalist");
-  if (!dl) return;
-  dl.innerHTML = S.endpoints.map((e) => `<option value="${esc(e.url)}"></option>`).join("");
+function _syncProfilePicker(ctx) {
+  const profile = _profileOf(ctx);
+  const row = document.querySelector(`[data-profile-lane="${ctx.role}"]`);
+  const picker = row?.querySelector(".cb-input");
+  if (picker) {
+    picker.value = profile ? profileLabel(profile) : "";
+    picker.title = profile ? `${profile.model_name} @ ${profile.endpoint_url}` : "";
+    picker.setSelectionRange(0, 0);
+  }
+  const rename = row?.querySelector('[data-profile-action="rename"]');
+  if (rename) rename.disabled = !profile;
+  const fields = document.getElementById(ctx.fieldsId);
+  if (fields) fields.hidden = !profile;
 }
 
-async function _loadConfigs(ctx, endpointId) {
-  if (!endpointId) {
-    S[ctx.configsKey] = [];
-    initComboboxes();
-    return;
+function _fillProfileFields(ctx) {
+  _syncProfilePicker(ctx);
+  const profile = _profileOf(ctx);
+  if (!profile) return;
+  const keys = [
+    ctx.urlField,
+    ctx.apiKeyField,
+    ctx.modelField,
+    ctx.completionModeField,
+    ctx.proxyField,
+    ...ctx.hyperparamKeys,
+  ];
+  for (const key of keys) {
+    const el = document.querySelector(`[data-key="${key}"]`);
+    if (el && !ctx.globalKeys.includes(key)) el.value = _fieldValue(ctx, key);
   }
-  try {
-    const all = await api.get(`/endpoints/${endpointId}/models`);
-    S[ctx.configsKey] = all.filter((m) => m.role === ctx.role || (ctx.role === "writer" && !m.role));
-    initComboboxes();
-  } catch (_e) {
-    S[ctx.configsKey] = [];
-    initComboboxes();
-  }
-}
-
-function _fillConfigFields(ctx, config) {
-  const p = ctx.hyperparamPrefix;
-  ctx.hyperparamKeys.forEach((k) => {
-    const el = document.querySelector(`[data-key="${k}"]`);
-    const configKey = p ? k.replace(p, "") : k;
-    if (el && config[configKey] !== undefined) el.value = config[configKey];
-  });
-  const reSel = document.querySelector(`[data-key="${p}reasoning_effort"]`);
+  const reSel = document.querySelector(`[data-key="${ctx.hyperparamPrefix}reasoning_effort"]`);
   if (reSel) {
-    reSel.dataset.desired = config.reasoning_effort ?? "";
+    reSel.dataset.desired = profile.reasoning_effort ?? "";
     updateReasoningEffortFields();
   }
 }
 
-function _fillEndpointFields(ctx) {
-  const ep = S.endpoints.find((e) => e.id === S[ctx.endpointIdKey]);
-  if (ep) {
-    const epEl = document.querySelector(`[data-key="${ctx.urlField}"]`);
-    if (epEl) epEl.value = ep.url || "";
-    const keyEl = document.querySelector(`[data-key="${ctx.apiKeyField}"]`);
-    if (keyEl) keyEl.value = ep.api_key || "";
-    const cmEl = document.querySelector(`[data-key="${ctx.completionModeField}"]`);
-    if (cmEl) cmEl.value = ep.completion_mode || "chat";
-    const pxEl = document.querySelector(`[data-key="${ctx.proxyField}"]`);
-    if (pxEl) pxEl.value = ep.proxy || "";
-  }
-  const activeModel = S[ctx.configsKey].find((m) => m.id === S[ctx.configIdKey]) || S[ctx.configsKey][0];
-  if (activeModel) {
-    const modelEl = document.querySelector(`[data-key="${ctx.modelField}"]`);
-    if (modelEl) modelEl.value = activeModel.model_name || "";
-    _fillConfigFields(ctx, activeModel);
+function _mergeEndpoint(row) {
+  const existing = S.endpoints.find((e) => e.id === row.id);
+  if (existing) Object.assign(existing, row);
+  for (const p of S.profiles) {
+    if (p.endpoint_id !== row.id) continue;
+    Object.assign(p, {
+      endpoint_url: row.url,
+      api_key: row.api_key,
+      completion_mode: row.completion_mode,
+      proxy: row.proxy,
+    });
   }
 }
 
-async function _syncEndpointRecord(ctx, url, apiKey) {
-  const existing = S.endpoints.find((e) => e.url === url);
-  if (existing) {
-    S[ctx.endpointIdKey] = existing.id;
-    if (existing.api_key !== apiKey) {
-      await api.put(`/endpoints/${existing.id}`, { api_key: apiKey });
-      existing.api_key = apiKey;
-      _invalidateAvailableModels(existing.id);
-    }
-    await api.put("/settings", { [ctx.settingsEndpointField]: existing.id });
-    if (!S[ctx.configsKey].length || S[ctx.configsKey][0]?.endpoint_id !== existing.id) {
-      await _loadConfigs(ctx, existing.id);
-    }
-  } else if (url) {
-    const ep = await api.post("/endpoints", { url, api_key: apiKey });
-    S.endpoints.push(ep);
-    S[ctx.endpointIdKey] = ep.id;
+async function _selectProfile(ctx, id) {
+  const profile = S.profiles.find((p) => p.id === id);
+  if (!profile) return;
+  try {
+    await api.put(`/endpoints/${profile.endpoint_id}`, { [ctx.activeConfigDbField]: profile.id });
+    S.settings = await api.put("/settings", { [ctx.settingsEndpointField]: profile.endpoint_id });
+  } catch (e) {
+    toast(`Failed to select profile: ${e.message}`, true);
+    return;
+  }
+  const row = S.endpoints.find((e) => e.id === profile.endpoint_id);
+  if (row) row[ctx.activeConfigDbField] = profile.id;
+  S[ctx.endpointIdKey] = profile.endpoint_id;
+  S[ctx.configIdKey] = profile.id;
+  _fillProfileFields(ctx);
+  updateAgentModelWarning();
+  updateEndpointsLabel();
+  renderInspector();
+}
+
+function _showNewProfileModal(ctx) {
+  const source = _profileOf(ctx);
+  const hint = source ? `starts as a copy of ${esc(profileLabel(source))}` : "starts from the defaults";
+  showModal(`
+    <h2>New Profile</h2>
+    <div class="field">
+      <label>Name <span style="font-size:10px;color:var(--text-muted)">(${hint})</span></label>
+      <input id="profile-name-inp" placeholder="e.g. Local Gemma" autocomplete="off">
+    </div>
+    <div class="modal-actions">
+      <button class="btn" id="profile-name-cancel">Cancel</button>
+      <button class="btn btn-accent" id="profile-name-ok">Create</button>
+    </div>`);
+  _wireProfileNameModal(() => _createProfile(ctx, source));
+}
+
+function _showRenameProfileModal(ctx) {
+  const profile = _profileOf(ctx);
+  if (!profile) return;
+  showModal(`
+    <h2>Rename Profile</h2>
+    <div class="field">
+      <label>Name</label>
+      <input id="profile-name-inp" value="${escAttr(profileLabel(profile))}" autocomplete="off">
+    </div>
+    <div class="modal-actions">
+      <button class="btn" id="profile-name-cancel">Cancel</button>
+      <button class="btn btn-accent" id="profile-name-ok">Rename</button>
+    </div>`);
+  _wireProfileNameModal(() => _renameProfile(profile));
+}
+
+function _wireProfileNameModal(onOk) {
+  const input = $("profile-name-inp");
+  $("profile-name-cancel").addEventListener("click", closeModal);
+  $("profile-name-ok").addEventListener("click", onOk);
+  input.addEventListener("keydown", (e) => {
+    if (e.key === "Enter") onOk();
+  });
+  setTimeout(() => {
+    input.focus();
+    input.select();
+  }, 50);
+}
+
+function _profileName() {
+  const name = $("profile-name-inp")?.value?.trim();
+  if (!name) toast("Name is required", true);
+  return name;
+}
+
+async function _createProfile(ctx, source) {
+  const name = _profileName();
+  if (!name) return;
+  const fields = source
+    ? Object.fromEntries(PROFILE_COPY_FIELDS.map((k) => [k, source[k]]))
+    : { endpoint_url: "http://localhost:5000/v1", model_name: "default" };
+  try {
+    const profile = await api.post("/profiles", { ...fields, name });
+    S.profiles.push(profile);
+    S.endpoints = await api.get("/endpoints");
+    closeModal();
+    await _selectProfile(ctx, profile.id);
+    toast("Profile created");
+  } catch (e) {
+    toast(`Failed to create profile: ${e.message}`, true);
+  }
+}
+
+async function _renameProfile(profile) {
+  const name = _profileName();
+  if (!name) return;
+  try {
+    Object.assign(profile, await api.put(`/models/${profile.id}`, { name }));
+  } catch (e) {
+    toast(`Failed to rename profile: ${e.message}`, true);
+    return;
+  }
+  closeModal();
+  _syncProfilePicker(WRITER_CTX);
+  _syncProfilePicker(AGENT_CTX);
+  renderInteractiveFragments();
+  toast("Profile renamed");
+}
+
+function _confirmDeleteProfile(id) {
+  const profile = S.profiles.find((p) => p.id === id);
+  if (!profile) return;
+  if (S.profiles.length === 1) {
+    toast("Keep at least one profile", true);
+    return;
+  }
+  const users = S.interactiveFragments.filter((f) => f.model_config_id === id).length;
+  const fallback = users
+    ? ` ${users === 1 ? "One fragment runs" : `${users} fragments run`} on it and will go back to the Agent.`
+    : "";
+  showConfirmModal(
+    {
+      title: "Delete profile?",
+      message: `Are you sure you want to delete the profile "${esc(profileLabel(profile))}"? This action cannot be undone.${fallback}`,
+      confirmText: "Delete",
+      confirmClass: "btn-danger",
+    },
+    () => _deleteProfile(profile),
+  );
+}
+
+async function _deleteProfile(profile) {
+  try {
+    await api.del(`/profiles/${profile.id}`);
+    [S.endpoints, S.settings] = await Promise.all([api.get("/endpoints"), api.get("/settings")]);
+  } catch (e) {
+    toast(`Failed to delete: ${e.message}`, true);
+    return;
+  }
+  S.profiles = S.profiles.filter((p) => p.id !== profile.id);
+  _invalidateAvailableModels(profile.endpoint_id);
+  for (const f of S.interactiveFragments) if (f.model_config_id === profile.id) f.model_config_id = null;
+  renderInteractiveFragments();
+  for (const ctx of [WRITER_CTX, AGENT_CTX]) {
+    if (S[ctx.configIdKey] !== profile.id) continue;
     S[ctx.configIdKey] = null;
-    await api.put("/settings", { [ctx.settingsEndpointField]: ep.id });
-    populateEndpointDatalist();
-    await _loadConfigs(ctx, ep.id);
+    S[ctx.endpointIdKey] = null;
+    _fillProfileFields(ctx);
   }
-}
-
-async function _syncModelConfigRecord(ctx, modelName, hyperparams) {
-  if (!S[ctx.endpointIdKey] || !modelName) return;
-  const existing = S[ctx.configsKey].find((m) => m.model_name === modelName);
-  const p = ctx.hyperparamPrefix;
-  if (existing) {
-    S[ctx.configIdKey] = existing.id;
-    const update = {};
-    ctx.hyperparamKeys.forEach((k) => {
-      const base = p ? k.replace(p, "") : k;
-      if (hyperparams[k] !== undefined) update[base] = hyperparams[k];
-    });
-    if (Object.keys(update).length) {
-      await api.put(`/models/${existing.id}`, update);
-      Object.assign(existing, update);
-    }
-    await api.put(`/endpoints/${S[ctx.endpointIdKey]}`, { [ctx.activeConfigDbField]: existing.id });
-  } else {
-    const get = (key, def) => hyperparams[`${p}${key}`] ?? def;
-    const mc = await api.post(`/endpoints/${S[ctx.endpointIdKey]}/models`, {
-      role: ctx.role,
-      model_name: modelName,
-      system_prompt: get("system_prompt", ""),
-      temperature: get("temperature", 0.8),
-      min_p: get("min_p", 0),
-      top_k: get("top_k", 40),
-      top_p: get("top_p", 0.95),
-      repetition_penalty: get("repetition_penalty", 1.0),
-      max_tokens: get("max_tokens", 4096),
-      reasoning_effort: get("reasoning_effort", ""),
-      reasoning_effort_param: get("reasoning_effort_param", ""),
-      reasoning_effort_value: get("reasoning_effort_value", ""),
-      extra_headers: get("extra_headers", ""),
-      extra_body: get("extra_body", ""),
-    });
-    S[ctx.configsKey].push(mc);
-    S[ctx.configIdKey] = mc.id;
-    await api.put(`/endpoints/${S[ctx.endpointIdKey]}`, { [ctx.activeConfigDbField]: mc.id });
-    if (ctx.role === "writer") populateModelDatalist();
-    initComboboxes();
-  }
+  // The Writer always runs on a profile; an Agent left without one runs on the Writer's.
+  if (!S.activeModelConfigId) await _selectProfile(WRITER_CTX, S.profiles[0].id);
+  updateAgentModelWarning();
+  updateEndpointsLabel();
+  renderInspector();
+  toast("Deleted");
 }
 
 let _endpointSaveQueue = Promise.resolve();
@@ -877,135 +984,41 @@ async function _doSaveEndpointSetting(ctx, el) {
   let v = el.value;
   if (el.type === "number") v = parseFloat(v);
   const key = el.dataset.key;
-  const p = ctx.hyperparamPrefix;
-  const baseKey = p ? key.replace(p, "") : key;
+  const baseKey = _baseKey(ctx, key);
   const validation = validate.validateSetting(baseKey, v);
   if (!validation.valid) {
     toast(validation.error, true);
     return;
   }
-  const payload = { [key]: v };
-  if (key === ctx.urlField) {
-    const apiKeyEl = document.querySelector(`[data-key="${ctx.apiKeyField}"]`);
-    if (apiKeyEl) payload[ctx.apiKeyField] = apiKeyEl.value;
-  } else if (key === ctx.modelField) {
-    ctx.hyperparamKeys.forEach((k) => {
-      const fieldEl = document.querySelector(`[data-key="${k}"]`);
-      if (!fieldEl) return;
-      if (fieldEl.type === "number") {
-        if (fieldEl.value.trim() === "") return;
-        const parsed = parseFloat(fieldEl.value);
-        if (Number.isNaN(parsed)) return;
-        payload[k] = parsed;
-      } else {
-        payload[k] = fieldEl.value;
-      }
-    });
+  const profile = _profileOf(ctx);
+  if (!ctx.globalKeys.includes(key) && !profile) return;
+  if ((baseKey === "endpoint_url" || baseKey === "model_name") && !String(v).trim()) {
+    toast(`${baseKey === "endpoint_url" ? "Endpoint URL" : "Model name"} is required`, true);
+    el.value = _fieldValue(ctx, key);
+    return;
   }
   try {
-    S.settings = await api.put("/settings", payload);
+    if (ctx.globalKeys.includes(key)) {
+      S.settings = await api.put("/settings", { [key]: v });
+    } else if (CONNECTION_COLUMNS[baseKey]) {
+      _mergeEndpoint(await api.put(`/endpoints/${profile.endpoint_id}`, { [CONNECTION_COLUMNS[baseKey]]: v }));
+      if (baseKey !== "completion_mode") _invalidateAvailableModels(profile.endpoint_id);
+    } else {
+      Object.assign(profile, await api.put(`/models/${profile.id}`, { [baseKey]: v }));
+    }
     toast("Settings saved");
   } catch (e) {
     toast(`Failed: ${e.message}`, true);
     return;
   }
-  try {
-    if (key === ctx.urlField) {
-      await _syncEndpointRecord(ctx, v, payload[ctx.apiKeyField] || "");
-    } else if (key === ctx.apiKeyField && S[ctx.endpointIdKey]) {
-      await api.put(`/endpoints/${S[ctx.endpointIdKey]}`, { api_key: v });
-      _invalidateAvailableModels(S[ctx.endpointIdKey]);
-    } else if (baseKey === "completion_mode" && S[ctx.endpointIdKey]) {
-      await api.put(`/endpoints/${S[ctx.endpointIdKey]}`, { completion_mode: v });
-      const row = S.endpoints.find((e) => e.id === S[ctx.endpointIdKey]);
-      if (row) row.completion_mode = v;
-    } else if (baseKey === "proxy" && S[ctx.endpointIdKey]) {
-      await api.put(`/endpoints/${S[ctx.endpointIdKey]}`, { proxy: v });
-      _invalidateAvailableModels(S[ctx.endpointIdKey]);
-    } else if (key === ctx.modelField) {
-      await _syncModelConfigRecord(ctx, v, payload);
-    } else if (ctx.hyperparamKeys.includes(key) && S[ctx.configIdKey]) {
-      const configId = S[ctx.configIdKey];
-      await api.put(`/models/${configId}`, { [baseKey]: v });
-      S.settings[key] = v;
-      const cfg = S[ctx.configsKey].find((m) => m.id === configId);
-      if (cfg) cfg[baseKey] = v;
-    }
-  } catch (e) {
-    console.error("Endpoint/model sync error:", e);
-    toast(`Failed to sync ${key === ctx.modelField ? "model" : "endpoint"}: ${e.message}`, true);
-  }
+  // Both lanes may show the same profile; the other lane's fields follow the edit.
+  const other = ctx === WRITER_CTX ? AGENT_CTX : WRITER_CTX;
+  if (profile && S[other.configIdKey] === profile.id) _fillProfileFields(other);
+  _syncProfilePicker(WRITER_CTX);
+  _syncProfilePicker(AGENT_CTX);
   updateAgentModelWarning();
   updateEndpointsLabel();
   renderInspector();
-}
-
-async function _onHybridInputCtx(ctx, el) {
-  const key = el.dataset.key;
-  if (key === ctx.urlField) {
-    const match = S.endpoints.find((e) => e.url === el.value);
-    if (!match) return;
-    S[ctx.endpointIdKey] = match.id;
-    try {
-      const ep = await api.get(`/endpoints/${match.id}`);
-      Object.assign(match, ep);
-    } catch (e) {
-      console.error("Failed to fetch endpoint:", e);
-    }
-    const apiKeyEl = document.querySelector(`[data-key="${ctx.apiKeyField}"]`);
-    if (apiKeyEl) apiKeyEl.value = match.api_key || "";
-    const cmEl = document.querySelector(`[data-key="${ctx.completionModeField}"]`);
-    if (cmEl) cmEl.value = match.completion_mode || "chat";
-    const pxEl = document.querySelector(`[data-key="${ctx.proxyField}"]`);
-    if (pxEl) pxEl.value = match.proxy || "";
-    await _loadConfigs(ctx, match.id);
-    const modelEl = document.querySelector(`[data-key="${ctx.modelField}"]`);
-    if (!modelEl || !S[ctx.configsKey].length) return;
-    const activeModel = S[ctx.configsKey].find((m) => m.id === match[ctx.activeConfigDbField]) || S[ctx.configsKey][0];
-    modelEl.value = activeModel.model_name;
-    _fillConfigFields(ctx, activeModel);
-    S[ctx.configIdKey] = activeModel.id;
-    try {
-      await api.put(`/endpoints/${match.id}`, { [ctx.activeConfigDbField]: activeModel.id });
-    } catch (e) {
-      console.error("Failed to save active model config:", e);
-    }
-  } else if (key === ctx.modelField) {
-    if (S[ctx.endpointIdKey]) {
-      try {
-        await _loadConfigs(ctx, S[ctx.endpointIdKey]);
-      } catch (e) {
-        console.error("Failed to refresh model configs:", e);
-      }
-    }
-    const match = S[ctx.configsKey].find((m) => m.model_name === el.value);
-    if (!match) return;
-    _fillConfigFields(ctx, match);
-    S[ctx.configIdKey] = match.id;
-    try {
-      await api.put(`/endpoints/${S[ctx.endpointIdKey]}`, { [ctx.activeConfigDbField]: match.id });
-    } catch (e) {
-      console.error("Failed to save active model config:", e);
-    }
-  }
-  updateAgentModelWarning();
-  updateEndpointsLabel();
-  renderInspector();
-}
-
-function populateModelDatalist() {
-  const dl = document.getElementById("model-datalist");
-  if (!dl) return;
-  dl.innerHTML = S.modelConfigs.map((m) => `<option value="${esc(m.model_name)}"></option>`).join("");
-}
-
-export async function loadModelConfigs(endpointId) {
-  await _loadConfigs(WRITER_CTX, endpointId);
-  populateModelDatalist();
-}
-
-export async function loadAgentModelConfigs(endpointId) {
-  await _loadConfigs(AGENT_CTX, endpointId);
 }
 
 export async function saveSetting(el) {
@@ -1014,15 +1027,6 @@ export async function saveSetting(el) {
 
 export async function saveAgentSetting(el) {
   await _saveEndpointSetting(AGENT_CTX, el);
-}
-
-export async function onHybridInput(el) {
-  const key = el.dataset.key;
-  if (key === WRITER_CTX.urlField || key === WRITER_CTX.modelField) {
-    await _onHybridInputCtx(WRITER_CTX, el);
-  } else if (key === AGENT_CTX.urlField || key === AGENT_CTX.modelField) {
-    await _onHybridInputCtx(AGENT_CTX, el);
-  }
 }
 
 window.saveAgentSetting = saveAgentSetting;

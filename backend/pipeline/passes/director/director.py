@@ -6,7 +6,7 @@ import json
 import logging
 import time
 from collections.abc import AsyncIterator, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any
 
 from ....core import (
@@ -39,7 +39,7 @@ from .prompts import build_director_scene_step_prompt, build_director_tool_promp
 
 if TYPE_CHECKING:
     from ....core import Macros
-    from ...state import LorebookTurn, TurnState, _PipelineConfig
+    from ...state import FragmentModel, LorebookTurn, TurnState, _PipelineConfig
 
 logger = logging.getLogger(__name__)
 
@@ -218,6 +218,7 @@ async def director_pass(
     direction_notes_block: str = "",
     speaker_keys: str = "",
     speaker_name: str = "",
+    fragment_models: Mapping[int, FragmentModel] | None = None,
 ) -> AsyncIterator[dict]:
     """Yield reasoning chunks during each tool call, then a single done dict.
 
@@ -227,6 +228,9 @@ async def director_pass(
     *speaker_name* is set when the pass directs one group speaker: ``{{char}}`` in
     the fragment descriptions it reads names that speaker, and the pass does not
     plan speakers, since the exchange's plan is already made.
+
+    *fragment_models* holds the profiles fragments run their own calls on, by
+    ``model_config_id``; only the per-fragment loop consults it.
 
     Yields:
         ``{"type": "reasoning", "delta": str}``       — zero or more reasoning chunks
@@ -307,6 +311,12 @@ async def director_pass(
                 if client.is_aborted:
                     break
                 target = stage["id"] if stage else "moods"
+                step_client, step_base, step_hyperparams = client, base, hyperparams
+                own_id = stage.get("model_config_id") if stage else None
+                if own_id and fragment_models and (own := fragment_models.get(own_id)):
+                    step_client, step_base, step_hyperparams = own.client, replace(base, model=own.model), own.hyperparams
+                    endpoint = getattr(own.client, "base_url", "")
+                    logger.info("Agent tool=direct_scene target=%s: on %s at %s", target, own.model, endpoint)
                 step_tail = build_director_scene_step_prompt(
                     user_message,
                     active_moods,
@@ -327,15 +337,15 @@ async def director_pass(
                 trailing = [{"role": "user", "content": content}]
                 resp = {}
                 try:
-                    async for event in base.complete_into(
-                        client,
+                    async for event in step_base.complete_into(
+                        step_client,
                         resp,
                         label="director:direct_scene",
                         trailing=trailing,
                         tool_choice=require_tool("direct_scene")["choice"],
                         kv_tracker=kv_tracker,
                         json_schema=_step_schema(tool_schema, target) if tool_schema else None,
-                        **hyperparams,
+                        **step_hyperparams,
                         **reasoning_params,
                     ):
                         yield event
@@ -553,6 +563,7 @@ async def director_stage(
             direction_notes_block=notes_block if direction_note_to_director(settings) else "",
             speaker_keys=speaker_keys,
             speaker_name=speaker_name,
+            fragment_models=cfg.fragment_models,
         ):
             if event["type"] == "reasoning":
                 yield {

@@ -291,6 +291,7 @@ async def _generate_reply(
         schema_overrides=setup.schema_overrides,
         history=history,
         world_proposal=setup.world_proposal,
+        fragment_models=ctx.fragment_models,
     )
     async for event in _consume_pipeline(
         pipeline,
@@ -368,6 +369,7 @@ async def _generate_group_exchange(
         prefix=setup.prefix,
         phrase_bank=ctx.phrase_bank,
         schema_overrides=setup.schema_overrides,
+        fragment_models=ctx.fragment_models,
     )
     # The castable roster rides the Director's request, not the shared tool
     # blob: mute is otherwise prefix-neutral, and a schema that named the cast
@@ -461,6 +463,7 @@ async def _generate_group_exchange(
                     kv_tracker=setup.kv_tracker,
                     reasoning_on=cfg.director_reasoning_on,
                     reasoning_prefill=cfg.director_reasoning_prefill,
+                    fragment_models=cfg.fragment_models,
                 ),
                 shared,
                 "director",
@@ -629,6 +632,7 @@ async def _generate_group_exchange(
             run_director=per_speaker,
             director_seed=shared,
             run_exchange_final=is_final,
+            fragment_models=ctx.fragment_models,
         )
         persisted_id: int | None = None
         persisted_content = ""

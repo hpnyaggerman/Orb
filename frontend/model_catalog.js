@@ -19,6 +19,25 @@ export function mergeModelChoices(configs, availableModels) {
   return choices;
 }
 
+// A profile saved before profiles had names is labelled by its model and server;
+// "(agent)" tells apart the Agent-lane copy the old editor kept for each server,
+// and sits before the server so a label cut short in a narrow list keeps it.
+export function profileLabel(profile) {
+  const name = typeof profile?.name === "string" ? profile.name.trim() : "";
+  if (name) return name;
+  const model = profile?.model_name || "default";
+  const agent = profile?.role === "agent" ? " (agent)" : "";
+  return `${model}${agent} @ ${hostOf(profile?.endpoint_url || "")}`;
+}
+
+function hostOf(url) {
+  try {
+    return new URL(url).host || url;
+  } catch {
+    return url;
+  }
+}
+
 export function filterModelChoices(choices, query) {
   const needle = normalizeSearchValue(query).trim();
   if (!needle) return choices;
