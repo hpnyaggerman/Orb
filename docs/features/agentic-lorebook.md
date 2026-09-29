@@ -11,6 +11,9 @@ it is:
 - **Constant**: always included in the character context.
 - **Keyword-activated**: included when its keywords match recent messages.
 - **Selected by the Agent**: chosen by the Director for the current scene.
+- **Linked**: one of its keywords appears in the text of an entry the Director
+  selected. Only the Director's own picks link, and only one step: a linked
+  entry does not link further.
 
 Agentic selection adds to the normal rules. Constant entries stay active, and the
 keyword scan still runs. The Director cannot remove a constant entry or cancel a

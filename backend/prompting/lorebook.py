@@ -215,19 +215,36 @@ def _resolve_director_picks(
     return matched, recovered, unmatched
 
 
+def _linked_entries(
+    picked: Sequence[Mapping[str, Any]],
+    candidates: Sequence[Mapping[str, Any]],
+) -> list[Mapping[str, Any]]:
+    """Candidates whose keywords hit the content of the *picked* entries.
+
+    Matching is the keyword scan's own, run over the picked content instead of
+    messages. One step only: a linked entry's content links nothing further,
+    since chaining through an interlinked book (a region naming its towns, each
+    town its people) would activate most of it every turn.
+    """
+    texts = [{"content": entry.get("content")} for entry in picked]
+    return select_keyword_entries(texts, candidates, scan_depth=len(texts))
+
+
 def director_pick_diagnostics(
     entries: Sequence[Mapping[str, Any]],
     picks: Sequence[str],
-) -> tuple[list[str], list[str]]:
-    """Return delimiter-recovered and unknown picks for upper-layer logging."""
+) -> tuple[list[str], list[str], list[str]]:
+    """Return delimiter-recovered picks, unknown picks, and entries linked from the picks' content, for logging."""
     effective = select_effective_entries(entries)
     candidates = [entry for entry in effective if not entry.get("constant")]
-    _, recovered, unmatched = _resolve_director_picks(
+    matched, recovered, unmatched = _resolve_director_picks(
         picks,
         {_fold_name(entry) for entry in candidates},
         {_fold_name(entry) for entry in effective},
     )
-    return recovered, unmatched
+    picked = [entry for entry in candidates if _fold_name(entry) in matched]
+    linked = [entry.get("name", "") for entry in _linked_entries(picked, candidates) if _fold_name(entry) not in matched]
+    return recovered, unmatched, linked
 
 
 def select_active_entries(
@@ -242,12 +259,14 @@ def select_active_entries(
     An entry is active when a keyword matched within the ``scan_depth`` most
     recent messages, OR its ``name`` is in *director_selected* (case-insensitive,
     trimmed, and stripped of the catalog's own ``[...]`` delimiters — see
-    :func:`normalize_director_pick`). The pool is projected to the effective
-    layer first, then constant entries are excluded — they ride the cached
-    system prefix, and filtering here (rather than per caller) also keeps a
-    director pick that names a constant entry from duplicating it into the
-    trailing block. Returns entries in input order — the union underlying both
-    the substring (``director_selected=()``) and agentic paths.
+    :func:`normalize_director_pick`), OR one of its keywords appears in the
+    content of an entry so named (see :func:`_linked_entries`). The pool is
+    projected to the effective layer first, then constant entries are excluded
+    — they ride the cached system prefix, and filtering here (rather than per
+    caller) also keeps a director pick that names a constant entry from
+    duplicating it into the trailing block. Returns entries in input order —
+    the union underlying both the substring (``director_selected=()``) and
+    agentic paths.
     """
     effective = select_effective_entries(entries)
     candidates = [e for e in effective if not e.get("constant")]
@@ -257,9 +276,11 @@ def select_active_entries(
         {_fold_name(e) for e in effective},
     )
     keyword_hit = {id(e) for e in select_keyword_entries(messages or [], candidates, scan_depth)}
+    picked = [e for e in candidates if _fold_name(e) in director_named]
+    linked = {id(e) for e in _linked_entries(picked, candidates)}
 
     def is_active(entry: Mapping[str, Any]) -> bool:
-        return id(entry) in keyword_hit or _fold_name(entry) in director_named
+        return id(entry) in keyword_hit or id(entry) in linked or _fold_name(entry) in director_named
 
     return [e for e in candidates if is_active(e)]
 
@@ -351,7 +372,8 @@ def compute_agentic_lorebook_block(
     """Agentic path: build the trailing lorebook block from the Director's selection.
 
     Includes entries whose ``name`` matches *selected_names* (case-insensitive,
-    trimmed) + entries triggered by a keyword scan over the current turn
+    trimmed) + entries whose keywords appear in those entries' content + entries
+    triggered by a keyword scan over the current turn
     (``AGENTIC_LOREBOOK_SCAN_DEPTH``), so keywords the Director overlooks still
     activate their entries. Constant entries are excluded — they ride the cached
     system prefix (:func:`compute_constant_lorebook_block`) or, with

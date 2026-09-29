@@ -32,9 +32,10 @@ Orb scans the latest six messages for keywords.
   falls back to substring matching.
 - **Selective** also requires a match from the secondary-keyword list.
 
-Orb does not implement recursion, token budgets, probability, sticky or cooldown
-rules, inclusion groups, roles, per-entry scan depth, or character filters. Each
-enabled entry either matches and is inserted or does not.
+Orb does not implement recursion (apart from the one-step linking of
+[Agentic Lorebook](agentic-lorebook.md) picks), token budgets, probability,
+sticky or cooldown rules, inclusion groups, roles, per-entry scan depth, or
+character filters. Each enabled entry either matches and is inserted or does not.
 
 Active entries use a stable order: priority, insertion order, then age. This keeps
 prompt content predictable across turns.

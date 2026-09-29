@@ -528,9 +528,9 @@ async def director_stage(
 
     # The turn's trailing lorebook block, computed once from the per-turn bundle.
     # In substring mode this reuses the keyword-scanned block already built up
-    # front; in agentic mode it is the union of the current-turn keyword scan and
-    # the Director's selection. The direct_scene prompts below and the writer
-    # read this same block.
+    # front; in agentic mode it is the union of the current-turn keyword scan, the
+    # Director's selection, and the entries its picks' content links to. The
+    # direct_scene prompts below and the writer read this same block.
     state.writer_lorebook_block = lorebook.writer_block(state.selected_lorebook_entries, macros)
 
     # Bail out if stop was clicked during the pick: skip the director pass, style

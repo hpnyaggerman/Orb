@@ -25,7 +25,7 @@ def _log_director_pick_diagnostics(
     entries: Sequence[Mapping[str, object]],
     picks: Sequence[str],
 ) -> None:
-    recovered, unmatched = director_pick_diagnostics(entries, picks)
+    recovered, unmatched, linked = director_pick_diagnostics(entries, picks)
     if recovered:
         logger.warning(
             "Lorebook: %d director pick(s) matched only after stripping catalog delimiters: %s",
@@ -37,6 +37,12 @@ def _log_director_pick_diagnostics(
             "Lorebook: %d director pick(s) named no entry: %s",
             len(unmatched),
             ", ".join(repr(pick) for pick in unmatched),
+        )
+    if linked:
+        logger.info(
+            "Lorebook: %d entry(ies) linked from the content of director picks: %s",
+            len(linked),
+            ", ".join(repr(name) for name in linked),
         )
 
 

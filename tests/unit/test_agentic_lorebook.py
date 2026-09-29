@@ -1,8 +1,8 @@
 """Unit tests for lorebook activation.
 
 Covers the direct_scene ``selected_lorebook_entries`` parameter, the Director
-catalog, the unified three-source selection core (``select_active_entries`` and
-its two named wrappers), macro resolution, the ``LorebookTurn`` per-turn bundle,
+catalog, the unified selection core (``select_active_entries`` and its two
+named wrappers), macro resolution, the ``LorebookTurn`` per-turn bundle,
 activation gating, and keyword-scan parity.
 """
 
@@ -293,7 +293,7 @@ class TestConstantsOnlyTrailing:
         assert content == "___\n\nhi\n\n"
 
 
-# ── select_active_entries: the unified three-source core ─────────────────────
+# ── select_active_entries: the unified selection core ─────────────────────
 
 
 class TestSelectActiveEntries:
@@ -313,6 +313,33 @@ class TestSelectActiveEntries:
         msgs = [{"role": "user", "content": "we travel to natlan"}]
         core = compute_lorebook_block(entries, msgs, scan_depth=AGENTIC_LOREBOOK_SCAN_DEPTH, director_selected=["Dragon"])
         assert core == compute_agentic_lorebook_block(entries, ["Dragon"], None, msgs)
+
+
+class TestLinkedEntries:
+    """A Director pick's content activates the entries whose keywords it names."""
+
+    _entries = [
+        _entry("Greywater", "A border town that lives under the Accord.", ["greywater"]),
+        _entry("The Accord", "A treaty sealed with the raven crest.", ["accord"]),
+        _entry("Raven Crest", "The sigil of House Corvane.", ["raven crest"]),
+    ]
+
+    def _names(self, picks, messages=()):
+        active = select_active_entries(self._entries, list(messages), scan_depth=2, director_selected=picks)
+        return [e["name"] for e in active]
+
+    def test_a_pick_links_one_step_only(self):
+        # The Accord names the raven crest, but a linked entry links nothing further.
+        assert self._names(["Greywater"]) == ["Greywater", "The Accord"]
+
+    def test_a_keyword_hit_links_nothing(self):
+        msgs = [{"role": "user", "content": "We ride into Greywater."}]
+        assert self._names([], msgs) == ["Greywater"]
+
+    def test_linked_entries_are_logged(self, caplog):
+        with caplog.at_level(logging.INFO, logger="backend.pipeline.passes.director.lorebook_select"):
+            _log_director_pick_diagnostics(self._entries, ["Greywater"])
+        assert "linked from the content of director picks: 'The Accord'" in caplog.text
 
 
 # ── Catalog delimiters on Director picks ─────────────────────────────────────
