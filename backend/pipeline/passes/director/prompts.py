@@ -117,14 +117,29 @@ def build_director_scene_step_prompt(
     return "\n\n".join(parts) + "]"
 
 
-def build_lorebook_select_prompt(catalog: str, user_message: str, *, reasoning_on: bool = False) -> str:
-    """Build the standalone Agentic Lorebook selection request."""
+def build_lorebook_select_prompt(catalog: str, user_message: str) -> str:
+    """Build the standalone Agentic Lorebook selection request.
+
+    Opens with its own framing instead of ``DIRECTOR_PREAMBLE`` and never takes
+    ``REASONING_GUIDANCE``: their stance (creative, intentional, don't
+    overthink) is written for directing and nudges a lookup toward picking few
+    entries, while this step must catch every entry that applies.
+    """
     parts = [
-        DIRECTOR_PREAMBLE + (REASONING_GUIDANCE if reasoning_on else ""),
+        "[OOC: Pause to gather the lore the next reply needs.",
         (
-            "Call ONLY select_lorebook. From the catalog below, choose ONLY the entries relevant to the "
-            "current scene and the user's next message (quoted after the catalog); leave the selection "
-            "empty if none apply."
+            "Call ONLY select_lorebook. Check the catalog below entry by entry and select every entry that "
+            "bears on the scene: the conversation so far plus the user's next message (quoted after the "
+            "catalog). An entry bears on the scene when it covers:\n"
+            "- a character who is present, mentioned, or closely tied to someone present\n"
+            "- the current location, or the wider place it belongs to\n"
+            "- a faction, group, species, title, or role of anyone involved\n"
+            "- an object, ability, custom, rule, or phenomenon in use or referenced\n"
+            "- a past event or relationship being alluded to\n"
+            "- anything the user's next message introduces, asks about, or heads toward\n"
+            "Lore from earlier in the conversation counts while it is still in play. A left-out entry may be "
+            "missing when the next reply is written, while an extra one costs little, so include borderline "
+            "entries. Leave out only entries with no connection to the scene."
         ),
         catalog,
         f'User\'s next message:\n"""{user_message}"""',

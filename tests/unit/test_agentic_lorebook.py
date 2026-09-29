@@ -460,7 +460,7 @@ class _FakeClient:
 def test_select_prompt_includes_catalog_and_user_message():
     # The pending user message must ride the prompt: during the director pass it is not
     # yet in the shared history, so without it the model can't judge scene relevance.
-    out = build_lorebook_select_prompt("THE CATALOG", "WHAT THE USER ASKED", reasoning_on=False)
+    out = build_lorebook_select_prompt("THE CATALOG", "WHAT THE USER ASKED")
     assert "THE CATALOG" in out
     assert "WHAT THE USER ASKED" in out
     assert "select_lorebook" in out

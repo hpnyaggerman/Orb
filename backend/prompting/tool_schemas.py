@@ -23,7 +23,7 @@ _ACTIVE_LOREBOOK_PROPERTY = {
     "selected_lorebook_entries": {
         "type": "array",
         "items": {"type": "string"},
-        "description": ("Names of lorebook entries relevant to this scene. Leave empty if none apply."),
+        "description": "Names of every catalog entry that bears on this scene.",
     },
 }
 
@@ -91,8 +91,7 @@ def build_direct_scene_tool(
 
 
 _SELECT_LOREBOOK_DESCRIPTION = (
-    "Pick the lorebook entries relevant to the current scene from the catalog provided. "
-    "Activate the ones that genuinely apply; leave the selection empty if none do."
+    "Select every lorebook entry in the provided catalog that bears on the current scene or the next reply."
 )
 
 # The agentic-lorebook selection tool: a fixed, fragment-independent schema, so it

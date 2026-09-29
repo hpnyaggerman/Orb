@@ -65,7 +65,7 @@ def build_lorebook_catalog(entries: Sequence[Mapping[str, Any]]) -> str:
         groups.setdefault(e.get("world_name") or "", []).append(e)
 
     parts = [
-        "**Available Lorebook Entries** — activate the ones relevant to the scene via `selected_lorebook_entries`. Possible values are wrapped in square brackets."
+        "**Available Lorebook Entries** — activate every entry that bears on the scene via `selected_lorebook_entries`. Possible values are wrapped in square brackets."
     ]
     for world, items in groups.items():
         if world:

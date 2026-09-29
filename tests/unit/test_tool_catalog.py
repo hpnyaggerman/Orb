@@ -34,8 +34,8 @@ _TEST_SCHEMA = {
     },
 }
 _TEST_CHOICE = {"type": "function", "function": {"name": _TEST_TOOL_NAME}}
-_BUILTIN_BLOB_LENGTH = 5477
-_BUILTIN_BLOB_SHA256 = "eab47b825c93a4285c01836e5edf4a35ba02d2e2fd0f83eee2e94f47d7b398b0"
+_BUILTIN_BLOB_LENGTH = 5397
+_BUILTIN_BLOB_SHA256 = "596772fb3b28258d7c5cee23f2b81473b4f955531b59036a15ae2ecf7f841478"
 
 
 def _tool_blob(tools: list[dict]) -> str:
